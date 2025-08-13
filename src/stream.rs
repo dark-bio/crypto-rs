@@ -46,9 +46,7 @@ const CHUNK_SIZE: usize = 64 * 1024;
 const TAG_SIZE: usize = 16;
 const ENCRYPTED_CHUNK_SIZE: usize = CHUNK_SIZE + TAG_SIZE;
 
-pub(crate) struct PayloadKey(
-    pub(crate) GenericArray<u8, <ChaCha20Poly1305 as KeySizeUser>::KeySize>,
-);
+pub struct PayloadKey(pub GenericArray<u8, <ChaCha20Poly1305 as KeySizeUser>::KeySize>);
 
 impl Drop for PayloadKey {
     fn drop(&mut self) {
@@ -111,7 +109,7 @@ struct EncryptedChunk {
 /// counter, and 1 byte of last block flag (0x00 / 0x01).
 ///
 /// [STREAM]: https://eprint.iacr.org/2015/189.pdf
-pub(crate) struct Stream {
+pub struct Stream {
     aead: ChaCha20Poly1305,
     nonce: Nonce,
 }
@@ -131,7 +129,7 @@ impl Stream {
     /// random nonce.
     ///
     /// [`HKDF`]: age_core::primitives::hkdf
-    pub(crate) fn encrypt<W: Write>(key: PayloadKey, inner: W) -> StreamWriter<W> {
+    pub fn encrypt<W: Write>(key: PayloadKey, inner: W) -> StreamWriter<W> {
         StreamWriter {
             stream: Self::new(key),
             inner,
@@ -150,7 +148,7 @@ impl Stream {
     /// [`HKDF`]: age_core::primitives::hkdf
     #[cfg(feature = "async")]
     #[cfg_attr(docsrs, doc(cfg(feature = "async")))]
-    pub(crate) fn encrypt_async<W: AsyncWrite>(key: PayloadKey, inner: W) -> StreamWriter<W> {
+    pub fn encrypt_async<W: AsyncWrite>(key: PayloadKey, inner: W) -> StreamWriter<W> {
         StreamWriter {
             stream: Self::new(key),
             inner,
@@ -166,7 +164,7 @@ impl Stream {
     /// random nonce.
     ///
     /// [`HKDF`]: age_core::primitives::hkdf
-    pub(crate) fn decrypt<R: Read>(key: PayloadKey, inner: R) -> StreamReader<R> {
+    pub fn decrypt<R: Read>(key: PayloadKey, inner: R) -> StreamReader<R> {
         StreamReader {
             stream: Self::new(key),
             inner,
@@ -188,7 +186,7 @@ impl Stream {
     /// [`HKDF`]: age_core::primitives::hkdf
     #[cfg(feature = "async")]
     #[cfg_attr(docsrs, doc(cfg(feature = "async")))]
-    pub(crate) fn decrypt_async<R: AsyncRead>(key: PayloadKey, inner: R) -> StreamReader<R> {
+    pub fn decrypt_async<R: AsyncRead>(key: PayloadKey, inner: R) -> StreamReader<R> {
         StreamReader {
             stream: Self::new(key),
             inner,
@@ -537,10 +535,10 @@ impl<R: AsyncRead + Unpin> AsyncRead for StreamReader<R> {
         if self.chunk.is_none() {
             while self.encrypted_pos < ENCRYPTED_CHUNK_SIZE {
                 let this = self.as_mut().project();
-                match ready!(this
-                    .inner
-                    .poll_read(cx, &mut this.encrypted_chunk[*this.encrypted_pos..]))
-                {
+                match ready!(
+                    this.inner
+                        .poll_read(cx, &mut this.encrypted_chunk[*this.encrypted_pos..])
+                ) {
                     Ok(0) => break,
                     Ok(n) => self.encrypted_pos += n,
                     Err(e) => match e.kind() {
