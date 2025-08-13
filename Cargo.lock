@@ -336,7 +336,7 @@ dependencies = [
 
 [[package]]
 name = "darkbio-crypto"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "age-core",
  "bcder",
@@ -351,6 +351,7 @@ dependencies = [
  "rand 0.9.2",
  "rand_chacha 0.9.0",
  "rsa",
+ "signature",
  "x509-certificate",
  "x509-parser",
  "zeroize",
