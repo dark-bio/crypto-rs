@@ -4,13 +4,16 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int};
 use std::ptr;
 
 // Export the HPKE functions from the hpke.rs module
 pub use crate::hpke::*;
 
+/// Result structure for certificate-based public key extraction operations.
+///
+/// Contains either a successfully extracted public key with validity period or an error message.
+/// The `error` pointer must be freed with `rust_free_string` if not null.
 #[repr(C)]
 pub struct CPublicKeyFromCertResult {
     pub success: c_int,
@@ -20,18 +23,34 @@ pub struct CPublicKeyFromCertResult {
     pub error: *mut c_char,
 }
 
-// Extract public key from certificate with validity period
+/// Extracts an HPKE public key from a DER-encoded certificate.
+///
+/// Verifies the certificate signature using the provided signer public key and
+/// extracts the HPKE public key along with its validity period.
+///
+/// All pointer parameters must either be null or point to valid memory:
+/// - `cert_der` must point to valid DER-encoded certificate data of `cert_der_len` bytes
+/// - `signer_public_key_pem` must point to a valid null-terminated PEM-encoded Ed25519 public key
+///
+/// Returns a `CPublicKeyFromCertResult` with the extracted public key and validity timestamps
+/// (Unix epoch seconds) on success.
 #[unsafe(no_mangle)]
 pub extern "C" fn rust_hpke_publickey_from_cert(
-    cert_der: *const c_char,
+    cert_der: *const u8,
+    cert_der_len: usize,
     signer_public_key_pem: *const c_char,
 ) -> CPublicKeyFromCertResult {
     let result = (|| -> Result<([u8; 32], u64, u64), Box<dyn std::error::Error>> {
-        let cert_der_hex = unsafe { crate::hpke_ffi::c_str_to_string(cert_der)? };
-        let signer_public_key_pem_str =
-            unsafe { crate::hpke_ffi::c_str_to_string(signer_public_key_pem)? };
+        // Check for null pointers
+        if cert_der.is_null() || cert_der_len == 0 {
+            return Err("Null or empty certificate DER data".into());
+        }
 
-        let cert_der_bytes = hex::decode(&cert_der_hex)?;
+        let signer_public_key_pem_str =
+            unsafe { crate::hpke_ffi::c_char_to_string(signer_public_key_pem) };
+
+        // Get certificate DER bytes directly from pointer
+        let cert_der_bytes = unsafe { std::slice::from_raw_parts(cert_der, cert_der_len).to_vec() };
         let signer = crate::eddsa::PublicKey::from_pem(&signer_public_key_pem_str)?;
 
         let (public_key, not_before, not_after) =
@@ -61,6 +80,7 @@ pub extern "C" fn rust_hpke_publickey_from_cert(
 #[cfg(test)]
 mod ffi_tests {
     use super::*;
+    use std::ffi::CString;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -86,7 +106,8 @@ mod ffi_tests {
 
         // Test the certificate parsing via FFI
         let result = rust_hpke_publickey_from_cert(
-            CString::new(hex::encode(&der)).unwrap().as_ptr(),
+            der.as_ptr(),
+            der.len(),
             CString::new(bobby_public.to_pem()).unwrap().as_ptr(),
         );
 
