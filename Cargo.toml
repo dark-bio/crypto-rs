@@ -1,0 +1,24 @@
+[package]
+name = "crypto-rs"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+age-core = "0.11.0"
+hpke = { version = "0.13.0", features = ["std"] }
+rand = "0.9.0"
+ed25519-dalek = { version = "2.1.1", features = ["pem", "rand_core"] }
+getrandom = "0.2.15"
+rand_chacha = "0.9.0"
+rsa = { version = "0.9.8", features = ["sha2"] }
+zeroize = "1.8.1"
+chacha20poly1305 = "0.10.1"
+pin-project = "1.1.9"
+x509-parser = "0.17.0"
+
+[dev-dependencies]
+x509-certificate = "0.24.0"
+bcder = "0.7.5"
+hex = "0.4.3"
+bytes = "1.10.0"
+chrono = "0.4.40"
