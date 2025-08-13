@@ -14,7 +14,7 @@ pub use crate::hpke::*;
 #[repr(C)]
 pub struct CPublicKeyFromCertResult {
     pub success: c_int,
-    pub public_key: *mut c_char,
+    pub public_key: [u8; 32],
     pub not_before: u64,
     pub not_after: u64,
     pub error: *mut c_char,
@@ -26,7 +26,7 @@ pub extern "C" fn rust_hpke_publickey_from_cert(
     cert_der: *const c_char,
     signer_public_key_pem: *const c_char,
 ) -> CPublicKeyFromCertResult {
-    let result = (|| -> Result<(String, u64, u64), Box<dyn std::error::Error>> {
+    let result = (|| -> Result<([u8; 32], u64, u64), Box<dyn std::error::Error>> {
         let cert_der_hex = unsafe { crate::hpke_ffi::c_str_to_string(cert_der)? };
         let signer_public_key_pem_str =
             unsafe { crate::hpke_ffi::c_str_to_string(signer_public_key_pem)? };
@@ -37,20 +37,20 @@ pub extern "C" fn rust_hpke_publickey_from_cert(
         let (public_key, not_before, not_after) =
             PublicKey::from_cert_der(&cert_der_bytes, signer)?;
 
-        Ok((hex::encode(&public_key.to_bytes()), not_before, not_after))
+        Ok((public_key.to_bytes(), not_before, not_after))
     })();
 
     match result {
         Ok((public_key, not_before, not_after)) => CPublicKeyFromCertResult {
             success: 1,
-            public_key: crate::hpke_ffi::string_to_c_char(public_key),
+            public_key,
             not_before,
             not_after,
             error: ptr::null_mut(),
         },
         Err(e) => CPublicKeyFromCertResult {
             success: 0,
-            public_key: ptr::null_mut(),
+            public_key: [0u8; 32],
             not_before: 0,
             not_after: 0,
             error: crate::hpke_ffi::string_to_c_char(e.to_string()),
@@ -91,11 +91,9 @@ mod ffi_tests {
         );
 
         assert_eq!(result.success, 1);
-        let public_key_hex =
-            unsafe { CStr::from_ptr(result.public_key).to_str().unwrap() };
 
         // Verify results
-        assert_eq!(public_key_hex, hex::encode(alice_public.to_bytes()));
+        assert_eq!(result.public_key, alice_public.to_bytes());
         assert_eq!(result.not_before, start);
         assert_eq!(result.not_after, until);
     }

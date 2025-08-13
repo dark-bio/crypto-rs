@@ -15,14 +15,14 @@ pub use crate::hpke::*;
 #[repr(C)]
 pub struct CSecretKeyResult {
     pub success: c_int,
-    pub secret_key: *mut c_char,
+    pub secret_key: [u8; 32],
     pub error: *mut c_char,
 }
 
 #[repr(C)]
 pub struct CPublicKeyResult {
     pub success: c_int,
-    pub public_key: *mut c_char,
+    pub public_key: [u8; 32],
     pub error: *mut c_char,
 }
 
@@ -82,101 +82,57 @@ pub extern "C" fn rust_free_string(ptr: *mut c_char) {
     }
 }
 
-// Generate a new secret key and return as a hex encoded string in C struct.
+// Generate a new secret key and return as a byte array in C struct.
 #[unsafe(no_mangle)]
 pub extern "C" fn rust_hpke_generate() -> CSecretKeyResult {
-    let result = (|| -> Result<String, Box<dyn std::error::Error>> {
-        let secret_key = SecretKey::generate();
-        Ok(hex::encode(&secret_key.to_bytes()))
-    })();
-
-    match result {
-        Ok(secret_key) => CSecretKeyResult {
-            success: 1,
-            secret_key: string_to_c_char(secret_key),
-            error: ptr::null_mut(),
-        },
-        Err(e) => CSecretKeyResult {
-            success: 0,
-            secret_key: ptr::null_mut(),
-            error: string_to_c_char(e.to_string()),
-        },
+    let secret_key = SecretKey::generate();
+    CSecretKeyResult {
+        success: 1,
+        secret_key: secret_key.to_bytes(),
+        error: ptr::null_mut(),
     }
 }
 
-// Generate public key from secret key and return as a hex encoded string in C struct.
+// Generate public key from secret key and return as a byte array in C struct.
 #[unsafe(no_mangle)]
-pub extern "C" fn rust_hpke_publickey(secret_key: *const c_char) -> CPublicKeyResult {
-    let result = (|| -> Result<String, Box<dyn std::error::Error>> {
-        let secret_hex = unsafe { c_str_to_string(secret_key)? };
-
-        let secret_bytes = hex::decode(&secret_hex)?;
-        if secret_bytes.len() != 32 {
-            return Err(format!(
-                "Invalid secret key size: have {}, want 32 bytes",
-                secret_bytes.len()
-            )
-            .into());
-        }
-
-        let mut secret_key_bytes = [0u8; 32];
-        secret_key_bytes.copy_from_slice(&secret_bytes);
-
-        let secret_key = SecretKey::from_bytes(&secret_key_bytes);
-        let public_key = secret_key.public_key();
-
-        Ok(hex::encode(&public_key.to_bytes()))
-    })();
-
-    match result {
-        Ok(public_key) => CPublicKeyResult {
-            success: 1,
-            public_key: string_to_c_char(public_key),
-            error: ptr::null_mut(),
-        },
-        Err(e) => CPublicKeyResult {
+pub extern "C" fn rust_hpke_publickey(secret_key: *const [u8; 32]) -> CPublicKeyResult {
+    if secret_key.is_null() {
+        return CPublicKeyResult {
             success: 0,
-            public_key: ptr::null_mut(),
-            error: string_to_c_char(e.to_string()),
-        },
+            public_key: [0u8; 32],
+            error: string_to_c_char("Null secret key pointer".to_string()),
+        };
+    }
+
+    let secret_key_bytes = unsafe { *secret_key };
+    let secret_key = SecretKey::from_bytes(&secret_key_bytes);
+    let public_key = secret_key.public_key();
+
+    CPublicKeyResult {
+        success: 1,
+        public_key: public_key.to_bytes(),
+        error: ptr::null_mut(),
     }
 }
 
 // Seal a message (encrypt + authenticate)
 #[unsafe(no_mangle)]
 pub extern "C" fn rust_hpke_seal(
-    local_private_key: *const c_char,
-    remote_public_key: *const c_char,
+    local_private_key: *const [u8; 32],
+    remote_public_key: *const [u8; 32],
     domain: *const c_char,
     msg_to_seal: *const c_char,
     msg_to_auth: *const c_char,
 ) -> CSealResult {
     let result = (|| -> Result<String, Box<dyn std::error::Error>> {
-        // Parse keys and sanity check the FFI crossover
-        let local_private_key_hex = unsafe { c_str_to_string(local_private_key)? };
-        let remote_public_key_hex = unsafe { c_str_to_string(remote_public_key)? };
-
-        let local_private_key_bytes = hex::decode(&local_private_key_hex)?;
-        if local_private_key_bytes.len() != 32 {
-            return Err(format!(
-                "Invalid local key size: have {}, want 32 bytes",
-                local_private_key_bytes.len()
-            )
-            .into());
-        }
-        let remote_public_key_bytes = hex::decode(&remote_public_key_hex)?;
-        if remote_public_key_bytes.len() != 32 {
-            return Err(format!(
-                "Invalid remote key size: have {}, want 32 bytes",
-                remote_public_key_bytes.len()
-            )
-            .into());
+        // Check for null pointers
+        if local_private_key.is_null() || remote_public_key.is_null() {
+            return Err("Null key pointer".into());
         }
 
-        let mut local_bytes = [0u8; 32];
-        let mut remote_bytes = [0u8; 32];
-        local_bytes.copy_from_slice(&local_private_key_bytes);
-        remote_bytes.copy_from_slice(&remote_public_key_bytes);
+        // Get keys directly from byte arrays
+        let local_bytes = unsafe { *local_private_key };
+        let remote_bytes = unsafe { *remote_public_key };
 
         let local = SecretKey::from_bytes(&local_bytes);
         let remote = PublicKey::from_bytes(&remote_bytes);
@@ -214,38 +170,21 @@ pub extern "C" fn rust_hpke_seal(
 // Open a sealed message (decrypt + verify)
 #[unsafe(no_mangle)]
 pub extern "C" fn rust_hpke_open(
-    local_private_key: *const c_char,
-    remote_public_key: *const c_char,
+    local_private_key: *const [u8; 32],
+    remote_public_key: *const [u8; 32],
     domain: *const c_char,
     msg_to_open: *const c_char,
     msg_to_auth: *const c_char,
 ) -> COpenResult {
     let result = (|| -> Result<String, Box<dyn std::error::Error>> {
-        // Parse keys and sanity check the FFI crossover
-        let local_private_key_hex = unsafe { c_str_to_string(local_private_key)? };
-        let remote_public_key_hex = unsafe { c_str_to_string(remote_public_key)? };
-
-        let local_private_key_bytes = hex::decode(&local_private_key_hex)?;
-        if local_private_key_bytes.len() != 32 {
-            return Err(format!(
-                "Invalid local key size: have {}, want 32 bytes",
-                local_private_key_bytes.len()
-            )
-            .into());
-        }
-        let remote_public_key_bytes = hex::decode(&remote_public_key_hex)?;
-        if remote_public_key_bytes.len() != 32 {
-            return Err(format!(
-                "Invalid remote key size: have {}, want 32 bytes",
-                remote_public_key_bytes.len()
-            )
-            .into());
+        // Check for null pointers
+        if local_private_key.is_null() || remote_public_key.is_null() {
+            return Err("Null key pointer".into());
         }
 
-        let mut local_bytes = [0u8; 32];
-        let mut remote_bytes = [0u8; 32];
-        local_bytes.copy_from_slice(&local_private_key_bytes);
-        remote_bytes.copy_from_slice(&remote_public_key_bytes);
+        // Get keys directly from byte arrays
+        let local_bytes = unsafe { *local_private_key };
+        let remote_bytes = unsafe { *remote_public_key };
 
         let local = SecretKey::from_bytes(&local_bytes);
         let remote = PublicKey::from_bytes(&remote_bytes);
@@ -282,37 +221,20 @@ pub extern "C" fn rust_hpke_open(
 // Sign a message
 #[unsafe(no_mangle)]
 pub extern "C" fn rust_hpke_sign(
-    local_private_key: *const c_char,
-    remote_public_key: *const c_char,
+    local_private_key: *const [u8; 32],
+    remote_public_key: *const [u8; 32],
     domain: *const c_char,
     message: *const c_char,
 ) -> CSignResult {
     let result = (|| -> Result<String, Box<dyn std::error::Error>> {
-        // Parse keys and sanity check the FFI crossover
-        let local_private_key_hex = unsafe { c_str_to_string(local_private_key)? };
-        let remote_public_key_hex = unsafe { c_str_to_string(remote_public_key)? };
-
-        let local_private_key_bytes = hex::decode(&local_private_key_hex)?;
-        if local_private_key_bytes.len() != 32 {
-            return Err(format!(
-                "Invalid local key size: have {}, want 32 bytes",
-                local_private_key_bytes.len()
-            )
-            .into());
-        }
-        let remote_public_key_bytes = hex::decode(&remote_public_key_hex)?;
-        if remote_public_key_bytes.len() != 32 {
-            return Err(format!(
-                "Invalid remote key size: have {}, want 32 bytes",
-                remote_public_key_bytes.len()
-            )
-            .into());
+        // Check for null pointers
+        if local_private_key.is_null() || remote_public_key.is_null() {
+            return Err("Null key pointer".into());
         }
 
-        let mut local_bytes = [0u8; 32];
-        let mut remote_bytes = [0u8; 32];
-        local_bytes.copy_from_slice(&local_private_key_bytes);
-        remote_bytes.copy_from_slice(&remote_public_key_bytes);
+        // Get keys directly from byte arrays
+        let local_bytes = unsafe { *local_private_key };
+        let remote_bytes = unsafe { *remote_public_key };
 
         let local = SecretKey::from_bytes(&local_bytes);
         let remote = PublicKey::from_bytes(&remote_bytes);
@@ -346,38 +268,21 @@ pub extern "C" fn rust_hpke_sign(
 // Verify a signature
 #[unsafe(no_mangle)]
 pub extern "C" fn rust_hpke_verify(
-    local_private_key: *const c_char,
-    remote_public_key: *const c_char,
+    local_private_key: *const [u8; 32],
+    remote_public_key: *const [u8; 32],
     domain: *const c_char,
     message: *const c_char,
     signature: *const c_char,
 ) -> CVerifyResult {
     let result = (|| -> Result<(), Box<dyn std::error::Error>> {
-        // Parse keys and sanity check the FFI crossover
-        let local_private_key_hex = unsafe { c_str_to_string(local_private_key)? };
-        let remote_public_key_hex = unsafe { c_str_to_string(remote_public_key)? };
-
-        let local_private_key_bytes = hex::decode(&local_private_key_hex)?;
-        if local_private_key_bytes.len() != 32 {
-            return Err(format!(
-                "Invalid local key size: have {}, want 32 bytes",
-                local_private_key_bytes.len()
-            )
-            .into());
-        }
-        let remote_public_key_bytes = hex::decode(&remote_public_key_hex)?;
-        if remote_public_key_bytes.len() != 32 {
-            return Err(format!(
-                "Invalid remote key size: have {}, want 32 bytes",
-                remote_public_key_bytes.len()
-            )
-            .into());
+        // Check for null pointers
+        if local_private_key.is_null() || remote_public_key.is_null() {
+            return Err("Null key pointer".into());
         }
 
-        let mut local_bytes = [0u8; 32];
-        let mut remote_bytes = [0u8; 32];
-        local_bytes.copy_from_slice(&local_private_key_bytes);
-        remote_bytes.copy_from_slice(&remote_public_key_bytes);
+        // Get keys directly from byte arrays
+        let local_bytes = unsafe { *local_private_key };
+        let remote_bytes = unsafe { *remote_public_key };
 
         let local = SecretKey::from_bytes(&local_bytes);
         let remote = PublicKey::from_bytes(&remote_bytes);
@@ -425,19 +330,19 @@ mod ffi_tests {
         assert_eq!(alice_secret_result.success, 1);
         assert_eq!(bob_secret_result.success, 1);
 
-        // Extract secret keys as strings
-        let alice_secret_key = unsafe { CStr::from_ptr(alice_secret_result.secret_key).to_str().unwrap() };
-        let bob_secret_key = unsafe { CStr::from_ptr(bob_secret_result.secret_key).to_str().unwrap() };
+        // Get secret keys as byte arrays
+        let alice_secret_key = alice_secret_result.secret_key;
+        let bob_secret_key = bob_secret_result.secret_key;
 
         // Generate public keys from secret keys
-        let alice_public_result = rust_hpke_publickey(CString::new(alice_secret_key).unwrap().as_ptr());
-        let bob_public_result = rust_hpke_publickey(CString::new(bob_secret_key).unwrap().as_ptr());
+        let alice_public_result = rust_hpke_publickey(&alice_secret_key);
+        let bob_public_result = rust_hpke_publickey(&bob_secret_key);
 
         assert_eq!(alice_public_result.success, 1);
         assert_eq!(bob_public_result.success, 1);
 
-        let alice_public_key = unsafe { CStr::from_ptr(alice_public_result.public_key).to_str().unwrap() };
-        let bob_public_key = unsafe { CStr::from_ptr(bob_public_result.public_key).to_str().unwrap() };
+        let alice_public_key = alice_public_result.public_key;
+        let bob_public_key = bob_public_result.public_key;
 
         let domain = "test";
 
@@ -468,8 +373,8 @@ mod ffi_tests {
         for test_case in &tests {
             // Alice seals a message for Bob
             let sealed_result = rust_hpke_seal(
-                CString::new(alice_secret_key).unwrap().as_ptr(),
-                CString::new(bob_public_key).unwrap().as_ptr(),
+                &alice_secret_key,
+                &bob_public_key,
                 CString::new(domain).unwrap().as_ptr(),
                 CString::new(test_case.seal_msg).unwrap().as_ptr(),
                 CString::new(test_case.auth_msg).unwrap().as_ptr(),
@@ -480,8 +385,8 @@ mod ffi_tests {
 
             // Bob opens the sealed message
             let opened_result = rust_hpke_open(
-                CString::new(bob_secret_key).unwrap().as_ptr(),
-                CString::new(alice_public_key).unwrap().as_ptr(),
+                &bob_secret_key,
+                &alice_public_key,
                 CString::new(domain).unwrap().as_ptr(),
                 CString::new(sealed_data).unwrap().as_ptr(),
                 CString::new(test_case.auth_msg).unwrap().as_ptr(),
@@ -504,27 +409,27 @@ mod ffi_tests {
         assert_eq!(alice_secret_result.success, 1);
         assert_eq!(bob_secret_result.success, 1);
 
-        // Extract secret keys as strings
-        let alice_secret_key = unsafe { CStr::from_ptr(alice_secret_result.secret_key).to_str().unwrap() };
-        let bob_secret_key = unsafe { CStr::from_ptr(bob_secret_result.secret_key).to_str().unwrap() };
+        // Get secret keys as byte arrays
+        let alice_secret_key = alice_secret_result.secret_key;
+        let bob_secret_key = bob_secret_result.secret_key;
 
         // Generate public keys from secret keys
-        let alice_public_result = rust_hpke_publickey(CString::new(alice_secret_key).unwrap().as_ptr());
-        let bob_public_result = rust_hpke_publickey(CString::new(bob_secret_key).unwrap().as_ptr());
+        let alice_public_result = rust_hpke_publickey(&alice_secret_key);
+        let bob_public_result = rust_hpke_publickey(&bob_secret_key);
 
         assert_eq!(alice_public_result.success, 1);
         assert_eq!(bob_public_result.success, 1);
 
-        let alice_public_key = unsafe { CStr::from_ptr(alice_public_result.public_key).to_str().unwrap() };
-        let bob_public_key = unsafe { CStr::from_ptr(bob_public_result.public_key).to_str().unwrap() };
+        let alice_public_key = alice_public_result.public_key;
+        let bob_public_key = bob_public_result.public_key;
 
         let domain = "test";
         let message = &hex::encode("message to sign");
 
         // Alice signs a message for Bob
         let signature_result = rust_hpke_sign(
-            CString::new(alice_secret_key).unwrap().as_ptr(),
-            CString::new(bob_public_key).unwrap().as_ptr(),
+            &alice_secret_key,
+            &bob_public_key,
             CString::new(domain).unwrap().as_ptr(),
             CString::new(message.as_str()).unwrap().as_ptr(),
         );
@@ -534,8 +439,8 @@ mod ffi_tests {
 
         // Bob verifies the signature
         let verify_result = rust_hpke_verify(
-            CString::new(bob_secret_key).unwrap().as_ptr(),
-            CString::new(alice_public_key).unwrap().as_ptr(),
+            &bob_secret_key,
+            &alice_public_key,
             CString::new(domain).unwrap().as_ptr(),
             CString::new(message.as_str()).unwrap().as_ptr(),
             CString::new(signature).unwrap().as_ptr(),
