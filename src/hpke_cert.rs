@@ -6,20 +6,16 @@
 
 use crate::eddsa;
 use crate::hpke::PublicKey;
+use bcder::encode::Values;
+use bcder::Mode;
+use bytes::Bytes;
+use chrono::{TimeZone, Utc};
 use std::error::Error;
-
-#[cfg(test)]
-use {
-    bcder::encode::Values,
-    bcder::Mode,
-    bytes::Bytes,
-    chrono::{TimeZone, Utc},
-    x509_certificate::asn1time::Time,
-    x509_certificate::rfc3280::Name,
-    x509_certificate::rfc5280::AlgorithmIdentifier,
-    x509_certificate::{
-        rfc5280, InMemorySigningKeyPair, KeyAlgorithm, SignatureAlgorithm, Signer, X509Certificate,
-    },
+use x509_certificate::asn1time::Time;
+use x509_certificate::rfc3280::Name;
+use x509_certificate::rfc5280::AlgorithmIdentifier;
+use x509_certificate::{
+    rfc5280, InMemorySigningKeyPair, KeyAlgorithm, SignatureAlgorithm, Signer, X509Certificate,
 };
 
 impl PublicKey {
@@ -65,33 +61,39 @@ impl PublicKey {
         Ok((key, start, until))
     }
 
-    // to_cert_pem generates a PEM encoded certificate out of a public key.
+    // to_test_cert_pem generates a PEM encoded certificate out of a public key.
     //
     // Note, this method is only for testing, most of the contained data will be
     // junk; and also the produces certificate is not fully spec-adhering:
     //   https://github.com/indygreg/cryptography-rs/issues/26
-    #[cfg(test)]
-    pub fn to_cert_pem(&self, start: u64, until: u64, signer: eddsa::SecretKey) -> String {
-        self.to_cert(start, until, signer).encode_pem().unwrap()
+    pub fn to_test_cert_pem(&self, start: u64, until: u64, signer: eddsa::SecretKey) -> String {
+        self.to_test_cert(start, until, signer)
+            .encode_pem()
+            .unwrap()
     }
 
-    // to_cert_der generates a DER encoded certificate out of a public key.
+    // to_test_cert_der generates a DER encoded certificate out of a public key.
     //
     // Note, this method is only for testing, most of the contained data will be
     // junk; and also the produces certificate is not fully spec-adhering:
     //   https://github.com/indygreg/cryptography-rs/issues/26
-    #[cfg(test)]
-    pub fn to_cert_der(&self, start: u64, until: u64, signer: eddsa::SecretKey) -> Vec<u8> {
-        self.to_cert(start, until, signer).encode_der().unwrap()
+    pub fn to_test_cert_der(&self, start: u64, until: u64, signer: eddsa::SecretKey) -> Vec<u8> {
+        self.to_test_cert(start, until, signer)
+            .encode_der()
+            .unwrap()
     }
 
-    // to_cert generates a certificate out of a public key.
+    // to_test_cert generates a certificate out of a public key.
     //
     // Note, this method is only for testing, most of the contained data will be
     // junk; and also the produced certificate is not fully spec-adhering:
     //   https://github.com/indygreg/cryptography-rs/issues/26
-    #[cfg(test)]
-    pub fn to_cert(&self, start: u64, until: u64, signer: eddsa::SecretKey) -> X509Certificate {
+    pub fn to_test_cert(
+        &self,
+        start: u64,
+        until: u64,
+        signer: eddsa::SecretKey,
+    ) -> X509Certificate {
         // Create the certificate configuration
         let tbs_certificate = rfc5280::TbsCertificate {
             version: Some(rfc5280::Version::V3),
@@ -166,10 +168,10 @@ mod test {
             .as_secs()
             + 3600;
 
-        let pem = alice_public.to_cert_pem(start, until, bobby_secret.clone());
+        let pem = alice_public.to_test_cert_pem(start, until, bobby_secret.clone());
         PublicKey::from_cert_pem(pem.as_str(), bobby_public.clone()).unwrap();
 
-        let der = alice_public.to_cert_der(start, until, bobby_secret.clone());
+        let der = alice_public.to_test_cert_der(start, until, bobby_secret.clone());
         PublicKey::from_cert_der(der.as_slice(), bobby_public.clone()).unwrap();
     }
 }

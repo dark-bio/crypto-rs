@@ -215,7 +215,7 @@ mod tests {
         let bobby_public = bobby_secret.public_key();
 
         let alice_context = Context::new(alice_secret, bobby_public, "test");
-        let bobby_context = Context::new(bobby_secret, alice_public,"test");
+        let bobby_context = Context::new(bobby_secret, alice_public, "test");
 
         // Run a bunch of different authentication/encryption combinations
         struct TestCase<'a> {
