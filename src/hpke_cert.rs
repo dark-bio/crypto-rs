@@ -1,5 +1,8 @@
-// arkos-core: ArkOS Genomic Firmware Core
-// Copyright 2025 Péter Szilágyi - Dark Bio
+// crypto-rs: cryptography primitives and wrappers
+// Copyright 2025 Dark Bio. All rights reserved.
+//
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 use crate::eddsa;
 use crate::hpke::PublicKey;
@@ -85,7 +88,7 @@ impl PublicKey {
     // to_cert generates a certificate out of a public key.
     //
     // Note, this method is only for testing, most of the contained data will be
-    // junk; and also the produces certificate is not fully spec-adhering:
+    // junk; and also the produced certificate is not fully spec-adhering:
     //   https://github.com/indygreg/cryptography-rs/issues/26
     #[cfg(test)]
     pub fn to_cert(&self, start: u64, until: u64, signer: eddsa::SecretKey) -> X509Certificate {
