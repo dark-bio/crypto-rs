@@ -5,7 +5,7 @@
 // license that can be found in the LICENSE file.
 
 // This file contains a bunch of helpers and wrappers to make sure that everything
-// within the project uses the same X25519 cryptographic constructs, and correctly.
+// within the project uses the same HPKE cryptographic constructs, and correctly.
 
 use hpke::rand_core::SeedableRng;
 use hpke::{Deserializable, HpkeError, Kem, Serializable};
@@ -29,7 +29,7 @@ type KDF = hpke::kdf::HkdfSha256;
 //
 // The final info will be this prefix concatenated with another contextual info
 // from an app layer action.
-const INFO_PREFIX: &[u8] = "dark-bio-v1:".as_bytes();
+const INFO_PREFIX: &str = "dark-bio-v1:";
 
 // SecretKey contains a private key of the type bound to the configured crypto.
 #[derive(Clone, PartialEq, Eq)]
@@ -90,30 +90,6 @@ impl PublicKey {
     }
 }
 
-// Channel is a HPKE cryptography suite set up between two parties. It contains
-// the HPKE parameters, the local secret key and the remote public key. It is,
-// however, not yet bound to an application context. You need to explicitly make
-// a Context for that.
-#[derive(Clone, PartialEq, Eq)]
-pub struct Channel {
-    local: SecretKey,  // Secret key of the local entity
-    remote: PublicKey, // Public key of the remote entity
-}
-
-impl Channel {
-    // new constructs a new crypto channel between a designated local and remote
-    // entity, but not tied to a specific application domain.
-    pub fn new(local: SecretKey, remote: PublicKey) -> Self {
-        Self { local, remote }
-    }
-
-    // bind constructs a new crypto context between teh embedded local and remote
-    // entity, also tied to a specific application domain.
-    pub fn bind(&self, domain: &str) -> Context {
-        Context::new(self.local.clone(), self.remote.clone(), domain)
-    }
-}
-
 // Context represents all contextual information for two parties to securely send
 // authenticated and encrypted messages to one another within a specific usage
 // domain.
@@ -131,7 +107,7 @@ impl Context {
         Self {
             local,
             remote,
-            domain: String::from_utf8_lossy(INFO_PREFIX).to_string() + domain,
+            domain: INFO_PREFIX.to_string() + domain,
         }
     }
 
@@ -154,7 +130,7 @@ impl Context {
 
         // Create a random number stream that works in WASM
         let mut seed = [0u8; 32];
-        getrandom::getrandom(&mut seed).expect("Failed to get random seed");
+        getrandom::fill(&mut seed).expect("Failed to get random seed");
         let mut rng = rand_chacha::ChaCha20Rng::from_seed(seed);
 
         // Create a sender session. We won't use it long term, just for a one-shot
@@ -239,7 +215,7 @@ mod tests {
         let bobby_public = bobby_secret.public_key();
 
         let alice_context = Context::new(alice_secret, bobby_public, "test");
-        let bobby_context = Channel::new(bobby_secret, alice_public).bind("test"); // same as above, different API
+        let bobby_context = Context::new(bobby_secret, alice_public,"test");
 
         // Run a bunch of different authentication/encryption combinations
         struct TestCase<'a> {
@@ -294,7 +270,7 @@ mod tests {
         let bobby_public = bobby_secret.public_key();
 
         let alice_context = Context::new(alice_secret, bobby_public, "test");
-        let bobby_context = Channel::new(bobby_secret, alice_public).bind("test"); // same as above, different API
+        let bobby_context = Context::new(bobby_secret, alice_public, "test");
 
         // Run a bunch of different authentication/encryption combinations
         struct TestCase<'a> {
