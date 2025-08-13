@@ -8,6 +8,13 @@ documentation = "https://docs.rs/darkbio-crypto"
 license = "BSD-3-Clause"
 edition = "2024"
 
+[lib]
+crate-type = ["rlib", "cdylib", "staticlib"]
+
+[features]
+cert = []
+ffi = []
+
 [dependencies]
 age-core = "0.11.0"
 bcder = "0.7.5"
@@ -24,6 +31,6 @@ rsa = { version = "0.9.8", features = ["sha2"] }
 x509-certificate = "0.24.0"
 x509-parser = "0.17.0"
 zeroize = "1.8.1"
+hex = "0.4.3"
 
 [dev-dependencies]
-hex = "0.4.3"

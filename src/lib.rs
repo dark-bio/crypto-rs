@@ -9,3 +9,9 @@ pub mod hpke;
 pub mod hpke_cert;
 pub mod rsa;
 pub mod stream;
+
+//#[cfg(feature = "ffi")]
+pub mod hpke_ffi;
+
+//#[cfg(all(feature = "cert", feature = "ffi"))]
+pub mod hpke_cert_ffi;
