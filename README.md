@@ -3,7 +3,7 @@
 [![](https://img.shields.io/crates/v/darkbio-crypto.svg)](https://crates.io/crates/darkbio-crypto)
 [![](https://docs.rs/darkbio-crypto/badge.svg)](https://docs.rs/darkbio-crypto)
 
-This repository is parameter selection, and lightweight wrapper around a number of Rust cryptographic libraries. Its purpose isn't to implement primitives, rather to unify the API surface of existing libraries; limited to the tiny subset needed by the Dark Bio project.
+This repository is parameter selection and lightweight wrapper around a number of Rust cryptographic libraries. Its purpose isn't to implement primitives, rather to unify the API surface of existing libraries; limited to the tiny subset needed by the Dark Bio project.
 
 It contains the following primitives and parameters:
 
@@ -24,4 +24,3 @@ The entire library is hidden behind feature flags:
 Some base features can be expanded with further flags:
 
 - `cert` can expand `hpke` with certificate support, pulls in `eddsa`
-- `ffi` can expand `hpke` and `cert` with C FFI interfacing support
