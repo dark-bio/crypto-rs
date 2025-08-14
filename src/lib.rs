@@ -18,9 +18,3 @@ pub mod rsa;
 
 #[cfg(feature = "stream")]
 pub mod stream;
-
-#[cfg(all(feature = "hpke", feature = "ffi"))]
-pub mod hpke_ffi;
-
-#[cfg(all(feature = "hpke", feature = "cert", feature = "ffi"))]
-pub mod hpke_cert_ffi;

@@ -9,7 +9,6 @@
 
 use hpke::rand_core::SeedableRng;
 use hpke::{Deserializable, HpkeError, Kem, Serializable};
-use std::error::Error;
 
 // KEM, AEAD and KDF are the HPKE crypto suite parameters. They are all 256 bit
 // variants, which should be enough for current purposes. Some details:
@@ -123,7 +122,7 @@ impl Context {
     //
     // This method (and open) requires the public keys of both parties to be pre-
     // shared. It is not suitable for a key exchange protocol!
-    pub fn seal(&self, msg_to_seal: &[u8], msg_to_auth: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+    pub fn seal(&self, msg_to_seal: &[u8], msg_to_auth: &[u8]) -> Result<Vec<u8>, HpkeError> {
         // Derive the public key for the sender. We could pass this along, but ugh,
         // such an ugly API honestly. Might as well recompute and yolo.
         let pubkey = KEM::sk_to_pk(&self.local.inner);
@@ -181,7 +180,7 @@ impl Context {
     // sign is similar to creating a digital signature, but based on HPKE protocol.
     // The resulting "signature" is not publicly verifiable, only by the intended
     // recipient.
-    pub fn sign(&self, message: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+    pub fn sign(&self, message: &[u8]) -> Result<Vec<u8>, HpkeError> {
         self.seal(&[], message)
     }
 

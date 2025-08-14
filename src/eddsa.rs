@@ -9,9 +9,10 @@
 
 use ed25519_dalek::ed25519::signature::rand_core::OsRng;
 use ed25519_dalek::pkcs8::spki::der::pem::LineEnding;
-use ed25519_dalek::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey};
-use ed25519_dalek::{Signature, Signer, Verifier};
-use std::error::Error;
+use ed25519_dalek::pkcs8::{
+    DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey, Error,
+};
+use ed25519_dalek::{Signature, SignatureError, Signer, Verifier};
 
 // SecretKey contains an Ed25519 private key usable for signing.
 #[derive(Clone)]
@@ -29,20 +30,20 @@ impl SecretKey {
     }
 
     // from_bytes converts a 32-byte array into a private key.
-    pub fn from_bytes(bin: &[u8; 32]) -> Result<Self, Box<dyn Error>> {
+    pub fn from_bytes(bin: &[u8; 32]) -> Self {
         let key = ed25519_dalek::SecretKey::from(*bin);
         let sig = ed25519_dalek::SigningKey::from(&key);
-        Ok(Self { inner: sig })
+        Self { inner: sig }
     }
 
     // from_der parses a DER buffer into a private key.
-    pub fn from_der(der: &[u8]) -> Result<Self, Box<dyn Error>> {
+    pub fn from_der(der: &[u8]) -> Result<Self, Error> {
         let inner = ed25519_dalek::SigningKey::from_pkcs8_der(der)?;
         Ok(Self { inner })
     }
 
     // from_pem parses a PEM string into a private key.
-    pub fn from_pem(pem: &str) -> Result<Self, Box<dyn Error>> {
+    pub fn from_pem(pem: &str) -> Result<Self, Error> {
         let inner = ed25519_dalek::SigningKey::from_pkcs8_pem(pem)?;
         Ok(Self { inner })
     }
@@ -92,13 +93,13 @@ impl PublicKey {
     }
 
     // from_der parses a DER buffer into a public key.
-    pub fn from_der(der: &[u8]) -> Result<Self, Box<dyn Error>> {
+    pub fn from_der(der: &[u8]) -> Result<Self, Error> {
         let inner = ed25519_dalek::VerifyingKey::from_public_key_der(der)?;
         Ok(Self { inner })
     }
 
     // from_pem parses a PEM string into a public key.
-    pub fn from_pem(pem: &str) -> Result<Self, Box<dyn Error>> {
+    pub fn from_pem(pem: &str) -> Result<Self, Error> {
         let inner = ed25519_dalek::VerifyingKey::from_public_key_pem(pem)?;
         Ok(Self { inner })
     }
@@ -128,7 +129,7 @@ impl PublicKey {
     }
 
     // verify verifies a digital signature.
-    pub fn verify(&self, message: &[u8], signature: &[u8]) -> Result<(), Box<dyn Error>> {
+    pub fn verify(&self, message: &[u8], signature: &[u8]) -> Result<(), SignatureError> {
         let sig = Signature::try_from(signature)?;
         Ok(self.inner.verify(&message, &sig)?)
     }

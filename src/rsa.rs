@@ -9,7 +9,7 @@
 
 use rsa::pkcs1v15::Signature;
 use rsa::pkcs8::{
-    DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey, LineEnding,
+    DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey, Error, LineEnding,
 };
 use rsa::rand_core::OsRng;
 use rsa::sha2::{Digest, Sha256};
@@ -17,7 +17,6 @@ use rsa::signature::hazmat::PrehashVerifier;
 use rsa::signature::{Keypair, SignatureEncoding, Signer, Verifier};
 use rsa::traits::PublicKeyParts;
 use rsa::{RsaPrivateKey, RsaPublicKey};
-use std::error::Error;
 
 // SecretKey contains a 2048-bit RSA private key usable for signing, with SHA256
 // as the underlying hash algorithm. Whilst RSA could also be used for encryption,
@@ -38,13 +37,13 @@ impl SecretKey {
     }
 
     // from_der parses a DER buffer into a private key.
-    pub fn from_der(der: &[u8]) -> Result<Self, Box<dyn Error>> {
+    pub fn from_der(der: &[u8]) -> Result<Self, Error> {
         let inner = rsa::pkcs1v15::SigningKey::<Sha256>::from_pkcs8_der(der)?;
         Ok(Self { inner })
     }
 
     // from_pem parses a PEM string into a private key.
-    pub fn from_pem(pem: &str) -> Result<Self, Box<dyn Error>> {
+    pub fn from_pem(pem: &str) -> Result<Self, Error> {
         let inner = rsa::pkcs1v15::SigningKey::<Sha256>::from_pkcs8_pem(pem)?;
         Ok(Self { inner })
     }
@@ -88,13 +87,13 @@ pub struct PublicKey {
 
 impl PublicKey {
     // from_der parses a DER buffer into a public key.
-    pub fn from_der(der: &[u8]) -> Result<Self, Box<dyn Error>> {
+    pub fn from_der(der: &[u8]) -> Result<Self, Error> {
         let inner = rsa::pkcs1v15::VerifyingKey::<Sha256>::from_public_key_der(der)?;
         Ok(Self { inner })
     }
 
     // from_pem parses a PEM string into a public key.
-    pub fn from_pem(pem: &str) -> Result<Self, Box<dyn Error>> {
+    pub fn from_pem(pem: &str) -> Result<Self, Error> {
         let inner = rsa::pkcs1v15::VerifyingKey::<Sha256>::from_public_key_pem(pem)?;
         Ok(Self { inner })
     }
@@ -130,13 +129,13 @@ impl PublicKey {
     }
 
     // verify verifies a digital signature.
-    pub fn verify(&self, message: &[u8], signature: &[u8]) -> Result<(), Box<dyn Error>> {
+    pub fn verify(&self, message: &[u8], signature: &[u8]) -> Result<(), signature::Error> {
         let sig = Signature::try_from(signature)?;
         Ok(self.inner.verify(&message, &sig)?)
     }
 
     // verify_hash verifies a digital signature on an already hashed message.
-    pub fn verify_hash(&self, hash: &[u8], signature: &[u8]) -> Result<(), Box<dyn Error>> {
+    pub fn verify_hash(&self, hash: &[u8], signature: &[u8]) -> Result<(), signature::Error> {
         let sig = Signature::try_from(signature)?;
         Ok(self.inner.verify_prehash(&hash, &sig)?)
     }
