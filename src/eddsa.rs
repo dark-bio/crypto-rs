@@ -4,8 +4,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// This file contains a bunch of helpers and wrappers to make sure that everything
-// within the project uses the same Ed25519 cryptographic constructs, and correctly.
+//! EdDSA cryptography wrappers and parametrization.
 
 use ed25519_dalek::ed25519::signature::rand_core::OsRng;
 use ed25519_dalek::pkcs8::spki::der::pem::LineEnding;
@@ -14,14 +13,14 @@ use ed25519_dalek::pkcs8::{
 };
 use ed25519_dalek::{Signature, SignatureError, Signer, Verifier};
 
-// SecretKey contains an Ed25519 private key usable for signing.
+/// SecretKey contains an Ed25519 private key usable for signing.
 #[derive(Clone)]
 pub struct SecretKey {
     inner: ed25519_dalek::SigningKey,
 }
 
 impl SecretKey {
-    // generate creates a new, random private key.
+    /// generate creates a new, random private key.
     pub fn generate() -> SecretKey {
         let mut rng = OsRng;
 
@@ -29,36 +28,36 @@ impl SecretKey {
         Self { inner: key }
     }
 
-    // from_bytes converts a 32-byte array into a private key.
+    /// from_bytes converts a 32-byte array into a private key.
     pub fn from_bytes(bin: &[u8; 32]) -> Self {
         let key = ed25519_dalek::SecretKey::from(*bin);
         let sig = ed25519_dalek::SigningKey::from(&key);
         Self { inner: sig }
     }
 
-    // from_der parses a DER buffer into a private key.
+    /// from_der parses a DER buffer into a private key.
     pub fn from_der(der: &[u8]) -> Result<Self, Error> {
         let inner = ed25519_dalek::SigningKey::from_pkcs8_der(der)?;
         Ok(Self { inner })
     }
 
-    // from_pem parses a PEM string into a private key.
+    /// from_pem parses a PEM string into a private key.
     pub fn from_pem(pem: &str) -> Result<Self, Error> {
         let inner = ed25519_dalek::SigningKey::from_pkcs8_pem(pem)?;
         Ok(Self { inner })
     }
 
-    // to_bytes converts a private key into a 32-byte array.
+    /// to_bytes converts a private key into a 32-byte array.
     pub fn to_bytes(&self) -> [u8; 32] {
         self.inner.to_bytes().into()
     }
 
-    // to_der serializes a private key into a DER buffer.
+    /// to_der serializes a private key into a DER buffer.
     pub fn to_der(&self) -> Vec<u8> {
         self.inner.to_pkcs8_der().unwrap().as_bytes().to_vec()
     }
 
-    // to_pem serializes a private key into a PEM string.
+    /// to_pem serializes a private key into a PEM string.
     pub fn to_pem(&self) -> String {
         self.inner
             .to_pkcs8_pem(LineEnding::default())
@@ -66,55 +65,55 @@ impl SecretKey {
             .to_string()
     }
 
-    // public_key retrieves the public counterpart of the secret key.
+    /// public_key retrieves the public counterpart of the secret key.
     pub fn public_key(&self) -> PublicKey {
         PublicKey {
             inner: self.inner.verifying_key(),
         }
     }
 
-    // sign creates a digital signature of the message.
+    /// sign creates a digital signature of the message.
     pub fn sign(&self, message: &[u8]) -> Vec<u8> {
         self.inner.sign(message).to_vec()
     }
 }
 
-// PublicKey contains an Ed25519 public key usable for verification.
+/// PublicKey contains an Ed25519 public key usable for verification.
 #[derive(Debug, Clone)]
 pub struct PublicKey {
     inner: ed25519_dalek::VerifyingKey,
 }
 
 impl PublicKey {
-    // from_bytes converts a 32-byte array into a public key.
+    /// from_bytes converts a 32-byte array into a public key.
     pub fn from_bytes(bin: &[u8; 32]) -> Self {
         let inner = ed25519_dalek::VerifyingKey::from_bytes(bin).unwrap();
         Self { inner }
     }
 
-    // from_der parses a DER buffer into a public key.
+    /// from_der parses a DER buffer into a public key.
     pub fn from_der(der: &[u8]) -> Result<Self, Error> {
         let inner = ed25519_dalek::VerifyingKey::from_public_key_der(der)?;
         Ok(Self { inner })
     }
 
-    // from_pem parses a PEM string into a public key.
+    /// from_pem parses a PEM string into a public key.
     pub fn from_pem(pem: &str) -> Result<Self, Error> {
         let inner = ed25519_dalek::VerifyingKey::from_public_key_pem(pem)?;
         Ok(Self { inner })
     }
 
-    // to_bytes converts a public key into a 32-byte array.
+    /// to_bytes converts a public key into a 32-byte array.
     pub fn to_bytes(&self) -> [u8; 32] {
         self.inner.to_bytes().into()
     }
 
-    // to_der serializes a public key into a DER buffer.
+    /// to_der serializes a public key into a DER buffer.
     pub fn to_der(&self) -> Vec<u8> {
         self.inner.to_public_key_der().unwrap().as_bytes().to_vec()
     }
 
-    // to_pem serializes a public key into a PEM string.
+    /// to_pem serializes a public key into a PEM string.
     pub fn to_pem(&self) -> String {
         self.inner
             .to_public_key_pem(LineEnding::default())
@@ -122,13 +121,13 @@ impl PublicKey {
             .to_string()
     }
 
-    // fingerprint returns a 256bit unique identified for this key. For Ed25519,
-    // that is the raw public key.
+    /// fingerprint returns a 256bit unique identified for this key. For Ed25519,
+    /// that is the raw public key.
     pub fn fingerprint(&self) -> [u8; 32] {
         self.to_bytes()
     }
 
-    // verify verifies a digital signature.
+    /// verify verifies a digital signature.
     pub fn verify(&self, message: &[u8], signature: &[u8]) -> Result<(), SignatureError> {
         let sig = Signature::try_from(signature)?;
         Ok(self.inner.verify(&message, &sig)?)

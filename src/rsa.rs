@@ -4,8 +4,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// This file contains a bunch of helpers and wrappers to make sure that everything
-// within the project uses the same RSA cryptographic constructs, and correctly.
+//! RSA cryptography wrappers and parametrization.
 
 use rsa::pkcs1v15::Signature;
 use rsa::pkcs8::{
@@ -18,16 +17,16 @@ use rsa::signature::{Keypair, SignatureEncoding, Signer, Verifier};
 use rsa::traits::PublicKeyParts;
 use rsa::{RsaPrivateKey, RsaPublicKey};
 
-// SecretKey contains a 2048-bit RSA private key usable for signing, with SHA256
-// as the underlying hash algorithm. Whilst RSA could also be used for encryption,
-// that is not exposed on the API as it's not required by the project.
+/// SecretKey contains a 2048-bit RSA private key usable for signing, with SHA256
+/// as the underlying hash algorithm. Whilst RSA could also be used for encryption,
+/// that is not exposed on the API as it's not required by the project.
 #[derive(Clone)]
 pub struct SecretKey {
     inner: rsa::pkcs1v15::SigningKey<Sha256>,
 }
 
 impl SecretKey {
-    // generate creates a new, random private key.
+    /// generate creates a new, random private key.
     pub fn generate() -> SecretKey {
         let mut rng = OsRng;
 
@@ -36,19 +35,19 @@ impl SecretKey {
         Self { inner: sig }
     }
 
-    // from_der parses a DER buffer into a private key.
+    /// from_der parses a DER buffer into a private key.
     pub fn from_der(der: &[u8]) -> Result<Self, Error> {
         let inner = rsa::pkcs1v15::SigningKey::<Sha256>::from_pkcs8_der(der)?;
         Ok(Self { inner })
     }
 
-    // from_pem parses a PEM string into a private key.
+    /// from_pem parses a PEM string into a private key.
     pub fn from_pem(pem: &str) -> Result<Self, Error> {
         let inner = rsa::pkcs1v15::SigningKey::<Sha256>::from_pkcs8_pem(pem)?;
         Ok(Self { inner })
     }
 
-    // to_der serializes a public key into a DER buffer.
+    /// to_der serializes a public key into a DER buffer.
     pub fn to_der(&self) -> Vec<u8> {
         rsa::pkcs1v15::SigningKey::<Sha256>::to_pkcs8_der(&self.inner)
             .unwrap()
@@ -56,7 +55,7 @@ impl SecretKey {
             .to_vec()
     }
 
-    // to_pem serializes a public key into a PEM string.
+    /// to_pem serializes a public key into a PEM string.
     pub fn to_pem(&self) -> String {
         rsa::pkcs1v15::SigningKey::<Sha256>::to_pkcs8_pem(&self.inner, LineEnding::default())
             .unwrap()
@@ -64,41 +63,41 @@ impl SecretKey {
             .to_string()
     }
 
-    // public_key retrieves the public counterpart of the secret key.
+    /// public_key retrieves the public counterpart of the secret key.
     pub fn public_key(&self) -> PublicKey {
         let key = self.inner.verifying_key();
         PublicKey { inner: key }
     }
 
-    // sign creates a digital signature of the message.
+    /// sign creates a digital signature of the message.
     pub fn sign(&self, message: &[u8]) -> Vec<u8> {
         self.inner.sign(message).to_vec()
     }
 }
 
-// PublicKey contains a 2048-bit RSA public key usable for verification, with
-// SHA256 as the underlying hash algorithm. Whilst RSA could also be used for
-// decryption, that is not exposed on the API as it's not required by the
-// project.
+/// PublicKey contains a 2048-bit RSA public key usable for verification, with
+/// SHA256 as the underlying hash algorithm. Whilst RSA could also be used for
+/// decryption, that is not exposed on the API as it's not required by the
+/// project.
 #[derive(Debug, Clone)]
 pub struct PublicKey {
     inner: rsa::pkcs1v15::VerifyingKey<Sha256>,
 }
 
 impl PublicKey {
-    // from_der parses a DER buffer into a public key.
+    /// from_der parses a DER buffer into a public key.
     pub fn from_der(der: &[u8]) -> Result<Self, Error> {
         let inner = rsa::pkcs1v15::VerifyingKey::<Sha256>::from_public_key_der(der)?;
         Ok(Self { inner })
     }
 
-    // from_pem parses a PEM string into a public key.
+    /// from_pem parses a PEM string into a public key.
     pub fn from_pem(pem: &str) -> Result<Self, Error> {
         let inner = rsa::pkcs1v15::VerifyingKey::<Sha256>::from_public_key_pem(pem)?;
         Ok(Self { inner })
     }
 
-    // to_der serializes a public key into a DER buffer.
+    /// to_der serializes a public key into a DER buffer.
     pub fn to_der(&self) -> Vec<u8> {
         rsa::pkcs1v15::VerifyingKey::<Sha256>::to_public_key_der(&self.inner)
             .unwrap()
@@ -106,14 +105,14 @@ impl PublicKey {
             .to_vec()
     }
 
-    // to_pem serializes a public key into a PEM string.
+    /// to_pem serializes a public key into a PEM string.
     pub fn to_pem(&self) -> String {
         rsa::pkcs1v15::VerifyingKey::<Sha256>::to_public_key_pem(&self.inner, LineEnding::default())
             .unwrap()
     }
 
-    // fingerprint returns a 256bit unique identified for this key. For RSA, that
-    // is the SHA256 sum of the raw (le modulus || le exponent) public key.
+    /// fingerprint returns a 256bit unique identified for this key. For RSA, that
+    /// is the SHA256 sum of the raw (le modulus || le exponent) public key.
     pub fn fingerprint(&self) -> [u8; 32] {
         let pubkey: RsaPublicKey = self.inner.as_ref().clone();
 
@@ -128,13 +127,13 @@ impl PublicKey {
         hasher.finalize().into()
     }
 
-    // verify verifies a digital signature.
+    /// verify verifies a digital signature.
     pub fn verify(&self, message: &[u8], signature: &[u8]) -> Result<(), signature::Error> {
         let sig = Signature::try_from(signature)?;
         Ok(self.inner.verify(&message, &sig)?)
     }
 
-    // verify_hash verifies a digital signature on an already hashed message.
+    /// verify_hash verifies a digital signature on an already hashed message.
     pub fn verify_hash(&self, hash: &[u8], signature: &[u8]) -> Result<(), signature::Error> {
         let sig = Signature::try_from(signature)?;
         Ok(self.inner.verify_prehash(&hash, &sig)?)

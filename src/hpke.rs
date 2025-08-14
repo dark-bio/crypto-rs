@@ -4,8 +4,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// This file contains a bunch of helpers and wrappers to make sure that everything
-// within the project uses the same HPKE cryptographic constructs, and correctly.
+//! HPKE cryptography wrappers and parametrization.
 
 use hpke::rand_core::SeedableRng;
 use hpke::{Deserializable, HpkeError, Kem, Serializable};
@@ -30,14 +29,14 @@ type KDF = hpke::kdf::HkdfSha256;
 // from an app layer action.
 const INFO_PREFIX: &str = "dark-bio-v1:";
 
-// SecretKey contains a private key of the type bound to the configured crypto.
+/// SecretKey contains a private key of the type bound to the configured crypto.
 #[derive(Clone, PartialEq, Eq)]
 pub struct SecretKey {
     inner: <KEM as Kem>::PrivateKey,
 }
 
 impl SecretKey {
-    // generate creates a new, random private key.
+    /// generate creates a new, random private key.
     pub fn generate() -> SecretKey {
         let mut rng = rand::rng();
 
@@ -45,18 +44,18 @@ impl SecretKey {
         Self { inner: key }
     }
 
-    // from_bytes converts a 32-byte array into a private key.
+    /// from_bytes converts a 32-byte array into a private key.
     pub fn from_bytes(bin: &[u8; 32]) -> Self {
         let inner = <KEM as Kem>::PrivateKey::from_bytes(bin).unwrap();
         Self { inner }
     }
 
-    // to_bytes converts a private key into a 32-byte array.
+    /// to_bytes converts a private key into a 32-byte array.
     pub fn to_bytes(&self) -> [u8; 32] {
         self.inner.to_bytes().into()
     }
 
-    // public_key retrieves the public counterpart of the secret key.
+    /// public_key retrieves the public counterpart of the secret key.
     pub fn public_key(&self) -> PublicKey {
         PublicKey {
             inner: KEM::sk_to_pk(&self.inner),
@@ -64,34 +63,34 @@ impl SecretKey {
     }
 }
 
-// PublicKey contains a public key of the type bound to the configured crypto.
+/// PublicKey contains a public key of the type bound to the configured crypto.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PublicKey {
     inner: <KEM as Kem>::PublicKey,
 }
 
 impl PublicKey {
-    // from_bytes converts a 32-byte array into a public key.
+    /// from_bytes converts a 32-byte array into a public key.
     pub fn from_bytes(bin: &[u8; 32]) -> Self {
         let inner = <KEM as Kem>::PublicKey::from_bytes(bin).unwrap();
         Self { inner }
     }
 
-    // to_bytes converts a public key into a 32-byte array.
+    /// to_bytes converts a public key into a 32-byte array.
     pub fn to_bytes(&self) -> [u8; 32] {
         self.inner.to_bytes().into()
     }
 
-    // fingerprint returns a 256bit unique identified for this key. For HPKE,
-    // that is the raw public key.
+    /// fingerprint returns a 256bit unique identified for this key. For HPKE,
+    /// that is the raw public key.
     pub fn fingerprint(&self) -> [u8; 32] {
         self.to_bytes()
     }
 }
 
-// Context represents all contextual information for two parties to securely send
-// authenticated and encrypted messages to one another within a specific usage
-// domain.
+/// Context represents all contextual information for two parties to securely send
+/// authenticated and encrypted messages to one another within a specific usage
+/// domain.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Context {
     local: SecretKey,  // Secret key of the local entity
@@ -100,8 +99,8 @@ pub struct Context {
 }
 
 impl Context {
-    // new constructs a new crypto context between a designated local and remote
-    // entity, also tied to a specific application domain.
+    /// new constructs a new crypto context between a designated local and remote
+    /// entity, also tied to a specific application domain.
     pub fn new(local: SecretKey, remote: PublicKey, domain: &str) -> Self {
         Self {
             local,
@@ -110,18 +109,18 @@ impl Context {
         }
     }
 
-    // seal creates a standalone cryptographic construct encrypted to the embedded
-    // remote identity and authenticated with the embedded local one. The construct
-    // will contain the given message-to-seal (encrypted) and also an authenticity
-    // proof for the (unencrypted) message-to-auth (message not included).
-    //
-    // The method returns an encapsulated session key (which may be used for stream
-    // communication but this method does not need it) concatenated with the cipher-
-    // text with the encrypted data and authenticity proofs. To open it on the other
-    // side needs transmitting the <concat-session-key-ciphertext> and <msg_to_auth>.
-    //
-    // This method (and open) requires the public keys of both parties to be pre-
-    // shared. It is not suitable for a key exchange protocol!
+    /// seal creates a standalone cryptographic construct encrypted to the embedded
+    /// remote identity and authenticated with the embedded local one. The construct
+    /// will contain the given message-to-seal (encrypted) and also an authenticity
+    /// proof for the (unencrypted) message-to-auth (message not included).
+    ///
+    /// The method returns an encapsulated session key (which may be used for stream
+    /// communication but this method does not need it) concatenated with the cipher-
+    /// text with the encrypted data and authenticity proofs. To open it on the other
+    /// side needs transmitting the <concat-session-key-ciphertext> and <msg_to_auth>.
+    ///
+    /// This method (and open) requires the public keys of both parties to be pre-
+    /// shared. It is not suitable for a key exchange protocol!
     pub fn seal(&self, msg_to_seal: &[u8], msg_to_auth: &[u8]) -> Result<Vec<u8>, HpkeError> {
         // Derive the public key for the sender. We could pass this along, but ugh,
         // such an ugly API honestly. Might as well recompute and yolo.
@@ -149,14 +148,14 @@ impl Context {
         Ok(res)
     }
 
-    // open consumes a standalone cryptographic construct encrypted to the embedded
-    // local identity and authenticated with the embedded remote one. The method
-    // will deconstruct the give message-to-open (encrypted) and will also verify
-    // the authenticity of the (unencrypted) message-to-auth (not included in the
-    // ciphertext).
-    //
-    // This method (and seal) requires the public keys of both parties to be pre-
-    // shared. It is not suitable for a key exchange protocol!
+    /// open consumes a standalone cryptographic construct encrypted to the embedded
+    /// local identity and authenticated with the embedded remote one. The method
+    /// will deconstruct the give message-to-open (encrypted) and will also verify
+    /// the authenticity of the (unencrypted) message-to-auth (not included in the
+    /// ciphertext).
+    ///
+    /// This method (and seal) requires the public keys of both parties to be pre-
+    /// shared. It is not suitable for a key exchange protocol!
     pub fn open(&self, msg_to_open: &[u8], msg_to_auth: &[u8]) -> Result<Vec<u8>, HpkeError> {
         // Split out the session key from the ciphertext
         let encapsize = <KEM as Kem>::PublicKey::size();
@@ -177,16 +176,16 @@ impl Context {
         ctx.open(&msg_to_open[encapsize..], msg_to_auth)
     }
 
-    // sign is similar to creating a digital signature, but based on HPKE protocol.
-    // The resulting "signature" is not publicly verifiable, only by the intended
-    // recipient.
+    /// sign is similar to creating a digital signature, but based on HPKE protocol.
+    /// The resulting "signature" is not publicly verifiable, only by the intended
+    /// recipient.
     pub fn sign(&self, message: &[u8]) -> Result<Vec<u8>, HpkeError> {
         self.seal(&[], message)
     }
 
-    // verify is similar to verifying a digital signature, but based on the HPKE
-    // protocol. The "signature" is not publicly verifiable, only by the intended
-    // recipient.
+    /// verify is similar to verifying a digital signature, but based on the HPKE
+    /// protocol. The "signature" is not publicly verifiable, only by the intended
+    /// recipient.
     pub fn verify(&self, message: &[u8], signature: &[u8]) -> Result<(), HpkeError> {
         let body = self.open(signature, message)?;
         if body.len() != 0 {

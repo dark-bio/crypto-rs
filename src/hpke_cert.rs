@@ -4,6 +4,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//! HPKE + x509 cryptography wrappers and parametrization.
+
 use crate::eddsa;
 use crate::hpke::PublicKey;
 use bcder::encode::Values;
@@ -19,9 +21,9 @@ use x509_certificate::{
 };
 
 impl PublicKey {
-    // from_cert_pem parses a public key out of a PEM encoded, authenticated
-    // certificate, verifying the signature and returning both the key, and the
-    // validity interval.
+    /// from_cert_pem parses a public key out of a PEM encoded, authenticated
+    /// certificate, verifying the signature and returning both the key, and the
+    /// validity interval.
     pub fn from_cert_pem(
         pem: &str,
         signer: eddsa::PublicKey,
@@ -30,9 +32,9 @@ impl PublicKey {
         PublicKey::from_cert_der(der.contents.as_slice(), signer)
     }
 
-    // from_cert_der parses a public key out of a DER encoded, authenticated
-    // certificate, verifying the signature and returning both the key, and the
-    // validity interval.
+    /// from_cert_der parses a public key out of a DER encoded, authenticated
+    /// certificate, verifying the signature and returning both the key, and the
+    /// validity interval.
     pub fn from_cert_der(
         der: &[u8],
         signer: eddsa::PublicKey,
@@ -61,33 +63,33 @@ impl PublicKey {
         Ok((key, start, until))
     }
 
-    // to_test_cert_pem generates a PEM encoded certificate out of a public key.
-    //
-    // Note, this method is only for testing, most of the contained data will be
-    // junk; and also the produces certificate is not fully spec-adhering:
-    //   https://github.com/indygreg/cryptography-rs/issues/26
+    /// to_test_cert_pem generates a PEM encoded certificate out of a public key.
+    ///
+    /// Note, this method is only for testing, most of the contained data will be
+    /// junk; and also the produces certificate is not fully spec-adhering:
+    ///   https://github.com/indygreg/cryptography-rs/issues/26
     pub fn to_test_cert_pem(&self, start: u64, until: u64, signer: eddsa::SecretKey) -> String {
         self.to_test_cert(start, until, signer)
             .encode_pem()
             .unwrap()
     }
 
-    // to_test_cert_der generates a DER encoded certificate out of a public key.
-    //
-    // Note, this method is only for testing, most of the contained data will be
-    // junk; and also the produces certificate is not fully spec-adhering:
-    //   https://github.com/indygreg/cryptography-rs/issues/26
+    /// to_test_cert_der generates a DER encoded certificate out of a public key.
+    ///
+    /// Note, this method is only for testing, most of the contained data will be
+    /// junk; and also the produces certificate is not fully spec-adhering:
+    ///   https://github.com/indygreg/cryptography-rs/issues/26
     pub fn to_test_cert_der(&self, start: u64, until: u64, signer: eddsa::SecretKey) -> Vec<u8> {
         self.to_test_cert(start, until, signer)
             .encode_der()
             .unwrap()
     }
 
-    // to_test_cert generates a certificate out of a public key.
-    //
-    // Note, this method is only for testing, most of the contained data will be
-    // junk; and also the produced certificate is not fully spec-adhering:
-    //   https://github.com/indygreg/cryptography-rs/issues/26
+    /// to_test_cert generates a certificate out of a public key.
+    ///
+    /// Note, this method is only for testing, most of the contained data will be
+    /// junk; and also the produced certificate is not fully spec-adhering:
+    ///   https://github.com/indygreg/cryptography-rs/issues/26
     pub fn to_test_cert(
         &self,
         start: u64,
