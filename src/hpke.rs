@@ -8,6 +8,11 @@
 
 use hpke::rand_core::SeedableRng;
 use hpke::{Deserializable, HpkeError, Kem, Serializable};
+use pkcs8::PrivateKeyInfo;
+use spki::der::asn1::{BitStringRef, OctetStringRef};
+use spki::der::{AnyRef, Decode, Encode};
+use spki::{AlgorithmIdentifier, ObjectIdentifier, SubjectPublicKeyInfo};
+use std::error::Error;
 
 // KEM, AEAD and KDF are the HPKE crypto suite parameters. They are all 256 bit
 // variants, which should be enough for current purposes. Some details:
@@ -50,9 +55,70 @@ impl SecretKey {
         Self { inner }
     }
 
+    /// from_der parses a DER buffer into a public key.
+    pub fn from_der(der: &[u8]) -> Result<Self, Box<dyn Error>> {
+        // Parse the DER encoded container
+        let info = PrivateKeyInfo::from_der(der)?;
+
+        // Ensure the algorithm OID matches X25519 (OID: 1.3.101.110) and extract
+        // the actual private key
+        if info.algorithm.oid.to_string() != "1.3.101.110" {
+            panic!("not an X25519 private key");
+        }
+        if info.private_key[0] != 0x04 {
+            panic!("private key not an octet string");
+        }
+        if info.private_key[1] != 0x20 {
+            panic!("private key not a 32 byte octet string");
+        }
+        // Private key extracted, return the HKDF wrapper
+        let bytes: [u8; 32] = info.private_key[2..].try_into()?;
+        Ok(SecretKey::from_bytes(&bytes))
+    }
+
+    /// from_pem parses a PEM string into a private key.
+    pub fn from_pem(pem: &str) -> Result<Self, Box<dyn Error>> {
+        // Crack open the PEM to get to the private key info
+        let res = pem::parse(pem.as_bytes())?;
+        if res.tag() != "PRIVATE KEY" {
+            return Err(format!("invalid PEM tag {}", res.tag()).into());
+        }
+        // Parse the DER content
+        Self::from_der(res.contents())
+    }
+
     /// to_bytes converts a private key into a 32-byte array.
     pub fn to_bytes(&self) -> [u8; 32] {
         self.inner.to_bytes().into()
+    }
+
+    /// to_der serializes a private key into a DER buffer.
+    pub fn to_der(&self) -> Vec<u8> {
+        let bytes = self.inner.to_bytes();
+        let encoded = OctetStringRef::new(&bytes).unwrap();
+
+        // Create the X25519 algorithm identifier (OID 1.3.101.110); parameters
+        // MUST be absent
+        let alg = pkcs8::AlgorithmIdentifierRef {
+            oid: ObjectIdentifier::new_unwrap("1.3.101.110"),
+            parameters: None::<AnyRef>,
+        };
+        // The private key info is simply the BITSTRING of the pubkey
+        let info = PrivateKeyInfo {
+            algorithm: alg,
+            private_key: &*encoded.to_der().unwrap(),
+            public_key: None,
+        };
+        info.to_der().unwrap()
+    }
+
+    /// to_pem serializes a private key into a PEM string.
+    pub fn to_pem(&self) -> String {
+        let der = self.to_der();
+        pem::encode_config(
+            &pem::Pem::new("PRIVATE KEY", der),
+            pem::EncodeConfig::new().set_line_ending(pem::LineEnding::LF),
+        )
     }
 
     /// public_key retrieves the public counterpart of the secret key.
@@ -76,9 +142,65 @@ impl PublicKey {
         Self { inner }
     }
 
+    /// from_der parses a DER buffer into a public key.
+    pub fn from_der(der: &[u8]) -> Result<Self, Box<dyn Error>> {
+        // Parse the DER encoded container
+        let info: SubjectPublicKeyInfo<AlgorithmIdentifier<AnyRef>, BitStringRef> =
+            SubjectPublicKeyInfo::from_der(der)?;
+
+        // Ensure the algorithm OID matches X25519 (OID: 1.3.101.110) and extract
+        // the actual public key
+        if info.algorithm.oid.to_string() != "1.3.101.110" {
+            panic!("not an X25519 public key");
+        }
+        let key = info.subject_public_key.as_bytes().unwrap();
+
+        // Public key extracted, return the HKDF wrapper
+        let bytes: [u8; 32] = key.try_into()?;
+        Ok(PublicKey::from_bytes(&bytes))
+    }
+
+    /// from_pem parses a PEM string into a public key.
+    pub fn from_pem(pem: &str) -> Result<Self, Box<dyn Error>> {
+        // Crack open the PEM to get to the public key info
+        let res = pem::parse(pem.as_bytes())?;
+        if res.tag() != "PUBLIC KEY" {
+            return Err(format!("invalid PEM tag {}", res.tag()).into());
+        }
+        // Parse the DER content
+        Self::from_der(res.contents())
+    }
+
     /// to_bytes converts a public key into a 32-byte array.
     pub fn to_bytes(&self) -> [u8; 32] {
         self.inner.to_bytes().into()
+    }
+
+    /// to_der serializes a public key into a DER buffer.
+    pub fn to_der(&self) -> Vec<u8> {
+        let bytes = self.inner.to_bytes();
+
+        // Create the X25519 algorithm identifier (OID 1.3.101.110); parameters
+        // MUST be absent
+        let alg = AlgorithmIdentifier::<AnyRef> {
+            oid: ObjectIdentifier::new_unwrap("1.3.101.110"),
+            parameters: None::<AnyRef>,
+        };
+        // The subject public key is simply the BITSTRING of the pubkey
+        let info = SubjectPublicKeyInfo::<AnyRef, BitStringRef> {
+            algorithm: alg,
+            subject_public_key: BitStringRef::from_bytes(&bytes).unwrap(),
+        };
+        info.to_der().unwrap()
+    }
+
+    /// to_pem serializes a public key into a PEM string.
+    pub fn to_pem(&self) -> String {
+        let der = self.to_der();
+        pem::encode_config(
+            &pem::Pem::new("PUBLIC KEY", der),
+            pem::EncodeConfig::new().set_line_ending(pem::LineEnding::LF),
+        )
     }
 
     /// fingerprint returns a 256bit unique identified for this key. For HPKE,
@@ -198,6 +320,79 @@ impl Context {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Tests that a PEM encoded X25519 private key can be decoded and re-encoded to
+    // the same string. The purpose is not to battle-test the PEM implementation,
+    // rather to ensure that the code implements the PEM format other subsystems
+    // expect.
+    #[test]
+    fn test_secretkey_pem_codec() {
+        // Generated with:
+        //   openssl genpkey -algorithm X25519 -out test.key
+        let input = "\
+-----BEGIN PRIVATE KEY-----
+MC4CAQAwBQYDK2VuBCIEIFAOSxZzmCL3ZE3NFjeYeZQbgxIk0xDwYGXy+7Qhv/Bi
+-----END PRIVATE KEY-----";
+
+        let key = SecretKey::from_pem(input).unwrap();
+        assert_eq!(key.to_pem().trim(), input.trim());
+    }
+
+    // Tests that a PEM encoded X25519 public key can be decoded and re-encoded to
+    // the same string. The purpose is not to battle-test the PEM implementation,
+    // rather to ensure that the code implements the PEM format other subsystems
+    // expect.
+    #[test]
+    fn test_publickey_pem_codec() {
+        // Generated with:
+        //   openssl pkey -in test.key -pubout -out test.pub
+        let input = "\
+-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VuAyEALSnOr8HqfB9flSD3+jad72mIarW0sMConGAvJ1wHMh0=
+-----END PUBLIC KEY-----";
+
+        let key = PublicKey::from_pem(input).unwrap();
+        assert_eq!(key.to_pem().trim(), input.trim());
+    }
+
+    // Tests that a DER encoded X25519 private key can be decoded and re-encoded to
+    // the same string. The purpose is not to battle-test the DER implementation,
+    // rather to ensure that the code implements the DER format other subsystems
+    // expect.
+    #[test]
+    fn test_secretkey_der_codec() {
+        // Generated with:
+        //   openssl pkey -in test.key -outform DER -out test.der
+        //   cat test.der | xxd -p
+        let input = "\
+302e020100300506032b656e04220420500e4b16739822f7644dcd163798
+79941b831224d310f06065f2fbb421bff062"
+            .trim()
+            .replace("\n", "");
+
+        let der = hex::decode(&input).unwrap();
+        let key = SecretKey::from_der(&der).unwrap();
+        assert_eq!(hex::encode(key.to_der()), input);
+    }
+    // Tests that a DER encoded X25519 public key can be decoded and re-encoded to
+    // the same string. The purpose is not to battle-test the DER implementation,
+    // rather to ensure that the code implements the DER format other subsystems
+    // expect.
+    #[test]
+    fn test_publickey_der_codec() {
+        // Generated with:
+        //   openssl pkey -in test.key -pubout -out test.pub
+        //   cat test.pub | xxd -p
+        let input = "\
+302a300506032b656e0321002d29ceafc1ea7c1f5f9520f7fa369def6988
+6ab5b4b0c0a89c602f275c07321d"
+            .trim()
+            .replace("\n", "");
+
+        let der = hex::decode(&input).unwrap();
+        let key = PublicKey::from_der(&der).unwrap();
+        assert_eq!(hex::encode(key.to_der()), input);
+    }
 
     // Tests sealing and opening various combinations of messages (authenticate,
     // encrypt, both). Note, this test is not meant to test cryptography, it is
