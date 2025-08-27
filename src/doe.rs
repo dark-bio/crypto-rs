@@ -21,7 +21,7 @@ use serde::Serialize;
 type Envelope<'a, T: Serialize> = (u64, &'a T);
 
 /// DoeError is a container for the different errors that can happen during the
-/// OEA sealing and opening.
+/// object sealing and opening.
 #[derive(Debug)]
 pub enum DoeError {
     Hpke(HpkeError),
