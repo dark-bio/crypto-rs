@@ -298,10 +298,10 @@ impl Context {
         ctx.open(&msg_to_open[encapsize..], msg_to_auth)
     }
 
-    /// auth is similar to creating a digital signature, but based on HPKE protocol.
+    /// sign is similar to creating a digital signature, but based on HPKE protocol.
     /// The resulting "signature" is not publicly verifiable, only by the intended
     /// recipient.
-    pub fn auth(&self, message: &[u8]) -> Result<Vec<u8>, HpkeError> {
+    pub fn sign(&self, message: &[u8]) -> Result<Vec<u8>, HpkeError> {
         self.seal(&[], message)
     }
 
@@ -476,7 +476,7 @@ MCowBQYDK2VuAyEALSnOr8HqfB9flSD3+jad72mIarW0sMConGAvJ1wHMh0=
         for tt in &tests {
             // Sign the message using the test case data
             let signature = alice_context
-                .auth(tt.message)
+                .sign(tt.message)
                 .unwrap_or_else(|e| panic!("failed to auth message: {}", e));
 
             // Verify the signature message

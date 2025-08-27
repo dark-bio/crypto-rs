@@ -91,19 +91,19 @@ pub fn open<D: Serialize + DeserializeOwned, A: Serialize>(
     Ok(cbor::decode::<D>(&opened)?)
 }
 
-/// auth is a subset of seal where no object is provided to be encrypted, rather
+/// sign is a subset of seal where no object is provided to be encrypted, rather
 /// only authentication is done.
 ///
 /// This is analogous to digital signatures, but the identity isn't tied to one
 /// participant, rather between two parties. Both parties can create and verify
 /// arbitrary messages between them (i.e. no directionality or origin).
-pub fn auth<A: Serialize>(ctx: &Context, timestamp: u64, object: &A) -> Result<Vec<u8>, DoeError> {
+pub fn sign<A: Serialize>(ctx: &Context, timestamp: u64, object: &A) -> Result<Vec<u8>, DoeError> {
     // Construct the full authentication envelope
     let envelope: Envelope<A> = (timestamp, object);
 
     // Serialize the object and authenticate
     let msg_to_auth = cbor::encode(&envelope)?;
-    Ok(ctx.auth(&msg_to_auth)?)
+    Ok(ctx.sign(&msg_to_auth)?)
 }
 
 /// verify is a subset of open where no object is expected to be decrypted, rather
@@ -186,7 +186,7 @@ mod tests {
         let obj_to_auth = (1, (2, (3, 4)));
 
         // Round trip sealing and opening the objects
-        let sig = auth(&alice_context, 314, &obj_to_auth)
+        let sig = sign(&alice_context, 314, &obj_to_auth)
             .unwrap_or_else(|e| panic!("failed to auth object: {}", e));
 
         verify(&bobby_context, 314, &obj_to_auth, &sig)
