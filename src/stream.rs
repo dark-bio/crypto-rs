@@ -25,8 +25,8 @@
 
 use age_core::secrecy::{ExposeSecret, SecretSlice};
 use chacha20poly1305::{
-    aead::{generic_array::GenericArray, Aead, KeyInit, KeySizeUser},
     ChaCha20Poly1305,
+    aead::{Aead, KeyInit, KeySizeUser, generic_array::GenericArray},
 };
 use pin_project::pin_project;
 use std::cmp;
@@ -700,7 +700,7 @@ mod tests {
     use age_core::secrecy::ExposeSecret;
     use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
 
-    use super::{PayloadKey, Stream, CHUNK_SIZE};
+    use super::{CHUNK_SIZE, PayloadKey, Stream};
 
     #[cfg(feature = "async")]
     use futures::{

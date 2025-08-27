@@ -1,6 +1,6 @@
 [package]
 name = "darkbio-crypto"
-version = "0.3.2"
+version = "0.4.0"
 authors = ["Péter Szilágyi <peter@dark.bio>"]
 description = "Cryptography primitives and wrappers"
 repository = "https://github.com/dark-bio/crypto-rs"
@@ -15,6 +15,7 @@ all-features = true
 default = []
 eddsa = ["dep:ed25519-dalek", "dep:signature"]
 hpke = ["dep:hpke", "dep:getrandom", "dep:pem", "dep:pkcs8", "dep:spki"]
+doe = ["hpke", "dep:serde", "dep:ciborium"]
 rsa = ["dep:rsa"]
 stream = ["dep:age-core", "dep:chacha20poly1305", "dep:pin-project", "dep:zeroize"]
 cert = [
@@ -29,9 +30,10 @@ cert = [
 [dependencies]
 age-core = { version = "0.11.0", optional = true }
 bcder = { version = "0.7.5", optional = true }
-bytes = { version = "1.10.0", optional = true }
+bytes = { version = "1.10.1", optional = true }
 chacha20poly1305 = { version = "0.10.1", optional = true }
-chrono = { version = "0.4.40", optional = true }
+chrono = { version = "0.4.41", optional = true }
+ciborium = { version = "0.2.2", optional = true }
 ed25519-dalek = { version = "2.2.0", features = ["pem", "rand_core"], optional = true }
 getrandom = { version = "0.3.3", optional = true }
 hpke = { version = "0.13.0", features = ["std"], optional = true }
@@ -41,6 +43,7 @@ pkcs8 = { version = "0.10.2", optional = true }
 rand = "0.9.0"
 rand_chacha = "0.9.0"
 rsa = { version = "0.9.8", features = ["sha2"], optional = true }
+serde = { version = "1.0.219", optional = true }
 signature = { version = "2.2.0", features = ["rand_core"], optional = true }
 spki = { version = "0.7.3", optional = true }
 x509-certificate = { version = "0.24.0", optional = true }

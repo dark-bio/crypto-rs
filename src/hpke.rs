@@ -215,9 +215,9 @@ impl PublicKey {
 /// domain.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Context {
-    local: SecretKey,  // Secret key of the local entity
-    remote: PublicKey, // Public key of the remote entity
-    domain: String,    // Shared (sub-)domain for the HPKE info
+    pub(crate) local: SecretKey,  // Secret key of the local entity
+    pub(crate) remote: PublicKey, // Public key of the remote entity
+    pub(crate) domain: String,    // Shared (sub-)domain for the HPKE info
 }
 
 impl Context {
@@ -298,10 +298,10 @@ impl Context {
         ctx.open(&msg_to_open[encapsize..], msg_to_auth)
     }
 
-    /// sign is similar to creating a digital signature, but based on HPKE protocol.
+    /// auth is similar to creating a digital signature, but based on HPKE protocol.
     /// The resulting "signature" is not publicly verifiable, only by the intended
     /// recipient.
-    pub fn sign(&self, message: &[u8]) -> Result<Vec<u8>, HpkeError> {
+    pub fn auth(&self, message: &[u8]) -> Result<Vec<u8>, HpkeError> {
         self.seal(&[], message)
     }
 
@@ -449,13 +449,13 @@ MCowBQYDK2VuAyEALSnOr8HqfB9flSD3+jad72mIarW0sMConGAvJ1wHMh0=
         }
     }
 
-    // Tests signing and verifying messages. Note, this test is not meant to test
-    // cryptography, it is mostly an API sanity check to verify that everything
+    // Tests authenticating and verifying messages. Note, this test is not meant to
+    // test cryptography, it is mostly an API sanity check to verify that everything
     // seems to work.
     //
     // TODO(karalabe): Get some live test vectors for a bit more sanity
     #[test]
-    fn test_sign_verify() {
+    fn test_auth_verify() {
         // Create the keys for Alice and Bobby
         let alice_secret = SecretKey::generate();
         let bobby_secret = SecretKey::generate();
@@ -476,8 +476,8 @@ MCowBQYDK2VuAyEALSnOr8HqfB9flSD3+jad72mIarW0sMConGAvJ1wHMh0=
         for tt in &tests {
             // Sign the message using the test case data
             let signature = alice_context
-                .sign(tt.message)
-                .unwrap_or_else(|e| panic!("failed to sign message: {}", e));
+                .auth(tt.message)
+                .unwrap_or_else(|e| panic!("failed to auth message: {}", e));
 
             // Verify the signature message
             bobby_context

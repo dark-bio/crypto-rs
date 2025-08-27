@@ -8,8 +8,8 @@
 
 use crate::eddsa;
 use crate::hpke::PublicKey;
-use bcder::encode::Values;
 use bcder::Mode;
+use bcder::encode::Values;
 use bytes::Bytes;
 use chrono::{TimeZone, Utc};
 use std::error::Error;
@@ -17,7 +17,7 @@ use x509_certificate::asn1time::Time;
 use x509_certificate::rfc3280::Name;
 use x509_certificate::rfc5280::AlgorithmIdentifier;
 use x509_certificate::{
-    rfc5280, InMemorySigningKeyPair, KeyAlgorithm, SignatureAlgorithm, Signer, X509Certificate,
+    InMemorySigningKeyPair, KeyAlgorithm, SignatureAlgorithm, Signer, X509Certificate, rfc5280,
 };
 
 impl PublicKey {

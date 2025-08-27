@@ -13,6 +13,12 @@ pub mod hpke;
 #[cfg(all(feature = "hpke", feature = "cert"))]
 pub mod hpke_cert;
 
+#[cfg(feature = "doe")]
+mod cbor;
+
+#[cfg(feature = "doe")]
+pub mod doe;
+
 #[cfg(feature = "rsa")]
 pub mod rsa;
 
