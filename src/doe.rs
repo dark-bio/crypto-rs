@@ -55,8 +55,8 @@ impl core::fmt::Display for DoeError {
 }
 impl std::error::Error for DoeError {}
 
-/// seal serializes an object and encrypts it, authenticating over the sender,
-/// recipient, timestamp and a user-provided authentication payload.
+/// seal serializes an object and encrypts it, authenticating over the timestamp
+/// and a user-provided authentication payload.
 pub fn seal<S: Serialize, A: Serialize>(
     ctx: &Context,
     timestamp: u64,
