@@ -73,8 +73,28 @@ pub fn seal<S: Serialize, A: Serialize>(
     Ok(ctx.seal(&msg_to_seal, &msg_to_auth)?)
 }
 
-/// open decrypts and deserializes an object, authenticating over the sender,
-/// recipient, timestamp and a user-provided authentication payload.
+/// seal_raw is an expensive (!) helper method that seals already CBOR encoded
+/// objects. Internally it will actually parse the given objects and re-encode
+/// them to ensure canonicalness.
+///
+/// The purpose of this method is to be used in FFI settings where generic data
+/// types cannot be crossed over to call the original seal method.
+pub fn seal_raw(
+    ctx: &Context,
+    timestamp: u64,
+    obj_to_seal: &[u8],
+    obj_to_auth: &[u8],
+) -> Result<Vec<u8>, DoeError> {
+    // Parse the already encoded CBOR objects
+    let val_to_seal = cbor::decode::<ciborium::Value>(obj_to_seal)?;
+    let val_to_auth = cbor::decode::<ciborium::Value>(obj_to_auth)?;
+
+    // Seal them, re-encoded with the upstream codec
+    seal(ctx, timestamp, &val_to_seal, &val_to_auth)
+}
+
+/// open decrypts and deserializes an object, authenticating over the timestamp
+/// and a user-provided payload.
 pub fn open<D: Serialize + DeserializeOwned, A: Serialize>(
     ctx: &Context,
     timestamp: u64,
@@ -91,39 +111,105 @@ pub fn open<D: Serialize + DeserializeOwned, A: Serialize>(
     Ok(cbor::decode::<D>(&opened)?)
 }
 
+/// open_raw is an expensive (!) helper method that decrypts and deserializes
+/// an object, authenticating over the timestamp and an already CBOR encoded
+/// user-provided payload. Internally it will actually parse the given payload
+/// and re-encode it to ensure canonicalness. Further the decrypted object is
+/// re-encoded to CBOR and returned like that to the user.
+///
+/// The purpose of this method is to be used in FFI settings where generic data
+/// types cannot be crossed over to call the original open method.
+pub fn open_raw(
+    ctx: &Context,
+    timestamp: u64,
+    msg_to_open: &[u8],
+    obj_to_auth: &[u8],
+) -> Result<Vec<u8>, DoeError> {
+    // Parse the already encoded CBOR authentication object
+    let val_to_auth = cbor::decode::<ciborium::Value>(obj_to_auth)?;
+
+    // Open the sealed message and turn it back into a CBOR encoding
+    let opened = open::<ciborium::Value, _>(ctx, timestamp, msg_to_open, &val_to_auth)?;
+
+    Ok(cbor::encode(&opened)?)
+}
+
 /// sign is a subset of seal where no object is provided to be encrypted, rather
 /// only authentication is done.
 ///
-/// This is analogous to digital signatures, but the identity isn't tied to one
-/// participant, rather between two parties. Both parties can create and verify
-/// arbitrary messages between them (i.e. no directionality or origin).
-pub fn sign<A: Serialize>(ctx: &Context, timestamp: u64, object: &A) -> Result<Vec<u8>, DoeError> {
+/// This is analogous to digital signatures, but only the receiving key can prove
+/// anything about the message (without revealing their private key).
+pub fn sign<A: Serialize>(
+    ctx: &Context,
+    timestamp: u64,
+    obj_to_auth: &A,
+) -> Result<Vec<u8>, DoeError> {
     // Construct the full authentication envelope
-    let envelope: Envelope<A> = (timestamp, object);
+    let envelope: Envelope<A> = (timestamp, obj_to_auth);
 
     // Serialize the object and authenticate
     let msg_to_auth = cbor::encode(&envelope)?;
     Ok(ctx.sign(&msg_to_auth)?)
 }
 
+/// sign_raw is an expensive (!) helper method that is a subset of seal where no
+/// object is provided to be encrypted, rather only authentication is done on an
+/// already CBOR encoded message. Internally it will actually parse the given
+/// object and re-encode it to ensure canonicalness.
+///
+/// The purpose of this method is to be used in FFI settings where generic data
+/// types cannot be crossed over to call the original seal method.
+///
+/// This is analogous to digital signatures, but only the receiving key can prove
+/// anything about the message (without revealing their private key).
+pub fn sign_raw(ctx: &Context, timestamp: u64, obj_to_auth: &[u8]) -> Result<Vec<u8>, DoeError> {
+    // Parse the already encoded CBOR object
+    let val_to_auth = cbor::decode::<ciborium::Value>(obj_to_auth)?;
+
+    // Sign it, re-encoded with the upstream codec
+    sign(ctx, timestamp, &val_to_auth)
+}
+
 /// verify is a subset of open where no object is expected to be decrypted, rather
 /// only authenticity verification is done.
 ///
-/// This is analogous to verifying digital signatures, but the identity isn't tied
-/// to one participant, rather between two parties. Both parties can create and
-/// verify arbitrary messages between them (i.e. no directionality or origin).
+/// This is analogous to digital signatures, but only the receiving key can prove
+/// anything about the message (without revealing their private key).
 pub fn verify<A: Serialize>(
     ctx: &Context,
     timestamp: u64,
-    object: &A,
+    obj_to_auth: &A,
     signature: &[u8],
 ) -> Result<(), DoeError> {
     // Construct the full authentication envelope
-    let envelope: Envelope<A> = (timestamp, object);
+    let envelope: Envelope<A> = (timestamp, obj_to_auth);
 
     // Serialize the object and verify the message
     let msg_to_auth = cbor::encode(&envelope)?;
     Ok(ctx.verify(&msg_to_auth, signature)?)
+}
+
+/// verify_raw is an expensive (!) helper method that is a subset of open where no
+/// object is expected to be decrypted, rather only authenticity verification is
+/// done on an already CBOR encoded message. Internally it will actually parse the
+/// given object and re-encode it to ensure canonicalness.
+///
+/// The purpose of this method is to be used in FFI settings where generic data
+/// types cannot be crossed over to call the original seal method.
+///
+/// This is analogous to digital signatures, but only the receiving key can prove
+/// anything about the message (without revealing their private key).
+pub fn verify_raw(
+    ctx: &Context,
+    timestamp: u64,
+    obj_to_auth: &[u8],
+    signature: &[u8],
+) -> Result<(), DoeError> {
+    // Parse the already encoded CBOR object
+    let val_to_auth = cbor::decode::<ciborium::Value>(obj_to_auth)?;
+
+    // Verify it, re-encoded with the upstream codec
+    verify(ctx, timestamp, &val_to_auth, signature)
 }
 
 #[cfg(test)]
@@ -154,15 +240,51 @@ mod tests {
         let obj_to_seal: TestObj = (1u64, "foo".into(), vec!["bar".into(), "baz".into()]);
         let obj_to_auth = (1, (2, (3, 4)));
 
+        let cbor_to_seal = cbor::encode(&obj_to_seal).unwrap();
+        let cbor_to_auth = cbor::encode(&obj_to_auth).unwrap();
+
         // Round trip sealing and opening the objects
-        let enc = seal(&alice_context, 314, &obj_to_seal, &obj_to_auth)
-            .unwrap_or_else(|e| panic!("failed to seal object: {}", e));
+        {
+            let enc = seal(&alice_context, 314, &obj_to_seal, &obj_to_auth)
+                .unwrap_or_else(|e| panic!("failed to seal object: {}", e));
 
-        let dec: TestObj = open(&bobby_context, 314, &enc, &obj_to_auth)
-            .unwrap_or_else(|e| panic!("failed to open object: {}", e));
+            let dec: TestObj = open(&bobby_context, 314, &enc, &obj_to_auth)
+                .unwrap_or_else(|e| panic!("failed to open object: {}", e));
 
-        // Validate that the cleartext matches our expected encrypted payload.
-        assert_eq!(obj_to_seal, dec, "object mismatch");
+            assert_eq!(obj_to_seal, dec, "object mismatch");
+        }
+        // Round trip sealing raw and opening real objects
+        {
+            let enc = seal_raw(&alice_context, 314, &cbor_to_seal, &cbor_to_auth)
+                .unwrap_or_else(|e| panic!("failed to seal object: {}", e));
+
+            let dec: TestObj = open(&bobby_context, 314, &enc, &obj_to_auth)
+                .unwrap_or_else(|e| panic!("failed to open object: {}", e));
+
+            assert_eq!(obj_to_seal, dec, "object mismatch");
+        }
+        // Round trip sealing real and opening raw objects
+        {
+            let enc = seal(&alice_context, 314, &obj_to_seal, &obj_to_auth)
+                .unwrap_or_else(|e| panic!("failed to seal object: {}", e));
+
+            let cbor_dec = open_raw(&bobby_context, 314, &enc, &cbor_to_auth)
+                .unwrap_or_else(|e| panic!("failed to open object: {}", e));
+            let dec: TestObj = cbor::decode(&cbor_dec).unwrap();
+
+            assert_eq!(obj_to_seal, dec, "object mismatch");
+        }
+        // Round trip sealing raw and opening raw objects
+        {
+            let enc = seal_raw(&alice_context, 314, &cbor_to_seal, &cbor_to_auth)
+                .unwrap_or_else(|e| panic!("failed to seal object: {}", e));
+
+            let cbor_dec = open_raw(&bobby_context, 314, &enc, &cbor_to_auth)
+                .unwrap_or_else(|e| panic!("failed to open object: {}", e));
+            let dec: TestObj = cbor::decode(&cbor_dec).unwrap();
+
+            assert_eq!(obj_to_seal, dec, "object mismatch");
+        }
     }
 
     // Tests authenticating and verifying objects.
@@ -184,12 +306,39 @@ mod tests {
 
         // Create an object to authenticate
         let obj_to_auth = (1, (2, (3, 4)));
+        let cbor_to_auth = cbor::encode(&obj_to_auth).unwrap();
 
-        // Round trip sealing and opening the objects
-        let sig = sign(&alice_context, 314, &obj_to_auth)
-            .unwrap_or_else(|e| panic!("failed to auth object: {}", e));
+        // Round trip signing and verifying the message
+        {
+            let sig = sign(&alice_context, 314, &obj_to_auth)
+                .unwrap_or_else(|e| panic!("failed to sign object: {}", e));
 
-        verify(&bobby_context, 314, &obj_to_auth, &sig)
-            .unwrap_or_else(|e| panic!("failed to verify object: {}", e));
+            verify(&bobby_context, 314, &obj_to_auth, &sig)
+                .unwrap_or_else(|e| panic!("failed to verify object: {}", e));
+        }
+        // Round trip signing the raw- and verifying the real message
+        {
+            let sig = sign_raw(&alice_context, 314, &cbor_to_auth)
+                .unwrap_or_else(|e| panic!("failed to sign object: {}", e));
+
+            verify(&bobby_context, 314, &obj_to_auth, &sig)
+                .unwrap_or_else(|e| panic!("failed to verify object: {}", e));
+        }
+        // Round trip signing the real- and verifying the raw message
+        {
+            let sig = sign(&alice_context, 314, &obj_to_auth)
+                .unwrap_or_else(|e| panic!("failed to sign object: {}", e));
+
+            verify_raw(&bobby_context, 314, &cbor_to_auth, &sig)
+                .unwrap_or_else(|e| panic!("failed to verify object: {}", e));
+        }
+        // Round trip signing the raw- and verifying the raw message
+        {
+            let sig = sign_raw(&alice_context, 314, &cbor_to_auth)
+                .unwrap_or_else(|e| panic!("failed to sign object: {}", e));
+
+            verify_raw(&bobby_context, 314, &cbor_to_auth, &sig)
+                .unwrap_or_else(|e| panic!("failed to verify object: {}", e));
+        }
     }
 }

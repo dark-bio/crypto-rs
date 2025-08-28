@@ -369,7 +369,7 @@ dependencies = [
 
 [[package]]
 name = "darkbio-crypto"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "age-core",
  "bcder",

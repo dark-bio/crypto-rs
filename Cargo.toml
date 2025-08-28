@@ -1,6 +1,6 @@
 [package]
 name = "darkbio-crypto"
-version = "0.4.1"
+version = "0.4.2"
 authors = ["Péter Szilágyi <peter@dark.bio>"]
 description = "Cryptography primitives and wrappers"
 repository = "https://github.com/dark-bio/crypto-rs"

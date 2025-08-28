@@ -455,7 +455,7 @@ MCowBQYDK2VuAyEALSnOr8HqfB9flSD3+jad72mIarW0sMConGAvJ1wHMh0=
     //
     // TODO(karalabe): Get some live test vectors for a bit more sanity
     #[test]
-    fn test_auth_verify() {
+    fn test_sign_verify() {
         // Create the keys for Alice and Bobby
         let alice_secret = SecretKey::generate();
         let bobby_secret = SecretKey::generate();
