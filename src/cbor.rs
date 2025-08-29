@@ -12,7 +12,7 @@ use std::io::{Cursor, Error};
 /// encode CBOR encodes an arbitrary value into a freshly allocated byte slice
 /// and returns it along with any error. It's sugar-coating to avoid having to
 /// manually do the boilerplate allocations.
-pub(crate) fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, ser::Error<Error>> {
+pub(crate) fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, ser::Error> {
     let mut buf = Vec::new();
     ser::into_writer(value, &mut buf)?;
     Ok(buf)
@@ -22,7 +22,7 @@ pub(crate) fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, ser::Error<Erro
 /// data is fully consumed. Furthermore, it also re-encodes the derided data to
 /// ensure that it was in canonical format (expensive, but avoids stuffing games
 /// with the signatures).
-pub(crate) fn decode<T: Serialize + DeserializeOwned>(blob: &[u8]) -> Result<T, de::Error<Error>> {
+pub(crate) fn decode<T: Serialize + DeserializeOwned>(blob: &[u8]) -> Result<T, de::Error> {
     // Consume the object from the binary blob
     let mut cur = Cursor::new(blob);
     let res: T = de::from_reader(&mut cur)?;
