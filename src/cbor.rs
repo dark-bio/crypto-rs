@@ -4,6 +4,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//! Type-restricted CBOR encoder and decoder.
+
 use ciborium::{de, ser, Value};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
