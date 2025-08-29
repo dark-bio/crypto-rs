@@ -12,11 +12,6 @@ It contains the following crypto primitives and parameters:
 - **STREAM** via `ChaCha20` and `Poly1305` at `16B` tags and `64KiB` chunks,
 - **HPKE** via `X25519`, `HKDF`, `SHA256`, `ChaCha20` and `Poly1305` at `dark-bio-v1:` info prefix.
 
-It further contains the following custom constructs:
-
-- **DOE:** DarkBio Object Encryption (and Authentication)
-  - Based on `CBOR` encoding and `HPKE` cryptography
-
 ## Feature flags
 
 The entire library is hidden behind feature flags:
@@ -28,5 +23,5 @@ The entire library is hidden behind feature flags:
 
 Some base features can be expanded with further flags:
 
+- `cbor` enables the type-restricted CBOR codec
 - `cert` can expand `hpke` with certificate support, pulls in `eddsa`
-- `doe` can expand `hpke` with `CBOR` object encoding and decoding

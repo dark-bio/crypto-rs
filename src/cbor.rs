@@ -12,7 +12,7 @@ use std::io::{Cursor, Error};
 /// encode CBOR encodes an arbitrary value into a freshly allocated byte slice
 /// and returns it along with any error. It's sugar-coating to avoid having to
 /// manually do the boilerplate allocations.
-pub(crate) fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, ser::Error<Error>> {
+pub fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, ser::Error<Error>> {
     let mut buf = Vec::new();
     ser::into_writer(value, &mut buf)?;
     Ok(buf)
@@ -22,7 +22,7 @@ pub(crate) fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, ser::Error<Erro
 /// data is fully consumed. Furthermore, it also re-encodes the derided data to
 /// ensure that it was in canonical format (expensive, but avoids stuffing games
 /// with the signatures).
-pub(crate) fn decode<T: Serialize + DeserializeOwned>(blob: &[u8]) -> Result<T, de::Error<Error>> {
+pub fn decode<T: Serialize + DeserializeOwned>(blob: &[u8]) -> Result<T, de::Error<Error>> {
     // Consume the object from the binary blob
     let mut cur = Cursor::new(blob);
     let res: T = de::from_reader(&mut cur)?;
@@ -49,6 +49,15 @@ pub(crate) fn decode<T: Serialize + DeserializeOwned>(blob: &[u8]) -> Result<T, 
     Ok(res)
 }
 
+/// verify attempts to decode and re-encode a CBOR blob to verify that it has a
+/// canonical encoding. This is meant to be used in FFI settings to allow using
+/// CBOR libraries from arbitrary languages but still ensure they conform to the
+/// same enforced specs.
+pub fn verify(blob: &[u8]) -> Result<(), de::Error<Error>> {
+    let _ = decode::<ciborium::Value>(blob)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -69,11 +78,13 @@ mod tests {
         let x_in: u64 = 42;
         let blob = encode(&x_in).expect("encode u64");
         let x_out: u64 = decode(&blob).expect("decode u64");
+        verify(&blob).expect("verify u64");
         assert_eq!(x_out, x_in);
 
         let s_in = String::from("hello");
         let blob = encode(&s_in).expect("encode string");
         let s_out: String = decode(&blob).expect("decode string");
+        verify(&blob).expect("verify string");
         assert_eq!(s_out, s_in);
 
         let p_in = Person {
@@ -83,6 +94,7 @@ mod tests {
         };
         let blob = encode(&p_in).expect("encode struct");
         let p_out: Person = decode(&blob).expect("decode struct");
+        verify(&blob).expect("verify struct");
         assert_eq!(p_out, p_in);
     }
 
@@ -95,6 +107,7 @@ mod tests {
 
         // Sanity check that it's detected
         decode::<u32>(&blob).expect_err("decode should fail on trailing bytes");
+        verify(&blob).expect_err("verify should fail on trailing bytes");
     }
 
     // Tests that 0 padded positive integers are rejected.
@@ -102,6 +115,7 @@ mod tests {
     fn test_reject_overlong_positive() {
         let blob: &[u8] = &[0x18, 0x00]; // should be just 0x00
         decode::<u64>(blob).expect_err("overlong 0 must be rejected");
+        verify(blob).expect_err("overlong 0 must be rejected");
     }
 
     // Tests that 0 padded negative integers are rejected.
@@ -109,6 +123,7 @@ mod tests {
     fn test_reject_overlong_negative() {
         let blob: &[u8] = &[0x38, 0x00]; // should be 0x20
         decode::<i64>(blob).expect_err("overlong -1 must be rejected");
+        verify(blob).expect_err("overlong -1 must be rejected");
     }
 
     // Tests that indefinite-length text are rejected.
@@ -122,6 +137,7 @@ mod tests {
         let blob: &[u8] = &[0x7f, 0x62, b'h', b'e', 0x63, b'l', b'l', b'o', 0xff];
 
         decode::<String>(blob).expect_err("decode should fail on indefinite-length text");
+        verify(blob).expect_err("verify should fail on indefinite-length text");
     }
 
     // Tests that indefinite-length bytes are rejected.
@@ -135,5 +151,6 @@ mod tests {
         let blob: &[u8] = &[0x5f, 0x42, b'h', b'e', 0x43, b'l', b'l', b'o', 0xff];
 
         decode::<Vec<u8>>(blob).expect_err("decode should fail on indefinite-length bytes");
+        verify(blob).expect_err("verify should fail on indefinite-length bytes");
     }
 }

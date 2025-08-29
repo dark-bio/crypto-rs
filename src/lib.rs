@@ -4,6 +4,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+#[cfg(feature = "cbor")]
+pub mod cbor;
+
 #[cfg(feature = "eddsa")]
 pub mod eddsa;
 
@@ -12,12 +15,6 @@ pub mod hpke;
 
 #[cfg(all(feature = "hpke", feature = "cert"))]
 pub mod hpke_cert;
-
-#[cfg(feature = "doe")]
-mod cbor;
-
-#[cfg(feature = "doe")]
-pub mod doe;
 
 #[cfg(feature = "rsa")]
 pub mod rsa;
