@@ -4,58 +4,93 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use ciborium::{de, ser};
+use ciborium::{de, ser, Value};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::io::{Cursor, Error};
 
 /// encode CBOR encodes an arbitrary value into a freshly allocated byte slice
-/// and returns it along with any error. It's sugar-coating to avoid having to
-/// manually do the boilerplate allocations.
-pub fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, ser::Error<Error>> {
+/// and returns it along with any error. After encoding, it will do a sanity
+/// decode to ensure no forbidden types were used. This might make sense to do
+/// with less overhead, but we're aiming for correctness, not speed now.
+///
+/// If either encoding or type restriction fails, the method panics. It will be
+/// considered a programming error at the call site and there's no meaningful
+/// way to recover from.
+pub fn encode<T: Serialize>(value: &T) -> Vec<u8> {
+    // Encode the value into a new buffer
     let mut buf = Vec::new();
-    ser::into_writer(value, &mut buf)?;
-    Ok(buf)
+    ser::into_writer(value, &mut buf).unwrap();
+
+    // Decode it as a generic value and validate type restrictions
+    let mut cur = Cursor::new(&buf);
+    let dec: Value = de::from_reader(&mut cur).unwrap();
+    restrict(&dec).unwrap();
+
+    buf
 }
 
 /// decode CBOR decodes a byte slice into an arbitrary type, ensuring that all
-/// data is fully consumed. Furthermore, it also re-encodes the derided data to
-/// ensure that it was in canonical format (expensive, but avoids stuffing games
-/// with the signatures).
+/// data is fully consumed and that it contains only allowed types. This is done
+/// by first decoding into a generic container and restricting the types, after
+/// which it is re-encoded to ensure it was in a canonical format. This might
+/// make sense to do with less overhead, but we're aiming for correctness, not
+/// speed now.
 pub fn decode<T: Serialize + DeserializeOwned>(blob: &[u8]) -> Result<T, de::Error<Error>> {
-    // Consume the object from the binary blob
+    // Verify the CBOR blob before even touching it
+    verify(blob)?;
+
+    // Canonical and typ-restricted, parse it
     let mut cur = Cursor::new(blob);
     let res: T = de::from_reader(&mut cur)?;
-
-    // Decoding looks ok, re-encode to verify canonical-ness (this also ensures
-    // that all bytes were consumed; without this, that's an extra step needed
-    // in the decoding above).
-    match encode(&res) {
-        Err(err) => {
-            return Err(de::Error::Io(Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("non-canonical CBOR (re-encode failure: {})", err),
-            )));
-        }
-        Ok(enc) => {
-            if enc != blob {
-                return Err(de::Error::Io(Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "non-canonical CBOR (re-encode mismatch)",
-                )));
-            }
-        }
-    };
     Ok(res)
 }
 
 /// verify attempts to decode and re-encode a CBOR blob to verify that it has a
-/// canonical encoding. This is meant to be used in FFI settings to allow using
-/// CBOR libraries from arbitrary languages but still ensure they conform to the
-/// same enforced specs.
+/// canonical encoding and contains only allowed types. This is meant to be used
+/// in FFI settings to allow using CBOR libraries from arbitrary languages but
+/// still ensure they conform to the same enforced specs.
 pub fn verify(blob: &[u8]) -> Result<(), de::Error<Error>> {
-    let _ = decode::<ciborium::Value>(blob)?;
+    // Validate that the blob only contains allowed types
+    let mut cur = Cursor::new(blob);
+    let dec: Value = de::from_reader(&mut cur)?;
+    restrict(&dec)?;
+
+    // Re-encode it to verify canonical-ness (also ensuring all bytes were used)
+    let enc = encode(&dec);
+    if enc != blob {
+        return Err(de::Error::Io(Error::new(
+            std::io::ErrorKind::InvalidData,
+            "non-canonical CBOR (re-encode mismatch)",
+        )));
+    }
     Ok(())
+}
+
+/// restrict checks that a ciborium::Value only contains allowed types.
+///
+/// Currently, types disallowed are:
+///   - Null:  We want to encode data, not encode not-data
+///   - Bool:  Hard to reason about across languages, 0, 1, special?
+///   - Float: Not fully defined (CPU dependent), canonicalness issues
+///   - Map:   Has 3 "canonical standards", varied fields not needed
+///   - Tag:   No magic fields, our use case is cryptography
+fn restrict(val: &Value) -> Result<(), de::Error<Error>> {
+    match val {
+        Value::Integer(_) => Ok(()),
+        Value::Text(_) => Ok(()),
+        Value::Bytes(_) => Ok(()),
+        Value::Array(arr) => {
+            for item in arr {
+                restrict(item)?;
+            }
+            Ok(())
+        }
+        _ => Err(de::Error::Io(Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("disallowed CBOR value type: {:?}", val),
+        ))),
+    }
 }
 
 #[cfg(test)]
@@ -70,39 +105,51 @@ mod tests {
         phones: Vec<String>,
     }
 
-    // Tests that some primitive types can be encoded and decoded. This is not
-    // meant to be some exhaustive battle-test, rather just sanity checks around
-    // the API surface.
+    // Tests that allowed types can be encoded and decoded.
     #[test]
-    fn test_primitive_roundtrip() {
-        let x_in: u64 = 42;
-        let blob = encode(&x_in).expect("encode u64");
-        let x_out: u64 = decode(&blob).expect("decode u64");
-        verify(&blob).expect("verify u64");
-        assert_eq!(x_out, x_in);
+    fn test_roundtrip() {
+        let p_in: u64 = 42;
+        let p_enc = encode(&p_in);
+        let p_out: u64 = decode(&p_enc).expect("decode u64");
+        verify(&p_enc).expect("verify u64");
+        assert_eq!(p_out, p_in);
+
+        let n_in: i64 = -42;
+        let n_enc = encode(&n_in);
+        let n_out: i64 = decode(&n_enc).expect("decode i64");
+        verify(&n_enc).expect("verify i64");
+        assert_eq!(n_out, n_in);
 
         let s_in = String::from("hello");
-        let blob = encode(&s_in).expect("encode string");
-        let s_out: String = decode(&blob).expect("decode string");
-        verify(&blob).expect("verify string");
+        let s_enc = encode(&s_in);
+        let s_out: String = decode(&s_enc).expect("decode string");
+        verify(&s_enc).expect("verify string");
         assert_eq!(s_out, s_in);
 
-        let p_in = Person {
-            name: "Peter".into(),
-            age: 18, // lol
-            phones: vec!["+41 123".into(), "+41 456".into()],
-        };
-        let blob = encode(&p_in).expect("encode struct");
-        let p_out: Person = decode(&blob).expect("decode struct");
-        verify(&blob).expect("verify struct");
-        assert_eq!(p_out, p_in);
+        let b_in = vec![1u8, 2, 3, 4];
+        let b_enc = encode(&b_in);
+        let b_out: Vec<u8> = decode(&b_enc).expect("decode binary");
+        verify(&b_enc).expect("verify binary");
+        assert_eq!(b_out, b_in);
+
+        let a_in = vec!["Peter".to_string(), "says".to_string(), "Hi!".to_string()];
+        let a_enc = encode(&a_in);
+        let a_out: Vec<String> = decode(&a_enc).expect("decode array");
+        verify(&a_enc).expect("verify array");
+        assert_eq!(a_out, a_in);
+
+        let t_in = ("Ark".to_string(), 1);
+        let t_enc = encode(&t_in);
+        let t_out: (String, u64) = decode(&t_enc).expect("decode tuple");
+        verify(&t_enc).expect("verify tuple");
+        assert_eq!(t_out, t_in);
     }
 
     // Tests that trailing bytes are rejected during decoding.
     #[test]
-    fn test_trailing_byte() {
+    fn test_reject_trailing_byte() {
         // Create a good encoding and stuff a byte into it
-        let mut blob = encode(&0u32).expect("encode u32");
+        let mut blob = encode(&0u32);
         blob.push(0x00);
 
         // Sanity check that it's detected
