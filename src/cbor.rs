@@ -6,9 +6,9 @@
 
 //! Type-restricted CBOR encoder and decoder.
 
-use ciborium::{de, ser, Value};
-use serde::de::DeserializeOwned;
+use ciborium::{Value, de, ser};
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::io::{Cursor, Error};
 
 /// encode CBOR encodes an arbitrary value into a freshly allocated byte slice

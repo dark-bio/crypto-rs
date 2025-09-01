@@ -130,13 +130,13 @@ impl PublicKey {
     /// verify verifies a digital signature.
     pub fn verify(&self, message: &[u8], signature: &[u8]) -> Result<(), signature::Error> {
         let sig = Signature::try_from(signature)?;
-        Ok(self.inner.verify(&message, &sig)?)
+        self.inner.verify(message, &sig)
     }
 
     /// verify_hash verifies a digital signature on an already hashed message.
     pub fn verify_hash(&self, hash: &[u8], signature: &[u8]) -> Result<(), signature::Error> {
         let sig = Signature::try_from(signature)?;
-        Ok(self.inner.verify_prehash(&hash, &sig)?)
+        self.inner.verify_prehash(hash, &sig)
     }
 }
 

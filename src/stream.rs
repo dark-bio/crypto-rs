@@ -23,6 +23,8 @@
 //! I/O helper structs for age file encryption and decryption.
 //! https://github.com/str4d/rage/blob/main/age/src/primitives/stream.rs
 
+#![allow(clippy::all)]
+
 use age_core::secrecy::{ExposeSecret, SecretSlice};
 use chacha20poly1305::{
     ChaCha20Poly1305,

@@ -49,7 +49,7 @@ impl SecretKey {
 
     /// to_bytes converts a private key into a 32-byte array.
     pub fn to_bytes(&self) -> [u8; 32] {
-        self.inner.to_bytes().into()
+        self.inner.to_bytes()
     }
 
     /// to_der serializes a private key into a DER buffer.
@@ -105,7 +105,7 @@ impl PublicKey {
 
     /// to_bytes converts a public key into a 32-byte array.
     pub fn to_bytes(&self) -> [u8; 32] {
-        self.inner.to_bytes().into()
+        self.inner.to_bytes()
     }
 
     /// to_der serializes a public key into a DER buffer.
@@ -130,7 +130,7 @@ impl PublicKey {
     /// verify verifies a digital signature.
     pub fn verify(&self, message: &[u8], signature: &[u8]) -> Result<(), SignatureError> {
         let sig = Signature::try_from(signature)?;
-        Ok(self.inner.verify(&message, &sig)?)
+        self.inner.verify(message, &sig)
     }
 }
 

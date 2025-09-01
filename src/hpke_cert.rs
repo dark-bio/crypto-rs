@@ -44,7 +44,7 @@ impl PublicKey {
 
         // Validate the content against the provided signer
         let tbs = cert.tbs_certificate.as_ref();
-        signer.verify(tbs, &cert.signature_value.data.as_ref())?;
+        signer.verify(tbs, cert.signature_value.data.as_ref())?;
 
         // Extract the embedded public key
         let key = PublicKey::from_bytes(

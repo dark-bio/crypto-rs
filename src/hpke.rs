@@ -6,6 +6,10 @@
 
 //! HPKE cryptography wrappers and parametrization.
 
+// We can't use Kem for our own type, it clashes with the hpke lib stuff. Let us
+// keep our all-caps abbreviations.
+#![allow(clippy::upper_case_acronyms)]
+
 use hpke::rand_core::SeedableRng;
 use hpke::{Deserializable, HpkeError, Kem, Serializable};
 use pkcs8::PrivateKeyInfo;
@@ -106,7 +110,7 @@ impl SecretKey {
         // The private key info is simply the BITSTRING of the pubkey
         let info = PrivateKeyInfo {
             algorithm: alg,
-            private_key: &*encoded.to_der().unwrap(),
+            private_key: &encoded.to_der().unwrap(),
             public_key: None,
         };
         info.to_der().unwrap()
@@ -310,7 +314,7 @@ impl Context {
     /// recipient.
     pub fn verify(&self, message: &[u8], signature: &[u8]) -> Result<(), HpkeError> {
         let body = self.open(signature, message)?;
-        if body.len() != 0 {
+        if !body.is_empty() {
             return Err(HpkeError::ValidationError);
         }
         Ok(())
