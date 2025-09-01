@@ -39,6 +39,7 @@ jobs:
       matrix:
         target:
           - wasm32-wasip1
+          - wasm32-unknown-unknown
 
     steps:
       - uses: actions/checkout@v5
