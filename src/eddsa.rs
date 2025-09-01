@@ -59,10 +59,7 @@ impl SecretKey {
 
     /// to_pem serializes a private key into a PEM string.
     pub fn to_pem(&self) -> String {
-        self.inner
-            .to_pkcs8_pem(LineEnding::default())
-            .unwrap()
-            .to_string()
+        self.inner.to_pkcs8_pem(LineEnding::LF).unwrap().to_string()
     }
 
     /// public_key retrieves the public counterpart of the secret key.
@@ -116,7 +113,7 @@ impl PublicKey {
     /// to_pem serializes a public key into a PEM string.
     pub fn to_pem(&self) -> String {
         self.inner
-            .to_public_key_pem(LineEnding::default())
+            .to_public_key_pem(LineEnding::LF)
             .unwrap()
             .to_string()
     }

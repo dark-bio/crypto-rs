@@ -56,7 +56,6 @@ jobs:
       - name: Build individual features
         run: cargo hack build --each-feature --exclude-features cert --target ${{ matrix.target }}
 
-
   format:
     runs-on: ubuntu-latest
     steps:

@@ -57,7 +57,7 @@ impl SecretKey {
 
     /// to_pem serializes a public key into a PEM string.
     pub fn to_pem(&self) -> String {
-        rsa::pkcs1v15::SigningKey::<Sha256>::to_pkcs8_pem(&self.inner, LineEnding::default())
+        rsa::pkcs1v15::SigningKey::<Sha256>::to_pkcs8_pem(&self.inner, LineEnding::LF)
             .unwrap()
             .as_str()
             .to_string()
@@ -107,7 +107,7 @@ impl PublicKey {
 
     /// to_pem serializes a public key into a PEM string.
     pub fn to_pem(&self) -> String {
-        rsa::pkcs1v15::VerifyingKey::<Sha256>::to_public_key_pem(&self.inner, LineEnding::default())
+        rsa::pkcs1v15::VerifyingKey::<Sha256>::to_public_key_pem(&self.inner, LineEnding::LF)
             .unwrap()
     }
 

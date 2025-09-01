@@ -33,3 +33,7 @@ Some base features can be expanded with further flags:
 
 - `cert` can expand `hpke` with certificate support, pulls in `eddsa`
 - `async` can expand `stream` with futures support, pulls in `futures`
+
+## WASM ready
+
+Apart from `x509` certificate support (`cert` feature), everything is `WASM` ready.
