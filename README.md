@@ -18,6 +18,8 @@ It contains the following satellite utilities:
 - **CBOR** restricted to `integer`, `text`, `bytes` and `array`
 - **RAND** bytes generator with `OS` and `WASM` sources
 
+All functionality is WASM ready.
+
 ## Feature flags
 
 The entire library is hidden behind feature flags:
@@ -33,7 +35,3 @@ Some base features can be expanded with further flags:
 
 - `cert` can expand `hpke` with certificate support, pulls in `eddsa`
 - `async` can expand `stream` with futures support, pulls in `futures`
-
-## WASM ready
-
-Apart from `x509` certificate support (`cert` feature), everything is `WASM` ready.
