@@ -50,7 +50,13 @@ jobs:
       - name: Fetch dependencies
         run: cargo fetch
 
-      - name: Build for target
+      - name: Install cargo-hack
+        run: cargo install cargo-hack
+
+      - name: Build individual features
+        run: cargo hack build --each-feature --target ${{ matrix.target }}
+
+      - name: Build with all features
         run: cargo build --all-features --target ${{ matrix.target }}
 
   format:
