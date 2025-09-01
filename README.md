@@ -12,6 +12,11 @@ It contains the following crypto primitives and parameters:
 - **STREAM** via `ChaCha20` and `Poly1305` at `16B` tags and `64KiB` chunks,
 - **HPKE** via `X25519`, `HKDF`, `SHA256`, `ChaCha20` and `Poly1305` at `dark-bio-v1:` info prefix.
 
+It contains the following satellite utilities:
+
+- **CBOR** restricted to `integer`, `text`, `bytes` and `array`,
+- **RAND** bytes generator with `OS` and `WASM` sources.
+
 ## Feature flags
 
 The entire library is hidden behind feature flags:
@@ -20,8 +25,9 @@ The entire library is hidden behind feature flags:
 - `hpke` enables the HPKE cryptography
 - `eddsa` enables the EdDSA cryptography
 - `stream` enables the STREAM cryptography
+- `cbor` enables the type-restricted CBOR codecs
+- `rand` enables the WASM friendly random generator
 
 Some base features can be expanded with further flags:
 
-- `cbor` enables the type-restricted CBOR codec
 - `cert` can expand `hpke` with certificate support, pulls in `eddsa`

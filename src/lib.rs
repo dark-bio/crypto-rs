@@ -21,5 +21,8 @@ pub mod hpke_cert;
 #[cfg(feature = "rsa")]
 pub mod rsa;
 
+#[cfg(feature = "rand")]
+pub mod rand;
+
 #[cfg(feature = "stream")]
 pub mod stream;
