@@ -4,21 +4,11 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use rand::RngCore;
-use rand_chacha::rand_core::SeedableRng;
-
-/// generate creates an arbitrarily large buffer filled with randomness. Under
-/// the hood it retrieves a 32-byte random seed from the OS and expands it via
-/// ChaCha20.
+/// generate creates an arbitrarily large buffer filled with randomness.
 pub fn generate(bytes: usize) -> Vec<u8> {
-    // Create a random number stream that works in WASM
-    let mut seed = [0u8; 32];
-    getrandom::fill(&mut seed).expect("Failed to get random seed");
-    let mut rng = rand_chacha::ChaCha20Rng::from_seed(seed);
-
-    // Generate a random buffer filled with safe random numbers
+    // Create a random buffer with a WASM friendly source
     let mut buf = vec![0u8; bytes];
-    rng.fill_bytes(&mut buf[..]);
+    getrandom::fill(&mut buf[..]).expect("Failed to get random bytes");
     buf
 }
 

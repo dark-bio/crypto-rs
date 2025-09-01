@@ -1,6 +1,6 @@
 [package]
 name = "darkbio-crypto"
-version = "0.6.2"
+version = "0.6.3"
 authors = ["Péter Szilágyi <peter@dark.bio>"]
 description = "Cryptography primitives and wrappers"
 repository = "https://github.com/dark-bio/crypto-rs"
@@ -16,7 +16,7 @@ default = []
 cbor = ["dep:serde", "dep:ciborium"]
 eddsa = ["dep:ed25519-dalek", "dep:signature"]
 hpke = ["dep:rand", "dep:rand_chacha", "dep:getrandom", "dep:hpke", "dep:pem", "dep:pkcs8", "dep:spki", "dep:der"]
-rand = ["dep:rand", "dep:rand_chacha", "dep:getrandom"]
+rand = ["dep:getrandom"]
 rsa = ["dep:rsa", "dep:signature"]
 stream = ["dep:age-core", "dep:chacha20poly1305", "dep:pin-project", "dep:zeroize"]
 cert = [
