@@ -21,7 +21,7 @@
 // THE SOFTWARE.
 
 //! I/O helper structs for age file encryption and decryption.
-//! https://github.com/str4d/rage/blob/main/age/src/primitives/stream.rs
+//! <https://github.com/str4d/rage/blob/main/age/src/primitives/stream.rs>
 
 #![allow(clippy::all)]
 

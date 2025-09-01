@@ -4,7 +4,10 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// Pull in the README as the package doc
 #![doc = include_str!("../README.md")]
+// Enable the experimental doc_cfg feature
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 #[cfg(feature = "cbor")]
 pub mod cbor;

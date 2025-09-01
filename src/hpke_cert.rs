@@ -67,7 +67,7 @@ impl PublicKey {
     ///
     /// Note, this method is only for testing, most of the contained data will be
     /// junk; and also the produces certificate is not fully spec-adhering:
-    ///   https://github.com/indygreg/cryptography-rs/issues/26
+    ///   <https://github.com/indygreg/cryptography-rs/issues/26>
     pub fn to_test_cert_pem(&self, start: u64, until: u64, signer: eddsa::SecretKey) -> String {
         self.to_test_cert(start, until, signer)
             .encode_pem()
@@ -78,7 +78,7 @@ impl PublicKey {
     ///
     /// Note, this method is only for testing, most of the contained data will be
     /// junk; and also the produces certificate is not fully spec-adhering:
-    ///   https://github.com/indygreg/cryptography-rs/issues/26
+    ///   <https://github.com/indygreg/cryptography-rs/issues/26>
     pub fn to_test_cert_der(&self, start: u64, until: u64, signer: eddsa::SecretKey) -> Vec<u8> {
         self.to_test_cert(start, until, signer)
             .encode_der()
@@ -89,7 +89,7 @@ impl PublicKey {
     ///
     /// Note, this method is only for testing, most of the contained data will be
     /// junk; and also the produced certificate is not fully spec-adhering:
-    ///   https://github.com/indygreg/cryptography-rs/issues/26
+    ///   <https://github.com/indygreg/cryptography-rs/issues/26>
     pub fn to_test_cert(
         &self,
         start: u64,

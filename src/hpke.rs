@@ -243,7 +243,7 @@ impl Context {
     /// The method returns an encapsulated session key (which may be used for stream
     /// communication but this method does not need it) concatenated with the cipher-
     /// text with the encrypted data and authenticity proofs. To open it on the other
-    /// side needs transmitting the <concat-session-key-ciphertext> and <msg_to_auth>.
+    /// side needs transmitting the `concat-session-key-ciphertext` and `msg_to_auth`.
     ///
     /// This method (and open) requires the public keys of both parties to be pre-
     /// shared. It is not suitable for a key exchange protocol!

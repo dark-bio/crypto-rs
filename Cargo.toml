@@ -1,6 +1,6 @@
 [package]
 name = "darkbio-crypto"
-version = "0.6.4"
+version = "0.6.5"
 authors = ["Péter Szilágyi <peter@dark.bio>"]
 description = "Cryptography primitives and wrappers"
 repository = "https://github.com/dark-bio/crypto-rs"
@@ -10,6 +10,7 @@ edition = "2024"
 
 [package.metadata.docs.rs]
 all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
 default = []

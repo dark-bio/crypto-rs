@@ -10,8 +10,13 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  test:
+    name: Test on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ ubuntu-latest, windows-latest, macOS-latest ]
+
     steps:
       - uses: actions/checkout@v5
 
@@ -27,6 +32,26 @@ jobs:
       - name: Test with all features
         run: cargo test --all-features
 
+  build:
+    name: Build for target ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - wasm32-wasip1
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Add target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Fetch dependencies
+        run: cargo fetch
+
+      - name: Build for target
+        run: cargo build --all-features --target ${{ matrix.target }}
+
   format:
     runs-on: ubuntu-latest
     steps:
@@ -38,3 +63,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - run: cargo clippy --all-features -- -D warnings
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: cargo doc --all-features --no-deps
