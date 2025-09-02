@@ -69,6 +69,12 @@ impl SecretKey {
         PublicKey { inner: key }
     }
 
+    /// fingerprint returns a 256bit unique identified for this key. For RSA, that
+    /// is the SHA256 hash of the raw (le modulus || le exponent) public key.
+    pub fn fingerprint(&self) -> [u8; 32] {
+        self.public_key().fingerprint()
+    }
+
     /// sign creates a digital signature of the message.
     pub fn sign(&self, message: &[u8]) -> Vec<u8> {
         self.inner.sign(message).to_vec()
@@ -112,7 +118,7 @@ impl PublicKey {
     }
 
     /// fingerprint returns a 256bit unique identified for this key. For RSA, that
-    /// is the SHA256 sum of the raw (le modulus || le exponent) public key.
+    /// is the SHA256 hash of the raw (le modulus || le exponent) public key.
     pub fn fingerprint(&self) -> [u8; 32] {
         let pubkey: RsaPublicKey = self.inner.as_ref().clone();
 

@@ -12,6 +12,7 @@ use ed25519_dalek::pkcs8::{
     DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey, Error,
 };
 use ed25519_dalek::{Signature, SignatureError, Signer, Verifier};
+use sha2::Digest;
 
 /// SecretKey contains an Ed25519 private key usable for signing.
 #[derive(Clone)]
@@ -69,6 +70,12 @@ impl SecretKey {
         }
     }
 
+    /// fingerprint returns a 256bit unique identified for this key. For HPKE,
+    /// that is the SHA256 hash of the raw public key.
+    pub fn fingerprint(&self) -> [u8; 32] {
+        self.public_key().fingerprint()
+    }
+
     /// sign creates a digital signature of the message.
     pub fn sign(&self, message: &[u8]) -> Vec<u8> {
         self.inner.sign(message).to_vec()
@@ -119,9 +126,11 @@ impl PublicKey {
     }
 
     /// fingerprint returns a 256bit unique identified for this key. For Ed25519,
-    /// that is the raw public key.
+    /// that is the SHA256 hash of the raw public key.
     pub fn fingerprint(&self) -> [u8; 32] {
-        self.to_bytes()
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(self.to_bytes());
+        hasher.finalize().into()
     }
 
     /// verify verifies a digital signature.

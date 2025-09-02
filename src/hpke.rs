@@ -13,6 +13,7 @@
 use hpke::rand_core::SeedableRng;
 use hpke::{Deserializable, HpkeError, Kem, Serializable};
 use pkcs8::PrivateKeyInfo;
+use sha2::Digest;
 use spki::der::asn1::{BitStringRef, OctetStringRef};
 use spki::der::{AnyRef, Decode, Encode};
 use spki::{AlgorithmIdentifier, ObjectIdentifier, SubjectPublicKeyInfo};
@@ -131,6 +132,12 @@ impl SecretKey {
             inner: KEM::sk_to_pk(&self.inner),
         }
     }
+
+    /// fingerprint returns a 256bit unique identified for this key. For HPKE,
+    /// that is the SHA256 hash of the raw public key.
+    pub fn fingerprint(&self) -> [u8; 32] {
+        self.public_key().fingerprint()
+    }
 }
 
 /// PublicKey contains a public key of the type bound to the configured crypto.
@@ -210,7 +217,9 @@ impl PublicKey {
     /// fingerprint returns a 256bit unique identified for this key. For HPKE,
     /// that is the raw public key.
     pub fn fingerprint(&self) -> [u8; 32] {
-        self.to_bytes()
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(self.to_bytes());
+        hasher.finalize().into()
     }
 }
 
