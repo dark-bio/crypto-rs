@@ -5,6 +5,8 @@ authors = ["Péter Szilágyi <peter@dark.bio>"]
 description = "Cryptography primitives and wrappers"
 repository = "https://github.com/dark-bio/crypto-rs"
 documentation = "https://docs.rs/darkbio-crypto"
+categories = ["cryptography", "encoding"]
+keywords = ["cbor", "eddsa", "hpke", "rsa", "stream"]
 license = "BSD-3-Clause"
 edition = "2024"
 
