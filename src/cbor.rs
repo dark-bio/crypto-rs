@@ -115,24 +115,24 @@ impl Encoder {
     // encode_uint encodes a positive integer into its canonical shortest-form.
     pub fn encode_uint(&mut self, value: u64) {
         // Piggyback on the length encoder to avoid duplicating code
-        self.encode_length(MAJOR_UINT, value as usize);
+        self.encode_length(MAJOR_UINT, value);
     }
 
     // encode_bytes encodes an opaque byte string.
     pub fn encode_bytes(&mut self, value: &[u8]) {
-        self.encode_length(MAJOR_BYTES, value.len());
+        self.encode_length(MAJOR_BYTES, value.len() as u64);
         self.buf.extend_from_slice(value);
     }
 
     // encode_text encodes a UTF-8 text string.
     pub fn encode_text(&mut self, value: &str) {
-        self.encode_length(MAJOR_TEXT, value.len());
+        self.encode_length(MAJOR_TEXT, value.len() as u64);
         self.buf.extend_from_slice(value.as_bytes());
     }
 
     // encode_array_header encodes an array size.
     pub fn encode_array_header(&mut self, len: usize) {
-        self.encode_length(MAJOR_ARRAY, len);
+        self.encode_length(MAJOR_ARRAY, len as u64);
     }
 
     // encode_empty_tuple special cases the empty tuple to encode as [].
@@ -143,16 +143,16 @@ impl Encoder {
     // encode_length encodes a major type, injecting an unsigned integer after,
     // which will for most types define the length. For integers, it will simply
     // be the value itself.
-    fn encode_length(&mut self, major_type: u8, len: usize) {
+    fn encode_length(&mut self, major_type: u8, len: u64) {
         if len < 24 {
             self.buf.push(major_type << 5 | len as u8);
-        } else if len <= u8::MAX as usize {
+        } else if len <= u8::MAX as u64 {
             self.buf.push(major_type << 5 | INFO_UINT8);
             self.buf.push(len as u8);
-        } else if len <= u16::MAX as usize {
+        } else if len <= u16::MAX as u64 {
             self.buf.push(major_type << 5 | INFO_UINT16);
             self.buf.extend_from_slice(&(len as u16).to_be_bytes());
-        } else if len <= u32::MAX as usize {
+        } else if len <= u32::MAX as u64 {
             self.buf.push(major_type << 5 | INFO_UINT32);
             self.buf.extend_from_slice(&(len as u32).to_be_bytes());
         } else {
