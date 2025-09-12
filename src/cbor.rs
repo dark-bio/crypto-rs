@@ -914,6 +914,11 @@ mod tests {
             Error::InvalidUtf8 => {} // Expected error
             other => panic!("Expected InvalidUtf8 error, got {:?}", other),
         }
+
+        // Length overflows
+        let encoded = vec![123, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255];
+        let result = decode::<String>(&encoded);
+        assert!(result.is_err());
     }
 
     // Tests that tuples encode correctly on a bunch of samples.
