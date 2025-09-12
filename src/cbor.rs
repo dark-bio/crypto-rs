@@ -157,7 +157,7 @@ impl Encoder {
             self.buf.extend_from_slice(&(len as u32).to_be_bytes());
         } else {
             self.buf.push(major_type << 5 | INFO_UINT64);
-            self.buf.extend_from_slice(&(len as u64).to_be_bytes());
+            self.buf.extend_from_slice(&len.to_be_bytes());
         }
     }
 }
