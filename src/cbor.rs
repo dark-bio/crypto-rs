@@ -162,6 +162,12 @@ impl Encoder {
     }
 }
 
+impl Default for Encoder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 // Decoder is the low level implementation of the CBOR decoder with only the
 // handful of desired types supported.
 #[derive(Clone)]
