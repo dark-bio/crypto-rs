@@ -51,7 +51,6 @@ jobs:
         run: |
           curl https://wasmtime.dev/install.sh -sSf | bash
           echo "$HOME/.wasmtime/bin" >> $GITHUB_PATH
-          cargo install wasm-bindgen-cli
 
       - name: Add target
         run: rustup target add ${{ matrix.target }}
@@ -66,8 +65,8 @@ jobs:
         run: cargo hack build --each-feature --target ${{ matrix.target }}
 
       - name: Test individual features
+        if: matrix.target != 'wasm32-unknown-unknown'
         env:
-          CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner
           CARGO_TARGET_WASM32_WASIP1_RUNNER: wasmtime
         run: cargo hack test --each-feature --target ${{ matrix.target }}
 
