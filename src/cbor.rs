@@ -35,7 +35,7 @@ pub enum Error {
     NonCanonical,
     InvalidUtf8,
     TrailingBytes,
-    UnexpectedItemCount(usize, usize),
+    UnexpectedItemCount(u64, usize),
     UnsupportedType(u8),
 }
 
@@ -208,7 +208,7 @@ impl<'a> Decoder<'a> {
             return Err(Error::InvalidMajorType(major, MAJOR_BYTES));
         }
         // Retrieve the blob and return as is
-        let bytes = self.read_bytes(len as usize)?;
+        let bytes = self.read_bytes(len)?;
         Ok(bytes.to_vec())
     }
 
@@ -221,10 +221,10 @@ impl<'a> Decoder<'a> {
         }
         // Check that the length matches the expected array size
         if len as usize != N {
-            return Err(Error::UnexpectedItemCount(len as usize, N));
+            return Err(Error::UnexpectedItemCount(len, N));
         }
         // Retrieve the bytes and copy into the fixed-size array
-        let bytes = self.read_bytes(N)?;
+        let bytes = self.read_bytes(N as u64)?;
         let mut array = [0u8; N];
         array.copy_from_slice(bytes);
         Ok(array)
@@ -238,18 +238,18 @@ impl<'a> Decoder<'a> {
             return Err(Error::InvalidMajorType(major, MAJOR_TEXT));
         }
         // Retrieve the blob and reinterpret as UTF-8
-        let bytes = self.read_bytes(len as usize)?;
+        let bytes = self.read_bytes(len)?;
         String::from_utf8(bytes.to_vec()).map_err(|_| Error::InvalidUtf8)
     }
 
     // decode_array_header decodes an array header, returning its length.
-    pub fn decode_array_header(&mut self) -> Result<usize, Error> {
+    pub fn decode_array_header(&mut self) -> Result<u64, Error> {
         // Extract the field type and attached length
         let (major, len) = self.decode_header()?;
         if major != MAJOR_ARRAY {
             return Err(Error::InvalidMajorType(major, MAJOR_ARRAY));
         }
-        Ok(len as usize)
+        Ok(len)
     }
 
     // decode_header extracts the major type for the next field and the integer
@@ -305,27 +305,26 @@ impl<'a> Decoder<'a> {
     }
 
     // read_bytes retrieves the next handful of bytes from the buffer.
-    fn read_bytes(&mut self, len: usize) -> Result<&'a [u8], Error> {
+    fn read_bytes(&mut self, len: u64) -> Result<&'a [u8], Error> {
         // Ensure there's still enough data left in the buffer
-        if self.pos + len > self.data.len() {
+        if len > usize::MAX as u64 {
             return Err(Error::UnexpectedEof);
+        }
+        let len = len as usize;
+
+        match self.pos.checked_add(len) {
+            None => return Err(Error::UnexpectedEof),
+            Some(end) => {
+                if end > self.data.len() {
+                    return Err(Error::UnexpectedEof);
+                }
+            }
         }
         // Retrieve the byte and move the cursor forward
         let bytes = &self.data[self.pos..self.pos + len];
         self.pos += len;
 
         Ok(bytes)
-    }
-
-    // skip_bytes advances the position without retrieving the data.
-    fn skip_bytes(&mut self, len: usize) -> Result<(), Error> {
-        // Ensure there's still enough data left in the buffer
-        if self.pos + len > self.data.len() {
-            return Err(Error::UnexpectedEof);
-        }
-        // Ignore the data, just move the cursor forward
-        self.pos += len;
-        Ok(())
     }
 }
 
@@ -526,7 +525,7 @@ macro_rules! impl_tuple {
                 // Decode the length of the tuple
                 let len = decoder.decode_array_header()?;
                 let exp = args!($($t),+);
-                if len != exp {
+                if len != exp as u64 {
                     return Err(Error::UnexpectedItemCount(len, exp));
                 }
                 // Decode all the tuple elements individually
@@ -541,7 +540,7 @@ macro_rules! impl_tuple {
                 // Decode the length of the tuple
                 let len = decoder.decode_array_header()?;
                 let exp = args!($($t),+);
-                if len != exp {
+                if len != exp as u64 {
                     return Err(Error::UnexpectedItemCount(len, exp));
                 }
                 // Decode all the tuple elements individually
@@ -587,11 +586,12 @@ fn verify_object(decoder: &mut Decoder) -> Result<(), Error> {
         }
         MAJOR_BYTES => {
             // Opaque bytes are always valid, skip over
-            decoder.skip_bytes(value as usize)
+            _ = decoder.read_bytes(value)?;
+            Ok(())
         }
         MAJOR_TEXT => {
             // Verify that the text is indeed UTF-8
-            let bytes = decoder.read_bytes(value as usize)?;
+            let bytes = decoder.read_bytes(value)?;
             std::str::from_utf8(bytes).map_err(|_| Error::InvalidUtf8)?;
             Ok(())
         }
@@ -914,11 +914,6 @@ mod tests {
             Error::InvalidUtf8 => {} // Expected error
             other => panic!("Expected InvalidUtf8 error, got {:?}", other),
         }
-
-        // Length overflows
-        let encoded = vec![123, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255];
-        let result = decode::<String>(&encoded);
-        assert!(result.is_err());
     }
 
     // Tests that tuples encode correctly on a bunch of samples.
@@ -1149,5 +1144,14 @@ mod tests {
             Error::InvalidAdditionalInfo(28) => {}
             other => panic!("Expected InvalidAdditionalInfo(28) error, got {:?}", other),
         }
+    }
+
+    // Tests a length overflow issue caught by the fuzzer:
+    //  - https://github.com/dark-bio/crypto-rs/pull/3
+    #[test]
+    fn test_issue_3() {
+        let encoded = vec![123, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255];
+        let result = decode::<String>(&encoded);
+        assert!(result.is_err());
     }
 }

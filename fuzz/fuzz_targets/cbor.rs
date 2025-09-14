@@ -1,7 +1,13 @@
+// crypto-rs: cryptography primitives and wrappers
+// Copyright 2025 Dark Bio. All rights reserved.
+//
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 #![no_main]
 
-use libfuzzer_sys::fuzz_target;
 use darkbio_crypto::cbor::{decode, encode};
+use libfuzzer_sys::fuzz_target;
 
 macro_rules! roundtrip {
     ($data:expr, $( $typ:ty ),+ $(,)?) => {
@@ -17,7 +23,8 @@ macro_rules! roundtrip {
 }
 
 fuzz_target!(|data: &[u8]| {
-    roundtrip!(data,
+    roundtrip!(
+        data,
         String,
         u64,
         Vec<u8>,
@@ -31,7 +38,6 @@ fuzz_target!(|data: &[u8]| {
         [u8; 2],
         [u8; 4],
         [u8; 8],
-        ((u64,[u8; 4]),(String,u64)),
-
+        ((u64, [u8; 4]), (String, u64)),
     );
 });
