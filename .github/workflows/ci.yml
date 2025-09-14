@@ -41,16 +41,17 @@ jobs:
     strategy:
       matrix:
         target:
-          - wasm32-wasip1
           - wasm32-unknown-unknown
+          - wasm32-wasip1
 
     steps:
       - uses: actions/checkout@v5
 
-      - name: Install wasmtime
+      - name: Install wasmtime and wasm-bindgen-cli
         run: |
           curl https://wasmtime.dev/install.sh -sSf | bash
           echo "$HOME/.wasmtime/bin" >> $GITHUB_PATH
+          cargo install wasm-bindgen-cli
 
       - name: Add target
         run: rustup target add ${{ matrix.target }}
@@ -66,7 +67,7 @@ jobs:
 
       - name: Test individual features
         env:
-          CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasmtime
+          CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner
           CARGO_TARGET_WASM32_WASIP1_RUNNER: wasmtime
         run: cargo hack test --each-feature --target ${{ matrix.target }}
 
