@@ -26,14 +26,17 @@ jobs:
       - name: Install cargo-hack
         run: cargo install cargo-hack
 
+      - name: Build individual features
+        run: cargo hack build --each-feature
+
       - name: Test individual features
         run: cargo hack test --each-feature
 
       - name: Test with all features
         run: cargo test --all-features
 
-  build:
-    name: Build for target ${{ matrix.target }}
+  wasm:
+    name: Test on WASM for ${{ matrix.target }}
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -43,6 +46,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+
+      - name: Install wasmtime
+        run: |
+          curl https://wasmtime.dev/install.sh -sSf | bash
+          echo "$HOME/.wasmtime/bin" >> $GITHUB_PATH
 
       - name: Add target
         run: rustup target add ${{ matrix.target }}
@@ -55,6 +63,12 @@ jobs:
 
       - name: Build individual features
         run: cargo hack build --each-feature --target ${{ matrix.target }}
+
+      - name: Test individual features
+        env:
+          CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasmtime
+          CARGO_TARGET_WASM32_WASIP1_RUNNER: wasmtime
+        run: cargo hack test --each-feature --target ${{ matrix.target }}
 
   format:
     runs-on: ubuntu-latest
