@@ -27,7 +27,7 @@ const INFO_UINT32: u8 = 26;
 const INFO_UINT64: u8 = 27;
 
 /// Error is the failures that can occur while encoding or decoding CBOR data.
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
     InvalidMajorType(u8, u8),
     InvalidAdditionalInfo(u8),
