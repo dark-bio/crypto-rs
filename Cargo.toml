@@ -1,6 +1,6 @@
 [package]
 name = "darkbio-crypto"
-version = "0.8.5"
+version = "0.8.6"
 authors = ["Péter Szilágyi <peter@dark.bio>"]
 description = "Cryptography primitives and wrappers"
 repository = "https://github.com/dark-bio/crypto-rs"
@@ -17,7 +17,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 [features]
 default = []
 async = ["dep:futures"]
-cbor = ["dep:ciborium", "dep:serde"]
+cbor = ["dep:serde"]
 eddsa = ["dep:ed25519-dalek", "dep:sha2", "dep:signature"]
 hpke = ["dep:der", "dep:hpke", "dep:pem", "dep:pkcs8", "dep:rand", "dep:rand_chacha", "dep:sha2", "dep:spki"]
 rand = []
@@ -39,7 +39,6 @@ bcder = { version = "0.7.5", optional = true }
 bytes = { version = "1.10.1", optional = true }
 chacha20poly1305 = { version = "0.10.1", optional = true }
 chrono = { version = "0.4.41", optional = true }
-ciborium = { version = "0.2.2", optional = true }
 der = { version = "0.7.10", optional = true }
 ed25519-dalek = { version = "2.2.0", features = ["pem", "rand_core"], optional = true }
 futures = { version = "0.3", optional = true }
