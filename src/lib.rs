@@ -21,6 +21,9 @@ pub mod hpke;
 #[cfg(all(feature = "hpke", feature = "cert"))]
 pub mod hpke_cert;
 
+#[cfg(feature = "pbkdf2")]
+pub mod pbkdf2;
+
 #[cfg(feature = "rsa")]
 pub mod rsa;
 

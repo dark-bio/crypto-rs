@@ -366,7 +366,7 @@ dependencies = [
 
 [[package]]
 name = "darkbio-crypto"
-version = "0.8.6"
+version = "0.9.0"
 dependencies = [
  "age-core",
  "bcder",
@@ -381,6 +381,7 @@ dependencies = [
  "getrandom 0.3.3",
  "hex",
  "hpke",
+ "pbkdf2",
  "pem",
  "pin-project",
  "pkcs8",
@@ -972,6 +973,16 @@ checksum = "c9863ad85fa8f4460f9c48cb909d38a0d689dba1f6f6988a5e3e0d31071bcd4b"
 dependencies = [
  "elliptic-curve",
  "primeorder",
+]
+
+[[package]]
+name = "pbkdf2"
+version = "0.12.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8ed6a7761f76e3b9f92dfb0a60a6a6477c61024b775147ff0973a02653abaf2"
+dependencies = [
+ "digest",
+ "hmac",
 ]
 
 [[package]]

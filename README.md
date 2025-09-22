@@ -10,6 +10,7 @@ It contains the following crypto primitives and parameters:
 
 - **RSA** via `RSA2048`
 - **EdDSA** via `Ed25519`
+- **PBKDF2** via `HMAC` and `SHA256`
 - **STREAM** via `ChaCha20` and `Poly1305` at `16B` tags and `64KiB` chunks
 - **HPKE** via `X25519`, `HKDF`, `SHA256`, `ChaCha20` and `Poly1305` at `dark-bio-v1:` info prefix
 
@@ -27,6 +28,7 @@ The entire library is hidden behind feature flags:
 - `rsa` enables the RSA cryptography
 - `hpke` enables the HPKE cryptography
 - `eddsa` enables the EdDSA cryptography
+- `pbkdf2` enables the PBKDF2 cryptography
 - `stream` enables the STREAM cryptography
 - `cbor` enables the type-restricted CBOR codecs
 - `rand` enables the WASM friendly random generator
