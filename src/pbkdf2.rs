@@ -12,6 +12,11 @@ use sha2::Sha256;
 /// key derives a key from the password, salt and iteration count, returning a
 /// vector of length keylen that can be used as cryptographic key. The key is
 /// derived based on the method described as PBKDF2 with HMAC using SHA256.
+///
+/// Remember to get a good random salt. At least 8 bytes is recommended by the RFC.
+///
+/// Using a higher iteration count will increase the cost of an exhaustive search
+/// but will also make derivation proportionally slower.
 pub fn key(secret: &[u8], salt: &[u8], iterations: u32, keylen: usize) -> Vec<u8> {
     let mut seed = vec![0u8; keylen];
     pbkdf2_hmac::<Sha256>(secret, salt, iterations, &mut seed);
