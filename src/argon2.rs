@@ -16,7 +16,7 @@ use argon2::{Algorithm, Argon2, Params, Version};
 /// For example, you can get a derived key for e.g. AES-256 (which needs a
 /// 32-byte key) by doing:
 ///
-///      key := argon2::Key(b"some password", salt, 1, 64*1024, 4, 32)
+///   let key = argon2::key(b"password", b"salt", 1, 64*1024, 4, 32);
 ///
 /// [RFC 9106 Section 7.4] recommends time=1, and memory=2048*1024 as a sensible
 /// number. If using that amount of memory (2GB) is not possible in some contexts
