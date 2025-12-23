@@ -1,12 +1,12 @@
 [package]
 name = "darkbio-crypto"
-version = "0.10.0"
+version = "0.11.0"
 authors = ["Péter Szilágyi <peter@dark.bio>"]
 description = "Cryptography primitives and wrappers"
 repository = "https://github.com/dark-bio/crypto-rs"
 documentation = "https://docs.rs/darkbio-crypto"
 categories = ["cryptography", "encoding"]
-keywords = ["cbor", "ecc", "kdf", "rsa", "stream"]
+keywords = ["ecc", "kdf", "pq", "rsa", "stream"]
 license = "BSD-3-Clause"
 edition = "2024"
 
@@ -30,6 +30,7 @@ cert = [
 ]
 eddsa = ["dep:ed25519-dalek", "dep:sha2", "dep:signature"]
 hpke = ["dep:der", "dep:hpke", "dep:pem", "dep:pkcs8", "dep:rand", "dep:rand_chacha", "dep:sha2", "dep:spki"]
+mldsa = ["dep:der", "dep:ml-dsa", "dep:pem", "dep:pkcs8", "dep:sha2", "dep:spki"]
 rand = []
 rsa = ["dep:rsa", "dep:signature"]
 stream = ["dep:age-core", "dep:chacha20poly1305", "dep:pin-project", "dep:zeroize"]
@@ -41,8 +42,9 @@ bcder = { version = "0.7.5", optional = true }
 bytes = { version = "1.10.1", optional = true }
 chacha20poly1305 = { version = "0.10.1", optional = true }
 chrono = { version = "0.4.41", optional = true }
-der = { version = "0.7.10", optional = true }
+der = { version = "0.7.10", features = ["derive"], optional = true }
 ed25519-dalek = { version = "2.2.0", features = ["pem", "rand_core"], optional = true }
+ml-dsa = { version = "0.1.0-rc.2", features = ["rand_core"], optional = true }
 futures = { version = "0.3", optional = true }
 getrandom02 = { package = "getrandom", version = "0.2", features = ["js"] }
 getrandom = { version = "0.3.3", features = ["wasm_js"] }

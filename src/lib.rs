@@ -9,6 +9,9 @@
 // Enable the experimental doc_cfg feature
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
+#[cfg(feature = "argon2")]
+pub mod argon2;
+
 #[cfg(feature = "cbor")]
 pub mod cbor;
 
@@ -21,8 +24,8 @@ pub mod hpke;
 #[cfg(all(feature = "hpke", feature = "cert"))]
 pub mod hpke_cert;
 
-#[cfg(feature = "argon2")]
-pub mod argon2;
+#[cfg(feature = "mldsa")]
+pub mod mldsa;
 
 #[cfg(feature = "rsa")]
 pub mod rsa;
