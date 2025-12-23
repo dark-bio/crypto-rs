@@ -181,7 +181,7 @@ impl PublicKey {
         };
         let info = SubjectPublicKeyInfo::<AnyRef, BitStringRef> {
             algorithm: alg,
-            subject_public_key: BitStringRef::from_bytes(&bytes).unwrap(),
+            subject_public_key: BitStringRef::from_bytes(bytes).unwrap(),
         };
         info.to_der().unwrap()
     }
