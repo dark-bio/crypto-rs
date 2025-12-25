@@ -15,6 +15,9 @@ pub mod argon2;
 #[cfg(feature = "cbor")]
 pub mod cbor;
 
+#[cfg(feature = "cdsa")]
+pub mod cdsa;
+
 #[cfg(feature = "eddsa")]
 pub mod eddsa;
 

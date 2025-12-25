@@ -9,9 +9,10 @@ This repository is parameter selection and lightweight wrapper around a number o
 It contains the following crypto primitives and parameters:
 
 - **RSA** via `RSA2048`
+- **KDF** via `Argon2id`
 - **EdDSA** via `Ed25519`
 - **MLDSA** via `ML-DSA-65`
-- **Argon2** via hybrid `id`
+- **CDSA** via `ML-DSA-65`, `Ed25519` and `SHA512`
 - **STREAM** via `ChaCha20` and `Poly1305` at `16B` tags and `64KiB` chunks
 - **HPKE** via `X25519`, `HKDF`, `SHA256`, `ChaCha20` and `Poly1305` at `dark-bio-v1:` info prefix
 
@@ -30,6 +31,7 @@ The entire library is hidden behind feature flags:
 - `hpke` enables the HPKE cryptography
 - `eddsa` enables the EdDSA cryptography
 - `mldsa` enables the MLDSA cryptography
+- `cdsa` enables the CDSA cryptography, pulls in `eddsa` and `mldsa`
 - `argon2` enables the Argon2 key derivation
 - `stream` enables the STREAM cryptography
 - `cbor` enables the type-restricted CBOR codecs

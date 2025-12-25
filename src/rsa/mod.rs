@@ -14,8 +14,8 @@ use rsa::rand_core::OsRng;
 use rsa::sha2::{Digest, Sha256};
 use rsa::signature::hazmat::PrehashVerifier;
 use rsa::signature::{Keypair, SignatureEncoding, Signer, Verifier};
-use rsa::traits::PublicKeyParts;
-use rsa::{RsaPrivateKey, RsaPublicKey};
+use rsa::traits::{PrivateKeyParts, PublicKeyParts};
+use rsa::{BigUint, RsaPrivateKey, RsaPublicKey};
 
 /// SecretKey contains a 2048-bit RSA private key usable for signing, with SHA256
 /// as the underlying hash algorithm. Whilst RSA could also be used for encryption,
@@ -35,6 +35,22 @@ impl SecretKey {
         Self { inner: sig }
     }
 
+    /// from_bytes parses a 520-byte array into a private key.
+    ///
+    /// Format: p (128 bytes) || q (128 bytes) || d (256 bytes) || e (8 bytes),
+    /// all in big-endian.
+    pub fn from_bytes(bytes: &[u8; 520]) -> Self {
+        let p = BigUint::from_bytes_be(&bytes[0..128]);
+        let q = BigUint::from_bytes_be(&bytes[128..256]);
+        let d = BigUint::from_bytes_be(&bytes[256..512]);
+        let e = BigUint::from_bytes_be(&bytes[512..520]);
+
+        let n = &p * &q;
+        let key = RsaPrivateKey::from_components(n, e, d, vec![p, q]).unwrap();
+        let sig = rsa::pkcs1v15::SigningKey::<Sha256>::new(key);
+        Self { inner: sig }
+    }
+
     /// from_der parses a DER buffer into a private key.
     pub fn from_der(der: &[u8]) -> Result<Self, Error> {
         let inner = rsa::pkcs1v15::SigningKey::<Sha256>::from_pkcs8_der(der)?;
@@ -47,7 +63,32 @@ impl SecretKey {
         Ok(Self { inner })
     }
 
-    /// to_der serializes a public key into a DER buffer.
+    /// to_bytes serializes a private key into a 520-byte array.
+    ///
+    /// Format: p (128 bytes) || q (128 bytes) || d (256 bytes) || e (8 bytes),
+    /// all in big-endian.
+    pub fn to_bytes(&self) -> [u8; 520] {
+        let key: &RsaPrivateKey = self.inner.as_ref();
+        let primes = key.primes();
+
+        let mut out = [0u8; 520];
+
+        let p_bytes = primes[0].to_bytes_be();
+        out[128 - p_bytes.len()..128].copy_from_slice(&p_bytes);
+
+        let q_bytes = primes[1].to_bytes_be();
+        out[256 - q_bytes.len()..256].copy_from_slice(&q_bytes);
+
+        let d_bytes = key.d().to_bytes_be();
+        out[512 - d_bytes.len()..512].copy_from_slice(&d_bytes);
+
+        let e_bytes = key.e().to_bytes_be();
+        out[520 - e_bytes.len()..520].copy_from_slice(&e_bytes);
+
+        out
+    }
+
+    /// to_der serializes a private key into a DER buffer.
     pub fn to_der(&self) -> Vec<u8> {
         rsa::pkcs1v15::SigningKey::<Sha256>::to_pkcs8_der(&self.inner)
             .unwrap()
@@ -91,6 +132,18 @@ pub struct PublicKey {
 }
 
 impl PublicKey {
+    /// from_bytes parses a 264-byte array into a public key.
+    ///
+    /// Format: n (256 bytes) || e (8 bytes), all in big-endian.
+    pub fn from_bytes(bytes: &[u8; 264]) -> Self {
+        let n = BigUint::from_bytes_be(&bytes[0..256]);
+        let e = BigUint::from_bytes_be(&bytes[256..264]);
+
+        let key = RsaPublicKey::new(n, e).unwrap();
+        let inner = rsa::pkcs1v15::VerifyingKey::<Sha256>::new(key);
+        Self { inner }
+    }
+
     /// from_der parses a DER buffer into a public key.
     pub fn from_der(der: &[u8]) -> Result<Self, Error> {
         let inner = rsa::pkcs1v15::VerifyingKey::<Sha256>::from_public_key_der(der)?;
@@ -101,6 +154,23 @@ impl PublicKey {
     pub fn from_pem(pem: &str) -> Result<Self, Error> {
         let inner = rsa::pkcs1v15::VerifyingKey::<Sha256>::from_public_key_pem(pem)?;
         Ok(Self { inner })
+    }
+
+    /// to_bytes serializes a public key into a 264-byte array.
+    ///
+    /// Format: n (256 bytes) || e (8 bytes), all in big-endian.
+    pub fn to_bytes(&self) -> [u8; 264] {
+        let key: &RsaPublicKey = self.inner.as_ref();
+
+        let mut out = [0u8; 264];
+
+        let n_bytes = key.n().to_bytes_be();
+        out[256 - n_bytes.len()..256].copy_from_slice(&n_bytes);
+
+        let e_bytes = key.e().to_bytes_be();
+        out[264 - e_bytes.len()..264].copy_from_slice(&e_bytes);
+
+        out
     }
 
     /// to_der serializes a public key into a DER buffer.

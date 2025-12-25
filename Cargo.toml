@@ -19,6 +19,7 @@ default = []
 argon2 = ["dep:argon2"]
 async = ["dep:futures"]
 cbor = ["dep:serde"]
+cdsa = ["eddsa", "mldsa"]
 cert = [
     "eddsa",
     "dep:bcder",
@@ -67,6 +68,7 @@ x509-parser = { version = "0.18.0", optional = true }
 zeroize = { version = "1.8.1", optional = true }
 
 [dev-dependencies]
+base64 = "0.22"
 futures-test = "0.3"
-hex = "0.4.3"
+hex = "0.4"
 tokio = { version = "1.0", features = ["rt", "macros"] }

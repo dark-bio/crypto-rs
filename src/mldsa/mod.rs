@@ -8,7 +8,6 @@
 
 use der::asn1::OctetString;
 use der::{Decode, Encode, Sequence};
-use ml_dsa::signature::{Signer, Verifier};
 use ml_dsa::{EncodedVerifyingKey, MlDsa65};
 use pkcs8::PrivateKeyInfo;
 use sha2::Digest;
@@ -39,6 +38,23 @@ impl SecretKey {
 
         let inner = ml_dsa::SigningKey::<MlDsa65>::from_seed(&seed);
         Self { inner, seed }
+    }
+
+    /// from_seed creates a private key from a 32-byte seed.
+    pub fn from_seed(seed: &[u8; 32]) -> Self {
+        let array = ml_dsa::Seed::try_from(seed.as_slice()).unwrap();
+        let inner = ml_dsa::SigningKey::<MlDsa65>::from_seed(&array);
+        Self { inner, seed: array }
+    }
+
+    /// from_bytes creates a private key from a 4032-byte expanded key.
+    pub fn from_bytes(bytes: &[u8; 4032]) -> Self {
+        let enc = ml_dsa::EncodedSigningKey::<MlDsa65>::try_from(bytes.as_slice()).unwrap();
+        let inner = ml_dsa::SigningKey::<MlDsa65>::decode(&enc);
+        Self {
+            inner,
+            seed: ml_dsa::Seed::default(),
+        }
     }
 
     /// from_der parses a DER buffer into a private key.
@@ -77,11 +93,28 @@ impl SecretKey {
 
     /// from_pem parses a PEM string into a private key.
     pub fn from_pem(pem: &str) -> Result<Self, Box<dyn Error>> {
+        // Crack open the PEM to get to the private key info
         let res = pem::parse(pem.as_bytes())?;
         if res.tag() != "PRIVATE KEY" {
             return Err(format!("invalid PEM tag {}", res.tag()).into());
         }
+        // Parse the DER content
         Self::from_der(res.contents())
+    }
+
+    /// to_seed returns the 32-byte seed of the private key.
+    pub fn to_seed(&self) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        out.copy_from_slice(self.seed.as_slice());
+        out
+    }
+
+    /// to_bytes converts a secret key into a 4032-byte array.
+    pub fn to_bytes(&self) -> [u8; 4032] {
+        let enc = self.inner.encode();
+        let mut out = [0u8; 4032];
+        out.copy_from_slice(enc.as_slice());
+        out
     }
 
     /// to_der serializes a private key into a DER buffer.
@@ -131,9 +164,13 @@ impl SecretKey {
         self.public_key().fingerprint()
     }
 
-    /// sign creates a digital signature of the message.
-    pub fn sign(&self, message: &[u8]) -> Vec<u8> {
-        self.inner.sign(message).encode().to_vec()
+    /// sign creates a digital signature of the message with an optional context string.
+    pub fn sign(&self, message: &[u8], ctx: &[u8]) -> Vec<u8> {
+        self.inner
+            .sign_deterministic(message, ctx)
+            .unwrap()
+            .encode()
+            .to_vec()
     }
 }
 
@@ -144,6 +181,13 @@ pub struct PublicKey {
 }
 
 impl PublicKey {
+    /// from_bytes converts a 1952-byte array into a public key.
+    pub fn from_bytes(bytes: &[u8; 1952]) -> Self {
+        let enc = EncodedVerifyingKey::<MlDsa65>::try_from(bytes.as_slice()).unwrap();
+        let inner = ml_dsa::VerifyingKey::<MlDsa65>::decode(&enc);
+        Self { inner }
+    }
+
     /// from_der parses a DER buffer into a public key.
     pub fn from_der(der: &[u8]) -> Result<Self, Box<dyn Error>> {
         let info: SubjectPublicKeyInfo<AlgorithmIdentifier<AnyRef>, BitStringRef> =
@@ -169,6 +213,14 @@ impl PublicKey {
             return Err(format!("invalid PEM tag {}", res.tag()).into());
         }
         Self::from_der(res.contents())
+    }
+
+    /// to_bytes converts a public key into a 1952-byte array.
+    pub fn to_bytes(&self) -> [u8; 1952] {
+        let enc = self.inner.encode();
+        let mut out = [0u8; 1952];
+        out.copy_from_slice(enc.as_slice());
+        out
     }
 
     /// to_der serializes a public key into a DER buffer.
@@ -204,10 +256,19 @@ impl PublicKey {
         hasher.finalize().into()
     }
 
-    /// verify verifies a digital signature.
-    pub fn verify(&self, message: &[u8], signature: &[u8]) -> Result<(), ml_dsa::Error> {
+    /// verify verifies a digital signature with an optional context string.
+    pub fn verify(
+        &self,
+        message: &[u8],
+        ctx: &[u8],
+        signature: &[u8],
+    ) -> Result<(), ml_dsa::Error> {
         let sig = ml_dsa::Signature::<MlDsa65>::try_from(signature)?;
-        self.inner.verify(message, &sig)
+        if self.inner.verify_with_context(message, ctx, &sig) {
+            Ok(())
+        } else {
+            Err(ml_dsa::Error::default())
+        }
     }
 }
 
@@ -628,19 +689,32 @@ dbdfd1dd95f38d72218ceeae2461974019c705ef7d2d16a56e7b50a0cd51
         // Run a bunch of different authentication/encryption combinations
         struct TestCase<'a> {
             message: &'a [u8],
+            ctx: &'a [u8],
         }
-        let tests = [TestCase {
-            message: b"message to authenticate",
-        }];
+        let tests = [
+            TestCase {
+                message: b"message to authenticate",
+                ctx: b"",
+            },
+            TestCase {
+                message: b"message to authenticate",
+                ctx: b"application context",
+            },
+        ];
 
         for tt in &tests {
-            // Sign the message using the test case data
-            let signature = secret.sign(tt.message);
-
-            // Verify the signature message
+            // Sign and verify the message
+            let signature = secret.sign(tt.message, tt.ctx);
             public
-                .verify(tt.message, signature.as_slice())
-                .unwrap_or_else(|e| panic!("failed to verify message: {}", e));
+                .verify(tt.message, tt.ctx, signature.as_slice())
+                .unwrap();
+
+            // Verify wrong context fails
+            assert!(
+                public
+                    .verify(tt.message, b"wrong context", signature.as_slice())
+                    .is_err()
+            );
         }
     }
 }
