@@ -43,6 +43,7 @@ impl SecretKey {
 
     /// from_der parses a DER buffer into a private key.
     pub fn from_der(der: &[u8]) -> Result<Self, Box<dyn Error>> {
+        // Parse the DER encoded container
         let info = PrivateKeyInfo::from_der(der)?;
 
         // Ensure the algorithm OID matches ML_DSA_65 (OID: 2.16.840.1.101.3.4.3.18)

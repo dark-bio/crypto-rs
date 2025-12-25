@@ -108,7 +108,7 @@ impl SecretKey {
             oid: ObjectIdentifier::new_unwrap("1.3.101.110"),
             parameters: None::<AnyRef>,
         };
-        // The private key info is simply the BITSTRING of the pubkey
+        // The private key info is simply the BITSTRING of the key
         let info = PrivateKeyInfo {
             algorithm: alg,
             private_key: &encoded.to_der().unwrap(),
