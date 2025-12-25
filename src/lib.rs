@@ -21,12 +21,6 @@ pub mod eddsa;
 #[cfg(feature = "hpke")]
 pub mod hpke;
 
-#[cfg(feature = "hpke")]
-pub mod hpke_xwing;
-
-#[cfg(all(feature = "hpke", feature = "cert"))]
-pub mod hpke_cert;
-
 #[cfg(feature = "mldsa")]
 pub mod mldsa;
 

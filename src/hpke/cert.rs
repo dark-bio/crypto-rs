@@ -7,7 +7,7 @@
 //! HPKE + x509 cryptography wrappers and parametrization.
 
 use crate::eddsa;
-use crate::hpke::PublicKey;
+use super::PublicKey;
 use bcder::Mode;
 use bcder::encode::Values;
 use bytes::Bytes;

@@ -10,6 +10,11 @@
 // keep our all-caps abbreviations.
 #![allow(clippy::upper_case_acronyms)]
 
+pub mod xwing;
+
+#[cfg(feature = "cert")]
+pub mod cert;
+
 use hpke::rand_core::SeedableRng;
 use hpke::{Deserializable, HpkeError, Kem, Serializable};
 use pkcs8::PrivateKeyInfo;
