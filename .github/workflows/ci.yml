@@ -68,6 +68,7 @@ jobs:
         if: matrix.target != 'wasm32-unknown-unknown'
         env:
           CARGO_TARGET_WASM32_WASIP1_RUNNER: wasmtime
+          RUSTFLAGS: -C link-arg=-zstack-size=8388608
         run: cargo hack test --each-feature --target ${{ matrix.target }}
 
   format:
