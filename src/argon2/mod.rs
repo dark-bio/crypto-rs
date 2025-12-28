@@ -5,6 +5,8 @@
 // license that can be found in the LICENSE file.
 
 //! Argon2id cryptography wrappers and parametrization.
+//!
+//! https://datatracker.ietf.org/doc/html/rfc9106
 
 use argon2::{Algorithm, Argon2, Params, Version};
 

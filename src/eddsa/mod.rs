@@ -5,6 +5,8 @@
 // license that can be found in the LICENSE file.
 
 //! EdDSA cryptography wrappers and parametrization.
+//!
+//! https://datatracker.ietf.org/doc/html/rfc8032
 
 use ed25519_dalek::ed25519::signature::rand_core::OsRng;
 use ed25519_dalek::pkcs8::spki::der::pem::LineEnding;

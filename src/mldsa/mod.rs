@@ -5,6 +5,8 @@
 // license that can be found in the LICENSE file.
 
 //! ML-DSA cryptography wrappers and parametrization.
+//!
+//! https://datatracker.ietf.org/doc/html/draft-ietf-lamps-dilithium-certificates
 
 use der::asn1::OctetString;
 use der::{Decode, Encode, Sequence};

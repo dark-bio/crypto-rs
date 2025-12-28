@@ -6,6 +6,8 @@
 
 //! Tiny CBOR encoder and decoder.
 //!
+//! https://datatracker.ietf.org/doc/html/rfc8949
+//!
 //! This is an implementation of the CBOR spec with an extremely reduced type
 //! system, focusing on security rather than flexibility or completeness. The
 //! following types are supported:
