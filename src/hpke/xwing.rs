@@ -5,6 +5,8 @@
 // license that can be found in the LICENSE file.
 
 //! X-Wing KEM implementation for HPKE.
+//!
+//! https://datatracker.ietf.org/doc/html/draft-connolly-cfrg-xwing-kem
 
 use generic_array::GenericArray;
 use generic_array::typenum::operator_aliases::Sum;
