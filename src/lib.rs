@@ -15,14 +15,8 @@ pub mod argon2;
 #[cfg(feature = "cbor")]
 pub mod cbor;
 
-#[cfg(feature = "cdsa")]
-pub mod cdsa;
-
 #[cfg(feature = "eddsa")]
 pub mod eddsa;
-
-#[cfg(feature = "hpke")]
-pub mod hpke;
 
 #[cfg(feature = "mldsa")]
 pub mod mldsa;
@@ -33,5 +27,12 @@ pub mod rsa;
 #[cfg(feature = "rand")]
 pub mod rand;
 
+mod crypto;
 #[cfg(feature = "stream")]
 pub mod stream;
+
+#[cfg(feature = "xdsa")]
+pub mod xdsa;
+
+#[cfg(feature = "xhpke")]
+pub mod xhpke;

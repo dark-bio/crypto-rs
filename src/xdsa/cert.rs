@@ -4,10 +4,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//! HPKE + x509 cryptography wrappers and parametrization.
-
-use super::PublicKey;
-use crate::cdsa;
+use crate::xdsa::{PublicKey, SecretKey};
 use bcder::Mode;
 use bcder::Oid;
 use bcder::encode::Values;
@@ -26,10 +23,7 @@ impl PublicKey {
     /// from_cert_pem parses a public key out of a PEM encoded, authenticated
     /// certificate, verifying the signature and returning both the key, and the
     /// validity interval.
-    pub fn from_cert_pem(
-        pem: &str,
-        signer: cdsa::PublicKey,
-    ) -> Result<(Self, u64, u64), Box<dyn Error>> {
+    pub fn from_cert_pem(pem: &str, signer: PublicKey) -> Result<(Self, u64, u64), Box<dyn Error>> {
         let (_, der) = x509_parser::pem::parse_x509_pem(pem.as_bytes())?;
         PublicKey::from_cert_der(der.contents.as_slice(), signer)
     }
@@ -39,7 +33,7 @@ impl PublicKey {
     /// validity interval.
     pub fn from_cert_der(
         der: &[u8],
-        signer: cdsa::PublicKey,
+        signer: PublicKey,
     ) -> Result<(Self, u64, u64), Box<dyn Error>> {
         // Parse the certificate
         let (_, cert) = x509_parser::parse_x509_certificate(der)?;
@@ -54,16 +48,15 @@ impl PublicKey {
             .map_err(|_| "invalid signature length")?;
         signer.verify(tbs, &sig)?;
 
-        // Extract the embedded public key
-        let pk_bytes: [u8; 1216] = cert
-            .tbs_certificate
-            .subject_pki
-            .subject_public_key
-            .data
-            .as_ref()
-            .try_into()?;
-        let key = PublicKey::from_bytes(&pk_bytes);
-
+        // Extract the embedded public key (ML-DSA-65 1952 bytes || Ed25519 32 bytes)
+        let key = PublicKey::from_bytes(
+            cert.tbs_certificate
+                .subject_pki
+                .subject_public_key
+                .data
+                .as_ref()
+                .try_into()?,
+        );
         // Extract the validity period
         let start = cert.tbs_certificate.validity.not_before.timestamp() as u64;
         let until = cert.tbs_certificate.validity.not_after.timestamp() as u64;
@@ -76,7 +69,7 @@ impl PublicKey {
     /// Note, this method is only for testing, most of the contained data will be
     /// junk; and also the produces certificate is not fully spec-adhering:
     ///   <https://github.com/indygreg/cryptography-rs/issues/26>
-    pub fn to_test_cert_pem(&self, start: u64, until: u64, signer: cdsa::SecretKey) -> String {
+    pub fn to_test_cert_pem(&self, start: u64, until: u64, signer: SecretKey) -> String {
         self.to_test_cert(start, until, signer)
             .encode_pem()
             .unwrap()
@@ -87,7 +80,7 @@ impl PublicKey {
     /// Note, this method is only for testing, most of the contained data will be
     /// junk; and also the produces certificate is not fully spec-adhering:
     ///   <https://github.com/indygreg/cryptography-rs/issues/26>
-    pub fn to_test_cert_der(&self, start: u64, until: u64, signer: cdsa::SecretKey) -> Vec<u8> {
+    pub fn to_test_cert_der(&self, start: u64, until: u64, signer: SecretKey) -> Vec<u8> {
         self.to_test_cert(start, until, signer)
             .encode_der()
             .unwrap()
@@ -98,7 +91,7 @@ impl PublicKey {
     /// Note, this method is only for testing, most of the contained data will be
     /// junk; and also the produced certificate is not fully spec-adhering:
     ///   <https://github.com/indygreg/cryptography-rs/issues/26>
-    pub fn to_test_cert(&self, start: u64, until: u64, signer: cdsa::SecretKey) -> X509Certificate {
+    pub fn to_test_cert(&self, start: u64, until: u64, signer: SecretKey) -> X509Certificate {
         // Create the composite algorithm identifier (no parameters)
         let composite_oid = Oid(Bytes::from_static(CERT_OID));
         let composite_alg = AlgorithmIdentifier {
@@ -153,31 +146,66 @@ impl PublicKey {
 
 #[cfg(test)]
 mod test {
-    use crate::cdsa;
-    use crate::hpke::{PublicKey, SecretKey};
+    use crate::xdsa::{PublicKey, SecretKey};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     // Tests that certificates can be created (for testing purposes) and then
     // parsed and verified.
     #[test]
     fn test_cert_parse() {
-        // Create the keys for Alice (HPKE) and Bobby (CDSA signer)
+        // Create the keys for Alice (subject) and Bobby (issuer)
         let alice_secret = SecretKey::generate();
-        let bobby_secret = cdsa::SecretKey::generate();
+        let bobby_secret = SecretKey::generate();
         let alice_public = alice_secret.public_key();
         let bobby_public = bobby_secret.public_key();
 
-        // Create a certificate for Alice, signed by Bobby
+        // Create a certificate for alice, signed by bobby
         let start = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
         let until = start + 3600;
 
+        // Test PEM roundtrip
         let pem = alice_public.to_test_cert_pem(start, until, bobby_secret.clone());
-        PublicKey::from_cert_pem(pem.as_str(), bobby_public.clone()).unwrap();
+        let (parsed_key, parsed_start, parsed_until) =
+            PublicKey::from_cert_pem(pem.as_str(), bobby_public.clone()).unwrap();
+        assert_eq!(parsed_key.to_bytes(), alice_public.to_bytes());
+        assert_eq!(parsed_start, start);
+        assert_eq!(parsed_until, until);
 
+        println!("{}", pem);
+
+        // Test DER roundtrip
         let der = alice_public.to_test_cert_der(start, until, bobby_secret.clone());
-        PublicKey::from_cert_der(der.as_slice(), bobby_public.clone()).unwrap();
+        let (parsed_key, parsed_start, parsed_until) =
+            PublicKey::from_cert_der(der.as_slice(), bobby_public.clone()).unwrap();
+        assert_eq!(parsed_key.to_bytes(), alice_public.to_bytes());
+        assert_eq!(parsed_start, start);
+        assert_eq!(parsed_until, until);
+    }
+
+    // Tests that certificates signed by one key cannot be verified by another.
+    #[test]
+    fn test_cert_invalid_signer() {
+        // Create the keys for Alice (subject), Bobby (issuer) and Wrong (3rd party)
+        let alice_secret = SecretKey::generate();
+        let bobby_secret = SecretKey::generate();
+        let wrong_secret = SecretKey::generate();
+
+        let alice_public = alice_secret.public_key();
+
+        // Create a certificate for alice, signed by bobby
+        let start = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let until = start + 3600;
+
+        // Sign a new certificate and verify with the wrong signer
+        let pem = alice_public.to_test_cert_pem(start, until, bobby_secret);
+
+        let result = PublicKey::from_cert_pem(pem.as_str(), wrong_secret.public_key());
+        assert!(result.is_err());
     }
 }
