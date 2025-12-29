@@ -14,7 +14,6 @@
 
 pub mod xwing;
 
-#[cfg(feature = "cert")]
 pub mod cert;
 
 use hpke::rand_core::SeedableRng;

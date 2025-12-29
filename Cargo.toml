@@ -19,18 +19,9 @@ default = []
 argon2 = ["dep:argon2"]
 async = ["dep:futures"]
 cbor = ["dep:serde"]
-cdsa = ["eddsa", "mldsa"]
-cert = [
-    "eddsa",
-    "dep:bcder",
-    "dep:bytes",
-    "dep:chrono",
-    "dep:ring",
-    "dep:x509-certificate",
-    "dep:x509-parser",
-]
+cdsa = ["eddsa", "mldsa", "dep:bcder", "dep:bytes", "dep:chrono", "dep:ring", "dep:x509-certificate", "dep:x509-parser"]
 eddsa = ["dep:ed25519-dalek", "dep:sha2", "dep:signature"]
-hpke = ["dep:der", "dep:generic-array", "dep:hpke", "dep:pem", "dep:pkcs8", "dep:rand", "dep:rand_chacha", "dep:sha2", "dep:spki", "dep:x-wing"]
+hpke = ["eddsa", "dep:bcder", "dep:bytes", "dep:chrono", "dep:der", "dep:generic-array", "dep:hpke", "dep:pem", "dep:pkcs8", "dep:rand", "dep:rand_chacha", "dep:ring", "dep:sha2", "dep:spki", "dep:x-wing", "dep:x509-certificate", "dep:x509-parser"]
 mldsa = ["dep:der", "dep:ml-dsa", "dep:pem", "dep:pkcs8", "dep:sha2", "dep:spki"]
 rand = []
 rsa = ["dep:rsa", "dep:signature"]
@@ -68,7 +59,6 @@ x509-parser = { version = "0.18.0", optional = true }
 zeroize = { version = "1.8.1", optional = true }
 
 [dev-dependencies]
-base64 = "0.22"
 futures-test = "0.3"
 hex = "0.4"
 tokio = { version = "1.0", features = ["rt", "macros"] }

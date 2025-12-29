@@ -13,6 +13,9 @@ This repository is parameter selection and lightweight wrapper around a number o
   - **RSA ([RFC-8017](https://datatracker.ietf.org/doc/html/rfc8017))**: 2048-bit, `SHA256`
 - Encryption
   - **HPKE ([RFC-9180](https://datatracker.ietf.org/doc/html/rfc9180))**: `X25519`, `HKDF`, `SH256`, `ChaCha20`, `Poly1305`, `dark-bio-v1:` prefix
+    - **X-WING ([RFC-DRAFT](https://datatracker.ietf.org/doc/html/draft-connolly-cfrg-xwing-kem))**: `X25519`, `ML-KEM-768`
+      - **ECC ([RFC-7748](https://datatracker.ietf.org/doc/html/rfc7748))**: `X25519`
+      - **MLKEM([RFC-DRAFT](https://datatracker.ietf.org/doc/html/draft-ietf-ipsecme-ikev2-mlkem))**: `ML-KEM-768`
   - **STREAM (*RFC N/A*)**: `ChaCha20`, `Poly1305`, `16B` tag, `64KB` chunk
 - Key derivation
   - **Argon2 ([RFC-9106](https://datatracker.ietf.org/doc/html/rfc9106))**: `id` variant

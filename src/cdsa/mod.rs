@@ -8,6 +8,8 @@
 //!
 //! https://datatracker.ietf.org/doc/html/draft-ietf-lamps-pq-composite-sigs
 
+mod cert;
+
 use crate::{eddsa, mldsa};
 use der::asn1::BitStringRef;
 use der::{AnyRef, Decode, Encode};
