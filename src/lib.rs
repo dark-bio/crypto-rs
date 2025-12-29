@@ -27,7 +27,6 @@ pub mod rsa;
 #[cfg(feature = "rand")]
 pub mod rand;
 
-mod crypto;
 #[cfg(feature = "stream")]
 pub mod stream;
 
@@ -36,3 +35,6 @@ pub mod xdsa;
 
 #[cfg(feature = "xhpke")]
 pub mod xhpke;
+
+#[cfg(feature = "xutil")]
+pub mod xutil;

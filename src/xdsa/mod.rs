@@ -157,7 +157,7 @@ impl SecretKey {
     }
 
     /// sign creates a digital signature of the message.
-    pub fn sign(&self, message: &[u8]) -> Vec<u8> {
+    pub fn sign(&self, message: &[u8]) -> [u8; 3373] {
         // Construct M' = Prefix || Label || len(ctx) || ctx || PH(M)
         // where ctx is empty and PH is SHA512
         let mut hasher = sha2::Sha512::new();
@@ -176,9 +176,9 @@ impl SecretKey {
         let ed_sig = self.ed_key.sign(&m_prime);
 
         // Concatenate: ML-DSA-65 (3309 bytes) || Ed25519 (64 bytes)
-        let mut sig = Vec::with_capacity(3309 + 64);
-        sig.extend_from_slice(&ml_sig);
-        sig.extend_from_slice(&ed_sig);
+        let mut sig = [0u8; 3373];
+        sig[..3309].copy_from_slice(&ml_sig);
+        sig[3309..].copy_from_slice(&ed_sig);
         sig
     }
 }

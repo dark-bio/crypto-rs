@@ -74,7 +74,7 @@ impl PublicKey {
     /// to_test_cert_pem generates a PEM encoded certificate out of a public key.
     ///
     /// Note, this method is only for testing, most of the contained data will be
-    /// junk; and also the produces certificate is not fully spec-adhering:
+    /// junk; and also the produced certificate is not fully spec-adhering:
     ///   <https://github.com/indygreg/cryptography-rs/issues/26>
     pub fn to_test_cert_pem(&self, start: u64, until: u64, signer: xdsa::SecretKey) -> String {
         self.to_test_cert(start, until, signer)
@@ -85,7 +85,7 @@ impl PublicKey {
     /// to_test_cert_der generates a DER encoded certificate out of a public key.
     ///
     /// Note, this method is only for testing, most of the contained data will be
-    /// junk; and also the produces certificate is not fully spec-adhering:
+    /// junk; and also the produced certificate is not fully spec-adhering:
     ///   <https://github.com/indygreg/cryptography-rs/issues/26>
     pub fn to_test_cert_der(&self, start: u64, until: u64, signer: xdsa::SecretKey) -> Vec<u8> {
         self.to_test_cert(start, until, signer)
