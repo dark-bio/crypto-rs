@@ -429,6 +429,7 @@ dependencies = [
  "getrandom 0.2.16",
  "getrandom 0.3.4",
  "hex",
+ "hkdf",
  "hpke",
  "ml-dsa",
  "pem",

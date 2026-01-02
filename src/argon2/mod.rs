@@ -11,14 +11,14 @@
 use argon2::{Algorithm, Argon2, Params, Version};
 
 /// Key derives a key from the password, salt, and cost parameters using
-/// Argon2id returning a byte slice of length keyLen that can be used as
+/// Argon2id returning a fixed-size byte array that can be used as a
 /// cryptographic key. The CPU cost and parallelism degree must be greater
 /// than zero.
 ///
 /// For example, you can get a derived key for e.g. AES-256 (which needs a
 /// 32-byte key) by doing:
 ///
-///   let key = argon2::key(b"password", b"salt", 1, 64*1024, 4, 32);
+///   let key: [u8; 32] = argon2::key(b"password", b"salt", 1, 64*1024, 4);
 ///
 /// [RFC 9106 Section 7.4] recommends time=1, and memory=2048*1024 as a sensible
 /// number. If using that amount of memory (2GB) is not possible in some contexts
@@ -31,18 +31,17 @@ use argon2::{Algorithm, Argon2, Params, Version};
 /// good random salt.
 ///
 /// [RFC 9106 Section 7.4]: https://www.rfc-editor.org/rfc/rfc9106.html#section-7.4
-pub fn key(
+pub fn key<const N: usize>(
     password: &[u8],
     salt: &[u8],
     time: u32,
     memory: u32,
     threads: u32,
-    keylen: usize,
-) -> Vec<u8> {
-    let params = Params::new(memory, time, threads, Some(keylen)).expect("invalid Argon2 params");
+) -> [u8; N] {
+    let params = Params::new(memory, time, threads, Some(N)).expect("invalid Argon2 params");
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
 
-    let mut output = vec![0u8; keylen];
+    let mut output = [0u8; N];
     argon2
         .hash_password_into(password, salt, &mut output)
         .expect("Argon2 hashing failed");
@@ -117,10 +116,10 @@ mod tests {
         let password = b"password";
         let salt = b"somesalt";
 
-        for (_, v) in tests.iter().enumerate() {
+        for v in tests {
             let want = hex::decode(v.hash).unwrap();
-            let have = key(password, salt, v.time, v.memory, v.threads, want.len());
-            assert_eq!(have, want);
+            let have: [u8; 24] = key(password, salt, v.time, v.memory, v.threads);
+            assert_eq!(have.as_slice(), want.as_slice());
         }
     }
 }

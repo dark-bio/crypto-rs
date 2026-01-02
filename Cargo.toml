@@ -20,6 +20,7 @@ argon2 = ["dep:argon2"]
 async = ["dep:futures"]
 cbor = []
 eddsa = ["dep:ed25519-dalek", "dep:sha2", "dep:signature"]
+hkdf = ["dep:hkdf", "dep:sha2"]
 mldsa = ["dep:der", "dep:ml-dsa", "dep:pem", "dep:pkcs8", "dep:sha2", "dep:spki"]
 rand = []
 rsa = ["dep:rsa", "dep:signature"]
@@ -41,6 +42,7 @@ ed25519-dalek = { version = "2.2.0", features = ["pem", "rand_core"], optional =
 ml-dsa = { version = "0.1.0-rc.2", features = ["rand_core"], optional = true }
 futures = { version = "0.3", optional = true }
 generic-array = { version = "0.14.7", optional = true }
+hkdf = { version = "0.12.4", optional = true }
 getrandom02 = { package = "getrandom", version = "0.2", features = ["js"] }
 getrandom = { version = "0.3.3", features = ["wasm_js"] }
 hpke = { version = "0.13.0", features = ["std"], optional = true }

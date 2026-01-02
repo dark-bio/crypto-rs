@@ -12,6 +12,9 @@
 #[cfg(feature = "argon2")]
 pub mod argon2;
 
+#[cfg(feature = "hkdf")]
+pub mod hkdf;
+
 #[cfg(feature = "cbor")]
 pub mod cbor;
 

@@ -23,6 +23,7 @@ This repository is parameter selection and lightweight wrapper around a number o
   - **STREAM (*RFC N/A*)**: `ChaCha20`, `Poly1305`, `16B` tag, `64KB` chunk
 - Key derivation
   - **Argon2 ([RFC-9106](https://datatracker.ietf.org/doc/html/rfc9106))**: `id` variant
+  - **HKDF ([RFC-5869](https://datatracker.ietf.org/doc/html/rfc5869))**: `SHA256`
 - Serialization
   - **CBOR ([RFC-8949](https://datatracker.ietf.org/doc/html/rfc8949))**: restricted to `integer`, `text`, `bytes`, `array`
 
