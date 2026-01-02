@@ -83,11 +83,12 @@ fn make_aki_ext(public_key: &[u8]) -> Extension {
         ctx.finish()
     };
     // Encode the issuer extension value
-    let mut buf = Vec::new();
-    buf.push(0x30); // SEQUENCE tag
-    buf.push(22); // length (context tag + length + 20 bytes)
-    buf.push(0x80); // context tag [0] implicit
-    buf.push(20); // length
+    let mut buf = vec![
+        0x30, // SEQUENCE tag
+        22,   // length (context tag + length + 20 bytes)
+        0x80, // context tag [0] implicit
+        20,   // length
+    ];
     buf.extend_from_slice(id.as_ref());
 
     Extension {

@@ -6,6 +6,8 @@
 
 This repository is parameter selection and lightweight wrapper around a number of Rust cryptographic libraries. Its purpose isn't to implement primitives, rather to unify the API surface of existing libraries; limited to the tiny subset needed by the Dark Bio project.
 
+- Certificates
+  - **x509 ([RFC-5280](https://datatracker.ietf.org/doc/html/rfc5280))**: `xDSA`, `xHPKE`
 - Digital signatures
   - **xDSA ([RFC-DRAFT](https://datatracker.ietf.org/doc/html/draft-ietf-lamps-pq-composite-sigs))**: `MLDSA`, `EdDSA`, `SHA512`
     - **EdDSA ([RFC-8032](https://datatracker.ietf.org/doc/html/rfc8032))**: `Ed25519`
