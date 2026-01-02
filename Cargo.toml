@@ -24,7 +24,8 @@ mldsa = ["dep:der", "dep:ml-dsa", "dep:pem", "dep:pkcs8", "dep:sha2", "dep:spki"
 rand = []
 rsa = ["dep:rsa", "dep:signature"]
 stream = ["dep:age-core", "dep:chacha20poly1305", "dep:pin-project", "dep:zeroize"]
-xdsa = ["eddsa", "mldsa", "dep:bcder", "dep:bytes", "dep:chrono", "dep:ring", "dep:x509-certificate", "dep:x509-parser"]
+x509 = ["xdsa", "dep:bcder", "dep:bytes", "dep:chrono", "dep:ring", "dep:x509-certificate"]
+xdsa = ["eddsa", "mldsa", "x509", "dep:x509-parser"]
 xhpke = ["xdsa", "dep:generic-array", "dep:hpke", "dep:rand", "dep:rand_chacha", "dep:x-wing"]
 xutil = ["cbor", "xhpke"]
 

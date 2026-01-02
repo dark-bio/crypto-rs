@@ -43,7 +43,8 @@ fn main() {
     let alice_xdsa_public = alice_xdsa_secret.public_key();
 
     // Create a certificate for Alice's xDSA key, signed by the root
-    let alice_xdsa_cert = alice_xdsa_public.to_test_cert_pem(now, end, root_secret.clone());
+    let alice_xdsa_cert =
+        alice_xdsa_public.to_cert_pem("Alice Identity", "Root", now, end, &root_secret);
     println!(
         "   Alice xDSA fingerprint: {}",
         hex::encode(&alice_xdsa_public.fingerprint())
@@ -57,7 +58,7 @@ fn main() {
     let bob_xdsa_public = bob_xdsa_secret.public_key();
 
     // Create a certificate for Bob's xDSA key, signed by the root
-    let bob_xdsa_cert = bob_xdsa_public.to_test_cert_pem(now, end, root_secret.clone());
+    let bob_xdsa_cert = bob_xdsa_public.to_cert_pem("Bob Identity", "Root", now, end, &root_secret);
     println!(
         "   Bob xDSA fingerprint: {}",
         hex::encode(&bob_xdsa_public.fingerprint())
@@ -71,7 +72,8 @@ fn main() {
     let alice_xhpke_public = alice_xhpke_secret.public_key();
 
     // Create a certificate for Alice's HPKE key, signed by her xDSA key
-    let alice_xhpke_cert = alice_xhpke_public.to_test_cert_pem(now, end, alice_xdsa_secret.clone());
+    let alice_xhpke_cert =
+        alice_xhpke_public.to_cert_pem("Alice Encryption", "Alice", now, end, &alice_xdsa_secret);
     println!(
         "   Alice xHPKE fingerprint: {}",
         hex::encode(&alice_xhpke_public.fingerprint())
@@ -85,7 +87,8 @@ fn main() {
     let bob_xhpke_public = bob_xhpke_secret.public_key();
 
     // Create a certificate for Bob's HPKE key, signed by his xDSA key
-    let bob_xhpke_cert = bob_xhpke_public.to_test_cert_pem(now, end, bob_xdsa_secret.clone());
+    let bob_xhpke_cert =
+        bob_xhpke_public.to_cert_pem("Bob Encryption", "Bob", now, end, &bob_xdsa_secret);
     println!(
         "   Bob xHPKE fingerprint: {}",
         hex::encode(&bob_xhpke_public.fingerprint())

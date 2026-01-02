@@ -30,6 +30,9 @@ pub mod rand;
 #[cfg(feature = "stream")]
 pub mod stream;
 
+#[cfg(feature = "x509")]
+pub mod x509;
+
 #[cfg(feature = "xdsa")]
 pub mod xdsa;
 
