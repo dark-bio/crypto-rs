@@ -13,7 +13,7 @@
 //! 4. Verifying identity chains through the root
 //! 5. Sign and encrypt a message, then decrypt and verify on the other side
 
-use darkbio_crypto::{xdsa, xhpke, xutil};
+use darkbio_crypto::{x509, xdsa, xhpke, xutil};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn main() {
@@ -42,9 +42,16 @@ fn main() {
     let alice_xdsa_secret = xdsa::SecretKey::generate();
     let alice_xdsa_public = alice_xdsa_secret.public_key();
 
-    // Create a certificate for Alice's xDSA key, signed by the root
-    let alice_xdsa_cert =
-        alice_xdsa_public.to_cert_pem("Alice Identity", "Root", now, end, &root_secret);
+    // Create a certificate for Alice's xDSA key, signed by the root (intermediate CA)
+    let alice_xdsa_params = x509::Params {
+        subject_name: "Alice Identity",
+        issuer_name: "Root",
+        not_before: now,
+        not_after: end,
+        is_ca: true,
+        path_len: Some(0),
+    };
+    let alice_xdsa_cert = alice_xdsa_public.to_cert_pem(&root_secret, &alice_xdsa_params);
     println!(
         "   Alice xDSA fingerprint: {}",
         hex::encode(&alice_xdsa_public.fingerprint())
@@ -57,8 +64,16 @@ fn main() {
     let bob_xdsa_secret = xdsa::SecretKey::generate();
     let bob_xdsa_public = bob_xdsa_secret.public_key();
 
-    // Create a certificate for Bob's xDSA key, signed by the root
-    let bob_xdsa_cert = bob_xdsa_public.to_cert_pem("Bob Identity", "Root", now, end, &root_secret);
+    // Create a certificate for Bob's xDSA key, signed by the root (intermediate CA)
+    let bob_xdsa_params = x509::Params {
+        subject_name: "Bob Identity",
+        issuer_name: "Root",
+        not_before: now,
+        not_after: end,
+        is_ca: true,
+        path_len: Some(0),
+    };
+    let bob_xdsa_cert = bob_xdsa_public.to_cert_pem(&root_secret, &bob_xdsa_params);
     println!(
         "   Bob xDSA fingerprint: {}",
         hex::encode(&bob_xdsa_public.fingerprint())
@@ -72,8 +87,15 @@ fn main() {
     let alice_xhpke_public = alice_xhpke_secret.public_key();
 
     // Create a certificate for Alice's HPKE key, signed by her xDSA key
-    let alice_xhpke_cert =
-        alice_xhpke_public.to_cert_pem("Alice Encryption", "Alice", now, end, &alice_xdsa_secret);
+    let alice_xhpke_params = x509::Params {
+        subject_name: "Alice Encryption",
+        issuer_name: "Alice",
+        not_before: now,
+        not_after: end,
+        is_ca: false,
+        path_len: None,
+    };
+    let alice_xhpke_cert = alice_xhpke_public.to_cert_pem(&alice_xdsa_secret, &alice_xhpke_params);
     println!(
         "   Alice xHPKE fingerprint: {}",
         hex::encode(&alice_xhpke_public.fingerprint())
@@ -87,8 +109,15 @@ fn main() {
     let bob_xhpke_public = bob_xhpke_secret.public_key();
 
     // Create a certificate for Bob's HPKE key, signed by his xDSA key
-    let bob_xhpke_cert =
-        bob_xhpke_public.to_cert_pem("Bob Encryption", "Bob", now, end, &bob_xdsa_secret);
+    let bob_xhpke_params = x509::Params {
+        subject_name: "Bob Encryption",
+        issuer_name: "Bob",
+        not_before: now,
+        not_after: end,
+        is_ca: false,
+        path_len: None,
+    };
+    let bob_xhpke_cert = bob_xhpke_public.to_cert_pem(&bob_xdsa_secret, &bob_xhpke_params);
     println!(
         "   Bob xHPKE fingerprint: {}",
         hex::encode(&bob_xhpke_public.fingerprint())
