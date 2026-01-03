@@ -742,10 +742,10 @@ fn verify_object(decoder: &mut Decoder) -> Result<(), Error> {
                 let key = decoder.decode_int()?;
 
                 // Verify deterministic ordering
-                if let Some(prev) = prev_key {
-                    if map_key_cmp(prev, key) != Ordering::Less {
-                        return Err(Error::InvalidMapKeyOrder(key, prev));
-                    }
+                if let Some(prev) = prev_key
+                    && map_key_cmp(prev, key) != Ordering::Less
+                {
+                    return Err(Error::InvalidMapKeyOrder(key, prev));
                 }
                 prev_key = Some(key);
 
