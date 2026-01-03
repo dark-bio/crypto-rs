@@ -398,6 +398,7 @@ dependencies = [
  "fiat-crypto 0.3.0",
  "rustc_version",
  "subtle",
+ "zeroize",
 ]
 
 [[package]]
@@ -442,6 +443,7 @@ dependencies = [
  "sha2",
  "signature 2.2.0",
  "spki 0.7.3",
+ "subtle",
  "thiserror",
  "tokio",
  "x-wing",
@@ -1007,6 +1009,7 @@ dependencies = [
  "rand_core 0.9.3",
  "sha3",
  "subtle",
+ "zeroize",
 ]
 
 [[package]]
@@ -1933,6 +1936,7 @@ dependencies = [
  "rand_core 0.9.3",
  "sha3",
  "x25519-dalek 3.0.0-pre.0",
+ "zeroize",
 ]
 
 [[package]]
@@ -1953,6 +1957,7 @@ checksum = "d2a76f35d0d6fa96ffc48330f09dc230cd6bdc118b0fce43c25085ced5d72c6b"
 dependencies = [
  "curve25519-dalek 5.0.0-pre.0",
  "rand_core 0.9.3",
+ "zeroize",
 ]
 
 [[package]]

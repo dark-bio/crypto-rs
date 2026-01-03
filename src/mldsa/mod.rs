@@ -17,6 +17,8 @@ use spki::der::AnyRef;
 use spki::der::asn1::BitStringRef;
 use spki::{AlgorithmIdentifier, ObjectIdentifier, SubjectPublicKeyInfo};
 use std::error::Error;
+use subtle::ConstantTimeEq;
+use zeroize::Zeroize;
 
 /// OpenSSL ML-DSA-65 private key inner structure.
 #[derive(Clone, Debug, Eq, PartialEq, Sequence)]
@@ -30,6 +32,12 @@ struct MlDsa65PrivateKeyInner {
 pub struct SecretKey {
     inner: ml_dsa::SigningKey<MlDsa65>,
     seed: ml_dsa::Seed,
+}
+
+impl Drop for SecretKey {
+    fn drop(&mut self) {
+        self.seed.zeroize();
+    }
 }
 
 impl SecretKey {
@@ -87,7 +95,7 @@ impl SecretKey {
         // Generate key from seed and validate it matches the expanded key in DER
         let inner = ml_dsa::SigningKey::<MlDsa65>::from_seed(&seed);
         let enc = inner.encode();
-        if enc.as_slice() != expanded {
+        if enc.as_slice().ct_ne(&expanded).into() {
             return Err("expanded key does not match seed".into());
         }
         Ok(Self { inner, seed })

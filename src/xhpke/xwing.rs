@@ -14,6 +14,7 @@ use generic_array::typenum::{U32, U96, U192, U1024};
 use hpke::kem::SharedSecret;
 use hpke::rand_core::{CryptoRng, RngCore};
 use hpke::{Deserializable, HpkeError, Serializable};
+use subtle::ConstantTimeEq;
 use x_wing::{Decapsulate, Encapsulate};
 
 // X-Wing KEM ID as per draft-connolly-cfrg-xwing-kem-09 Section 7.
@@ -26,7 +27,7 @@ pub struct SecretKey(x_wing::DecapsulationKey);
 impl PartialEq for SecretKey {
     /// Tests for `self` and `other` values to be equal, and is used by `==`.
     fn eq(&self, other: &Self) -> bool {
-        self.0.as_bytes() == other.0.as_bytes()
+        self.0.as_bytes().ct_eq(other.0.as_bytes()).into()
     }
 }
 
@@ -155,14 +156,13 @@ impl hpke::Kem for Kem {
 
     /// Deterministically derives a keypair from the given input keying material.
     ///
-    /// This keying material SHOULD have as many bits of entropy as the bit length
-    /// of a secret key, i.e., `8 * Self::PrivateKey::size()`. For X-Wing this is
-    /// 256 bits of entropy.
+    /// This keying material MUST be exactly 32 bytes (256 bits of entropy).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `ikm` is not exactly 32 bytes.
     fn derive_keypair(ikm: &[u8]) -> (Self::PrivateKey, Self::PublicKey) {
-        // X-Wing derives keys from 32 bytes of randomness
-        let mut seed = [0u8; 32];
-        let len = std::cmp::min(ikm.len(), 32);
-        seed[..len].copy_from_slice(&ikm[..len]);
+        let seed: [u8; 32] = ikm.try_into().unwrap();
 
         let sk = x_wing::DecapsulationKey::from(seed);
         let pk = sk.encapsulation_key();
