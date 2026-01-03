@@ -12,12 +12,14 @@
 //! system, focusing on security rather than flexibility or completeness. The
 //! following types are supported:
 //! - 64bit positive integers: u64
+//! - 64bit signed integers:   i64
 //! - UTF-8 text strings:      String, &str
 //! - Byte strings:            Vec<u8>, &[u8], [u8; N]
 //! - Arrays:                  (), (X,), (X,Y), ... tuples
 
 // Supported CBOR major types
 const MAJOR_UINT: u8 = 0;
+const MAJOR_NINT: u8 = 1;
 const MAJOR_BYTES: u8 = 2;
 const MAJOR_TEXT: u8 = 3;
 const MAJOR_ARRAY: u8 = 4;
@@ -39,6 +41,7 @@ pub enum Error {
     TrailingBytes,
     UnexpectedItemCount(u64, usize),
     UnsupportedType(u8),
+    IntegerOverflow(u64, u64, bool),
 }
 
 impl std::fmt::Display for Error {
@@ -67,6 +70,10 @@ impl std::fmt::Display for Error {
             }
             Error::UnsupportedType(t) => {
                 write!(f, "unsupported type: {}", t)
+            }
+            Error::IntegerOverflow(v, max, negative) => {
+                let sign = if *negative { "negative" } else { "positive" };
+                write!(f, "{} integer overflow: {} exceeds max {}", sign, v, max)
             }
         }
     }
@@ -116,8 +123,16 @@ impl Encoder {
 
     // encode_uint encodes a positive integer into its canonical shortest-form.
     pub fn encode_uint(&mut self, value: u64) {
-        // Piggyback on the length encoder to avoid duplicating code
         self.encode_length(MAJOR_UINT, value);
+    }
+
+    // encode_int encodes a signed integer into its canonical shortest-form.
+    pub fn encode_int(&mut self, value: i64) {
+        if value >= 0 {
+            self.encode_length(MAJOR_UINT, value as u64);
+        } else {
+            self.encode_length(MAJOR_NINT, (-1 - value) as u64);
+        }
     }
 
     // encode_bytes encodes an opaque byte string.
@@ -194,12 +209,31 @@ impl<'a> Decoder<'a> {
 
     // decode_uint decodes a positive integer, enforcing minimal canonicalness.
     pub fn decode_uint(&mut self) -> Result<u64, Error> {
-        // Extract the field type and attached value
         let (major, value) = self.decode_header()?;
         if major != MAJOR_UINT {
             return Err(Error::InvalidMajorType(major, MAJOR_UINT));
         }
         Ok(value)
+    }
+
+    // decode_int decodes a signed integer (major type 0 or 1).
+    pub fn decode_int(&mut self) -> Result<i64, Error> {
+        let (major, value) = self.decode_header()?;
+        match major {
+            MAJOR_UINT => {
+                if value > i64::MAX as u64 {
+                    return Err(Error::IntegerOverflow(value, i64::MAX as u64, false));
+                }
+                Ok(value as i64)
+            }
+            MAJOR_NINT => {
+                if value > i64::MAX as u64 {
+                    return Err(Error::IntegerOverflow(value, i64::MAX as u64, true));
+                }
+                Ok(-1 - value as i64)
+            }
+            _ => Err(Error::InvalidMajorType(major, MAJOR_UINT)),
+        }
     }
 
     // decode_bytes decodes a byte string.
@@ -364,6 +398,28 @@ impl Decode for u64 {
 
     fn decode_cbor_notrail(decoder: &mut Decoder<'_>) -> Result<Self, Error> {
         decoder.decode_uint()
+    }
+}
+
+// Encoder and decoder implementation for signed integers.
+impl Encode for i64 {
+    fn encode_cbor(&self) -> Vec<u8> {
+        let mut encoder = Encoder::new();
+        encoder.encode_int(*self);
+        encoder.finish()
+    }
+}
+
+impl Decode for i64 {
+    fn decode_cbor(data: &[u8]) -> Result<Self, Error> {
+        let mut decoder = Decoder::new(data);
+        let value = decoder.decode_int()?;
+        decoder.finish()?;
+        Ok(value)
+    }
+
+    fn decode_cbor_notrail(decoder: &mut Decoder<'_>) -> Result<Self, Error> {
+        decoder.decode_int()
     }
 }
 
@@ -581,9 +637,10 @@ fn verify_object(decoder: &mut Decoder) -> Result<(), Error> {
     let (major, value) = decoder.decode_header()?;
 
     match major {
-        MAJOR_UINT => {
-            // Positive integers are always valid (canonicalness was already
-            // verified in the header decoding)
+        MAJOR_UINT | MAJOR_NINT => {
+            // Integers are valid (canonicalness was already verified in the
+            // header decoding). Overflow checking is done at decode time based
+            // on the target type (u64 vs i64).
             Ok(())
         }
         MAJOR_BYTES => {
@@ -745,6 +802,115 @@ mod tests {
             let mut data = vec![MAJOR_UINT << 5 | INFO_UINT64];
             data.extend_from_slice(&value.to_be_bytes());
             assert!(decode::<u64>(&data).is_err());
+        }
+    }
+
+    // Tests that signed integers encode correctly across the various ranges.
+    #[test]
+    fn test_int_encoding() {
+        let cases = [
+            // Positive values use major type 0
+            (0i64, vec![0x00]),
+            (23i64, vec![0x17]),
+            (24i64, vec![0x18, 0x18]),
+            (
+                i64::MAX,
+                vec![0x1b, 0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff],
+            ),
+            // Negative values use major type 1 with (-1 - n) encoding
+            (-1i64, vec![0x20]),               // -1 -> wire value 0
+            (-24i64, vec![0x37]),              // -24 -> wire value 23
+            (-25i64, vec![0x38, 0x18]),        // -25 -> wire value 24
+            (-256i64, vec![0x38, 0xff]),       // -256 -> wire value 255
+            (-257i64, vec![0x39, 0x01, 0x00]), // -257 -> wire value 256
+            (
+                i64::MIN,
+                vec![0x3b, 0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff],
+            ),
+        ];
+
+        for (value, expected) in cases {
+            assert_eq!(
+                encode(&value),
+                expected,
+                "encoding failed for value {}",
+                value
+            );
+        }
+    }
+
+    // Tests that signed integers decode correctly across the various ranges.
+    #[test]
+    fn test_int_decoding() {
+        let cases = [
+            // Positive values (major type 0)
+            (vec![0x00], 0i64),
+            (vec![0x17], 23i64),
+            (vec![0x18, 0x18], 24i64),
+            (
+                vec![0x1b, 0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff],
+                i64::MAX,
+            ),
+            // Negative values (major type 1)
+            (vec![0x20], -1i64),
+            (vec![0x37], -24i64),
+            (vec![0x38, 0x18], -25i64),
+            (vec![0x38, 0xff], -256i64),
+            (vec![0x39, 0x01, 0x00], -257i64),
+            (
+                vec![0x3b, 0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff],
+                i64::MIN,
+            ),
+        ];
+
+        for (data, expected) in cases {
+            assert_eq!(
+                decode::<i64>(&data).unwrap(),
+                expected,
+                "decoding failed for data {:?}",
+                data
+            );
+        }
+    }
+
+    // Tests that signed integers are rejected for overflow conditions.
+    #[test]
+    fn test_int_rejection() {
+        // Positive value > i64::MAX (major type 0 with value i64::MAX + 1)
+        let mut data = vec![MAJOR_UINT << 5 | INFO_UINT64];
+        data.extend_from_slice(&((i64::MAX as u64) + 1).to_be_bytes());
+        let result = decode::<i64>(&data);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            Error::IntegerOverflow(v, max, negative) => {
+                assert_eq!(v, 9223372036854775808);
+                assert_eq!(max, 9223372036854775807);
+                assert!(!negative);
+            }
+            other => panic!("Expected IntegerOverflow error, got {:?}", other),
+        }
+
+        // Negative value < i64::MIN (major type 1 with wire value > i64::MAX)
+        let mut data = vec![MAJOR_NINT << 5 | INFO_UINT64];
+        data.extend_from_slice(&((i64::MAX as u64) + 1).to_be_bytes());
+        let result = decode::<i64>(&data);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            Error::IntegerOverflow(v, max, negative) => {
+                assert_eq!(v, 9223372036854775808);
+                assert_eq!(max, 9223372036854775807);
+                assert!(negative);
+            }
+            other => panic!("Expected IntegerOverflow error, got {:?}", other),
+        }
+
+        // Non-canonical negative integer encoding
+        let data = vec![MAJOR_NINT << 5 | INFO_UINT8, 0x10]; // -17 with INFO_UINT8
+        let result = decode::<i64>(&data);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            Error::NonCanonical => {}
+            other => panic!("Expected NonCanonical error, got {:?}", other),
         }
     }
 
@@ -1009,10 +1175,21 @@ mod tests {
     fn test_verify() {
         // Valid types should pass
         assert!(verify(&encode(&42u64)).is_ok());
+        assert!(verify(&encode(&-42i64)).is_ok());
         assert!(verify(&encode(&"hello")).is_ok());
         assert!(verify(&encode(&vec![1u8, 2, 3])).is_ok());
         assert!(verify(&encode(&())).is_ok());
         assert!(verify(&encode(&(42u64, "test"))).is_ok());
+        assert!(verify(&encode(&(-42i64, "test"))).is_ok());
+
+        // Large integers are valid at verify time (overflow is checked at decode)
+        let mut large_uint = vec![MAJOR_UINT << 5 | INFO_UINT64];
+        large_uint.extend_from_slice(&u64::MAX.to_be_bytes());
+        assert!(verify(&large_uint).is_ok());
+
+        let mut large_nint = vec![MAJOR_NINT << 5 | INFO_UINT64];
+        large_nint.extend_from_slice(&u64::MAX.to_be_bytes());
+        assert!(verify(&large_nint).is_ok());
 
         // Trailing bytes
         let mut bad_data = encode(&42u64);
@@ -1021,14 +1198,6 @@ mod tests {
         match verify(&bad_data).unwrap_err() {
             Error::TrailingBytes => {}
             other => panic!("Expected TrailingBytes error, got {:?}", other),
-        }
-
-        // Major type 1 (negative integers) - unsupported
-        let negative_int = vec![0x20]; // -1 in CBOR
-        assert!(verify(&negative_int).is_err());
-        match verify(&negative_int).unwrap_err() {
-            Error::UnsupportedType(1) => {}
-            other => panic!("Expected UnsupportedType(1) error, got {:?}", other),
         }
 
         // Major type 5 (maps) - unsupported
