@@ -16,6 +16,10 @@
 //! - UTF-8 text strings:      String, &str
 //! - Byte strings:            Vec<u8>, &[u8], [u8; N]
 //! - Arrays:                  (), (X,), (X,Y), ... tuples
+//! - Maps:                    HashMap<i64, V>
+
+use std::cmp::Ordering;
+use std::collections::HashMap;
 
 // Supported CBOR major types
 const MAJOR_UINT: u8 = 0;
@@ -23,6 +27,7 @@ const MAJOR_NINT: u8 = 1;
 const MAJOR_BYTES: u8 = 2;
 const MAJOR_TEXT: u8 = 3;
 const MAJOR_ARRAY: u8 = 4;
+const MAJOR_MAP: u8 = 5;
 
 // Additional info values
 const INFO_UINT8: u8 = 24;
@@ -51,6 +56,10 @@ pub enum Error {
     UnsupportedType(u8),
     #[error("{sign} integer overflow: {value} exceeds max {max}", sign = if *.0 { "negative" } else { "positive" }, value = .1, max = .2)]
     IntegerOverflow(bool, u64, u64),
+    #[error("duplicate map key: {0}")]
+    DuplicateMapKey(i64),
+    #[error("invalid map key order: {0} must come before {1}")]
+    InvalidMapKeyOrder(i64, i64),
 }
 
 /// encode attempts to encode a generic Rust value to CBOR using the tiny, strict
@@ -127,6 +136,11 @@ impl Encoder {
     // encode_empty_tuple special cases the empty tuple to encode as [].
     pub fn encode_empty_tuple(&mut self) {
         self.encode_array_header(0);
+    }
+
+    // encode_map_header encodes a map size.
+    pub fn encode_map_header(&mut self, len: usize) {
+        self.encode_length(MAJOR_MAP, len as u64);
     }
 
     // encode_length encodes a major type, injecting an unsigned integer after,
@@ -256,6 +270,16 @@ impl<'a> Decoder<'a> {
         let (major, len) = self.decode_header()?;
         if major != MAJOR_ARRAY {
             return Err(Error::InvalidMajorType(major, MAJOR_ARRAY));
+        }
+        Ok(len)
+    }
+
+    // decode_map_header decodes a map header, returning the number of key-value pairs.
+    pub fn decode_map_header(&mut self) -> Result<u64, Error> {
+        // Extract the field type and attached length
+        let (major, len) = self.decode_header()?;
+        if major != MAJOR_MAP {
+            return Err(Error::InvalidMajorType(major, MAJOR_MAP));
         }
         Ok(len)
     }
@@ -603,6 +627,80 @@ mod tuple_impls {
     impl_tuple!(T1, T2, T3, T4, T5, T6, T7, T8);
 }
 
+// map_key_cmp compares two i64 keys according to CBOR deterministic encoding
+// order (RFC 8949 Section 4.2.1): bytewise lexicographic order of encoded keys.
+//
+// For integers this means: positive integers (0, 1, 2, ...) come before negative
+// integers (-1, -2, -3, ...), and within each category they're ordered by their
+// encoded length first, then by value.
+fn map_key_cmp(a: i64, b: i64) -> Ordering {
+    fn encode_key(k: i64) -> Vec<u8> {
+        let mut enc = Encoder::new();
+        enc.encode_int(k);
+        enc.finish()
+    }
+    encode_key(a).cmp(&encode_key(b))
+}
+
+// Encoder and decoder implementation for maps with integer keys.
+impl<V: Encode> Encode for HashMap<i64, V> {
+    fn encode_cbor(&self) -> Vec<u8> {
+        let mut encoder = Encoder::new();
+
+        // Collect and sort keys in CBOR deterministic order
+        let mut entries: Vec<_> = self.iter().collect();
+        entries.sort_by(|(a, _), (b, _)| map_key_cmp(**a, **b));
+
+        // Encode map header and key-value pairs
+        encoder.encode_map_header(entries.len());
+        for (key, value) in entries {
+            encoder.encode_int(*key);
+            encoder.buf.extend_from_slice(&value.encode_cbor());
+        }
+        encoder.finish()
+    }
+}
+
+impl<V: Encode> Encode for &HashMap<i64, V> {
+    fn encode_cbor(&self) -> Vec<u8> {
+        (*self).encode_cbor()
+    }
+}
+
+impl<V: Decode> Decode for HashMap<i64, V> {
+    fn decode_cbor(data: &[u8]) -> Result<Self, Error> {
+        let mut decoder = Decoder::new(data);
+        let result = Self::decode_cbor_notrail(&mut decoder)?;
+        decoder.finish()?;
+        Ok(result)
+    }
+
+    fn decode_cbor_notrail(decoder: &mut Decoder<'_>) -> Result<Self, Error> {
+        let len = decoder.decode_map_header()?;
+
+        // Cap pre-allocation to prevent DoS via malicious length values
+        let mut map = HashMap::with_capacity(std::cmp::min(len as usize, 1024));
+        let mut prev_key: Option<i64> = None;
+
+        for _ in 0..len {
+            let key = decoder.decode_int()?;
+
+            // Verify deterministic ordering and no duplicates
+            if let Some(prev) = prev_key {
+                match map_key_cmp(prev, key) {
+                    Ordering::Equal => return Err(Error::DuplicateMapKey(key)),
+                    Ordering::Greater => return Err(Error::InvalidMapKeyOrder(key, prev)),
+                    Ordering::Less => {}
+                }
+            }
+            let value = V::decode_cbor_notrail(decoder)?;
+            map.insert(key, value);
+            prev_key = Some(key);
+        }
+        Ok(map)
+    }
+}
+
 // verify_object is an internal function to verify a single CBOR item without
 // full deserialization.
 fn verify_object(decoder: &mut Decoder) -> Result<(), Error> {
@@ -630,6 +728,28 @@ fn verify_object(decoder: &mut Decoder) -> Result<(), Error> {
             // Recursively verify each array element
             let len = value as usize;
             for _ in 0..len {
+                verify_object(decoder)?;
+            }
+            Ok(())
+        }
+        MAJOR_MAP => {
+            // Verify map has integer keys in deterministic order
+            let len = value as usize;
+            let mut prev_key: Option<i64> = None;
+
+            for _ in 0..len {
+                // Decode and verify the key is an integer
+                let key = decoder.decode_int()?;
+
+                // Verify deterministic ordering
+                if let Some(prev) = prev_key {
+                    if map_key_cmp(prev, key) != Ordering::Less {
+                        return Err(Error::InvalidMapKeyOrder(key, prev));
+                    }
+                }
+                prev_key = Some(key);
+
+                // Recursively verify the value
                 verify_object(decoder)?;
             }
             Ok(())
@@ -1142,6 +1262,153 @@ mod tests {
         }
     }
 
+    // Tests that maps encode correctly with deterministic key ordering.
+    #[test]
+    fn test_map_encoding() {
+        // Empty map
+        let encoded = encode(&HashMap::<i64, i64>::new());
+        assert_eq!(encoded, vec![0xa0]); // major 5, length 0
+
+        // Single entry map
+        let encoded = encode(&HashMap::from([(1i64, 42u64)]));
+        assert_eq!(encoded, vec![0xa1, 0x01, 0x18, 0x2a]); // {1: 42}
+
+        // Map with positive keys (should be in ascending order)
+        let encoded = encode(&HashMap::from([
+            (3i64, "c".to_string()),
+            (1, "a".to_string()),
+            (2, "b".to_string()),
+        ]));
+
+        assert_eq!(encoded[0], 0xa3); // map with 3 entries
+
+        assert_eq!(encoded[1], 0x01); // key 1
+        assert_eq!(encoded[2], 0x61);
+        assert_eq!(encoded[3], b'a');
+
+        assert_eq!(encoded[4], 0x02); // key 2
+        assert_eq!(encoded[5], 0x61);
+        assert_eq!(encoded[6], b'b');
+
+        assert_eq!(encoded[7], 0x03); // key 3
+        assert_eq!(encoded[8], 0x61);
+        assert_eq!(encoded[9], b'c');
+
+        // Map with both positive and negative keys
+        let encoded = encode(&HashMap::from([
+            (-1i64, 100u64),
+            (0, 200),
+            (1, 300),
+            (-2, 400),
+        ]));
+
+        assert_eq!(encoded[0], 0xa4); // map with 4 entries
+
+        assert_eq!(encoded[1], 0x00); // Key 0 (0x00), value 200 (0x18 0xc8)
+        assert_eq!(encoded[2], 0x18);
+        assert_eq!(encoded[3], 200);
+
+        assert_eq!(encoded[4], 0x01); // Key 1 (0x01), value 300 (0x19 0x01 0x2c)
+        assert_eq!(encoded[5], 0x19);
+        assert_eq!(u16::from_be_bytes([encoded[6], encoded[7]]), 300);
+
+        assert_eq!(encoded[8], 0x20); // Key -1 (0x20), value 100 (0x18 0x64)
+        assert_eq!(encoded[9], 0x18);
+        assert_eq!(encoded[10], 100);
+
+        assert_eq!(encoded[11], 0x21); // Key -2 (0x21), value 400 (0x19 0x01 0x90)
+        assert_eq!(encoded[12], 0x19);
+        assert_eq!(u16::from_be_bytes([encoded[13], encoded[14]]), 400);
+
+        // Nested maps
+        let encoded = encode(&HashMap::from([(0i64, HashMap::from([(1i64, 42u64)]))]));
+        assert_eq!(encoded, vec![0xa1, 0x00, 0xa1, 0x01, 0x18, 0x2a]);
+    }
+
+    // Tests that maps decode correctly.
+    #[test]
+    fn test_map_decoding() {
+        // Empty map
+        let decoded = decode::<HashMap<i64, u64>>(&vec![0xa0]).unwrap();
+        assert!(decoded.is_empty());
+
+        // Single entry
+        let decoded = decode::<HashMap<i64, u64>>(&vec![0xa1, 0x01, 0x18, 0x2a]).unwrap();
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(decoded.get(&1), Some(&42));
+
+        // Multiple entries (in correct deterministic order)
+        let decoded = decode::<HashMap<i64, u64>>(&vec![
+            0xa3, // map with 3 entries
+            0x01, 0x18, 0x2a, // 1: 42
+            0x02, 0x18, 0x43, // 2: 67
+            0x20, 0x18, 0x64, // -1: 100
+        ])
+        .unwrap();
+        assert_eq!(decoded.len(), 3);
+        assert_eq!(decoded.get(&1), Some(&42));
+        assert_eq!(decoded.get(&2), Some(&67));
+        assert_eq!(decoded.get(&-1), Some(&100));
+
+        // Nested maps
+        let decoded =
+            decode::<HashMap<i64, HashMap<i64, u64>>>(&vec![0xa1, 0x00, 0xa1, 0x01, 0x18, 0x2a])
+                .unwrap();
+        assert_eq!(decoded.get(&0).unwrap().get(&1), Some(&42));
+    }
+
+    // Tests that maps with invalid key ordering are rejected.
+    #[test]
+    fn test_map_rejection() {
+        // Keys out of order: 2 before 1
+        let result = decode::<HashMap<i64, u64>>(&vec![
+            0xa2, // map with 2 entries
+            0x02, 0x18, 0x2a, // 2: 42
+            0x01, 0x18, 0x43, // 1: 67 (should come before 2)
+        ]);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            Error::InvalidMapKeyOrder(1, 2) => {}
+            other => panic!("Expected InvalidMapKeyOrder error, got {:?}", other),
+        }
+        // Negative before positive
+        let result = decode::<HashMap<i64, u64>>(&vec![
+            0xa2, // map with 2 entries
+            0x20, 0x18, 0x2a, // -1: 42
+            0x01, 0x18, 0x43, // 1: 67 (should come before -1)
+        ]);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            Error::InvalidMapKeyOrder(1, -1) => {}
+            other => panic!("Expected InvalidMapKeyOrder error, got {:?}", other),
+        }
+        // Duplicate keys
+        let result = decode::<HashMap<i64, u64>>(&vec![
+            0xa2, // map with 2 entries
+            0x01, 0x18, 0x2a, // 1: 42
+            0x01, 0x18, 0x43, // 1: 67 (duplicate)
+        ]);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            Error::DuplicateMapKey(1) => {}
+            other => panic!("Expected DuplicateMapKey error, got {:?}", other),
+        }
+        // Duplicate keys AND out of order. This could be either an invalid key
+        // order error or a duplicate key error. Either works, pick one of them
+        // to enforce.
+        let result = decode::<HashMap<i64, u64>>(&vec![
+            0xa3, // map with 3 entries
+            0x01, 0x18, 0x2a, // 1: 42
+            0x02, 0x18, 0x43, // 2: 67
+            0x01, 0x18, 0x54, // 1: 84 (duplicate AND out of order)
+        ]);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            Error::InvalidMapKeyOrder(1, 2) => {}
+            other => panic!("Expected InvalidMapKeyOrder error, got {:?}", other),
+        }
+    }
+
     // Tests that the dry-decoding verifier properly restricts the allowed types.
     #[test]
     fn test_verify() {
@@ -1153,6 +1420,14 @@ mod tests {
         assert!(verify(&encode(&())).is_ok());
         assert!(verify(&encode(&(42u64, "test"))).is_ok());
         assert!(verify(&encode(&(-42i64, "test"))).is_ok());
+        assert!(verify(&encode(&HashMap::from([(1i64, "b".to_string())]))).is_ok());
+        assert!(
+            verify(&encode(&HashMap::from([(
+                0i64,
+                HashMap::from([(1i64, 42u64)])
+            )])))
+            .is_ok()
+        );
 
         // Large integers are valid at verify time (overflow is checked at decode)
         let mut large_uint = vec![MAJOR_UINT << 5 | INFO_UINT64];
@@ -1172,12 +1447,15 @@ mod tests {
             other => panic!("Expected TrailingBytes error, got {:?}", other),
         }
 
-        // Major type 5 (maps) - unsupported
-        let map_data = vec![0xa1, 0x61, 0x61, 0x61, 0x62]; // {"a": "b"}
-        assert!(verify(&map_data).is_err());
-        match verify(&map_data).unwrap_err() {
-            Error::UnsupportedType(5) => {}
-            other => panic!("Expected UnsupportedType(5) error, got {:?}", other),
+        // Maps with string keys are rejected (key decoding fails)
+        let map_str_key = vec![0xa1, 0x61, 0x61, 0x61, 0x62]; // {"a": "b"}
+        assert!(verify(&map_str_key).is_err());
+        match verify(&map_str_key).unwrap_err() {
+            Error::InvalidMajorType(3, 0) => {} // text key when expecting int
+            other => panic!(
+                "Expected InvalidMajorType error for string key, got {:?}",
+                other
+            ),
         }
 
         // Major type 6 (tags) - unsupported

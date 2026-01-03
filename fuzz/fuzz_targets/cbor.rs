@@ -8,6 +8,7 @@
 
 use darkbio_crypto::cbor::{decode, encode};
 use libfuzzer_sys::fuzz_target;
+use std::collections::HashMap;
 
 macro_rules! roundtrip {
     ($data:expr, $( $typ:ty ),+ $(,)?) => {
@@ -46,5 +47,9 @@ fuzz_target!(|data: &[u8]| {
         [u8; 8],
         ((u64, [u8; 4]), (String, u64)),
         ((i64, [u8; 4]), (String, i64)),
+        HashMap<i64, u64>,
+        HashMap<i64, String>,
+        HashMap<i64, Vec<u8>>,
+        HashMap<i64, HashMap<i64, u64>>,
     );
 });
