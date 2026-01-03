@@ -31,55 +31,27 @@ const INFO_UINT32: u8 = 26;
 const INFO_UINT64: u8 = 27;
 
 /// Error is the failures that can occur while encoding or decoding CBOR data.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
+    #[error("invalid major type: {0}, want {1}")]
     InvalidMajorType(u8, u8),
+    #[error("invalid additional info: {0}")]
     InvalidAdditionalInfo(u8),
+    #[error("unexpected end of data")]
     UnexpectedEof,
+    #[error("non-canonical encoding")]
     NonCanonical,
+    #[error("invalid UTF-8 in text string")]
     InvalidUtf8,
+    #[error("unexpected trailing bytes")]
     TrailingBytes,
+    #[error("unexpected item count: {0}, want {1}")]
     UnexpectedItemCount(u64, usize),
+    #[error("unsupported type: {0}")]
     UnsupportedType(u8),
-    IntegerOverflow(u64, u64, bool),
+    #[error("{sign} integer overflow: {value} exceeds max {max}", sign = if *.0 { "negative" } else { "positive" }, value = .1, max = .2)]
+    IntegerOverflow(bool, u64, u64),
 }
-
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Error::InvalidMajorType(h, w) => {
-                write!(f, "invalid major type: {}, want {}", h, w)
-            }
-            Error::InvalidAdditionalInfo(i) => {
-                write!(f, "invalid additional info: {}", i)
-            }
-            Error::UnexpectedEof => {
-                write!(f, "unexpected end of data")
-            }
-            Error::NonCanonical => {
-                write!(f, "non-canonical encoding")
-            }
-            Error::InvalidUtf8 => {
-                write!(f, "invalid UTF-8 in text string")
-            }
-            Error::TrailingBytes => {
-                write!(f, "unexpected trailing bytes")
-            }
-            Error::UnexpectedItemCount(h, w) => {
-                write!(f, "unexpected item count: {}, want {}", h, w)
-            }
-            Error::UnsupportedType(t) => {
-                write!(f, "unsupported type: {}", t)
-            }
-            Error::IntegerOverflow(v, max, negative) => {
-                let sign = if *negative { "negative" } else { "positive" };
-                write!(f, "{} integer overflow: {} exceeds max {}", sign, v, max)
-            }
-        }
-    }
-}
-
-impl std::error::Error for Error {}
 
 /// encode attempts to encode a generic Rust value to CBOR using the tiny, strict
 /// subset of types permitted by this package.
@@ -222,13 +194,13 @@ impl<'a> Decoder<'a> {
         match major {
             MAJOR_UINT => {
                 if value > i64::MAX as u64 {
-                    return Err(Error::IntegerOverflow(value, i64::MAX as u64, false));
+                    return Err(Error::IntegerOverflow(false, value, i64::MAX as u64));
                 }
                 Ok(value as i64)
             }
             MAJOR_NINT => {
                 if value > i64::MAX as u64 {
-                    return Err(Error::IntegerOverflow(value, i64::MAX as u64, true));
+                    return Err(Error::IntegerOverflow(true, value, i64::MAX as u64));
                 }
                 Ok(-1 - value as i64)
             }
@@ -882,10 +854,10 @@ mod tests {
         let result = decode::<i64>(&data);
         assert!(result.is_err());
         match result.unwrap_err() {
-            Error::IntegerOverflow(v, max, negative) => {
+            Error::IntegerOverflow(negative, v, max) => {
+                assert!(!negative);
                 assert_eq!(v, 9223372036854775808);
                 assert_eq!(max, 9223372036854775807);
-                assert!(!negative);
             }
             other => panic!("Expected IntegerOverflow error, got {:?}", other),
         }
@@ -896,10 +868,10 @@ mod tests {
         let result = decode::<i64>(&data);
         assert!(result.is_err());
         match result.unwrap_err() {
-            Error::IntegerOverflow(v, max, negative) => {
+            Error::IntegerOverflow(negative, v, max) => {
+                assert!(negative);
                 assert_eq!(v, 9223372036854775808);
                 assert_eq!(max, 9223372036854775807);
-                assert!(negative);
             }
             other => panic!("Expected IntegerOverflow error, got {:?}", other),
         }
