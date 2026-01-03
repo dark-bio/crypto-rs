@@ -63,7 +63,7 @@ impl PublicKey {
                 .data
                 .as_ref()
                 .try_into()?,
-        );
+        )?;
         // Extract the validity period
         let start = cert.tbs_certificate.validity.not_before.timestamp() as u64;
         let until = cert.tbs_certificate.validity.not_after.timestamp() as u64;

@@ -176,9 +176,9 @@ pub struct PublicKey {
 
 impl PublicKey {
     /// from_bytes converts a 1216-byte array into a public key.
-    pub fn from_bytes(bin: &[u8; 1216]) -> Self {
-        let inner = <KEM as Kem>::PublicKey::from_bytes(bin).unwrap();
-        Self { inner }
+    pub fn from_bytes(bin: &[u8; 1216]) -> Result<Self, Box<dyn Error>> {
+        let inner = <KEM as Kem>::PublicKey::from_bytes(bin)?;
+        Ok(Self { inner })
     }
 
     /// from_der parses a DER buffer into a public key.
@@ -195,7 +195,7 @@ impl PublicKey {
 
         // Public key extracted, return the wrapper
         let bytes: [u8; 1216] = key.try_into()?;
-        Ok(PublicKey::from_bytes(&bytes))
+        PublicKey::from_bytes(&bytes)
     }
 
     /// from_pem parses a PEM string into a public key.
@@ -309,7 +309,7 @@ mod tests {
     fn test_publickey_bytes_roundtrip() {
         let key = SecretKey::generate().public_key();
         let bytes = key.to_bytes();
-        let parsed = PublicKey::from_bytes(&bytes);
+        let parsed = PublicKey::from_bytes(&bytes).unwrap();
         assert_eq!(key.to_bytes(), parsed.to_bytes());
     }
 

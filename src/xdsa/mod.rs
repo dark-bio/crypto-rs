@@ -193,14 +193,14 @@ pub struct PublicKey {
 
 impl PublicKey {
     /// from_bytes converts a 1984-byte array into a public key.
-    pub fn from_bytes(bytes: &[u8; 1984]) -> Self {
+    pub fn from_bytes(bytes: &[u8; 1984]) -> Result<Self, Box<dyn Error>> {
         let ml_bytes: [u8; 1952] = bytes[..1952].try_into().unwrap();
         let ed_bytes: [u8; 32] = bytes[1952..].try_into().unwrap();
 
-        Self {
+        Ok(Self {
             ml_key: mldsa::PublicKey::from_bytes(&ml_bytes),
-            ed_key: eddsa::PublicKey::from_bytes(&ed_bytes),
-        }
+            ed_key: eddsa::PublicKey::from_bytes(&ed_bytes)?,
+        })
     }
 
     /// from_der parses a DER buffer into a public key.
@@ -222,7 +222,7 @@ impl PublicKey {
         let ed_bytes: [u8; 32] = key_bytes[1952..].try_into()?;
 
         let ml_key = mldsa::PublicKey::from_bytes(&ml_bytes);
-        let ed_key = eddsa::PublicKey::from_bytes(&ed_bytes);
+        let ed_key = eddsa::PublicKey::from_bytes(&ed_bytes)?;
 
         Ok(Self { ml_key, ed_key })
     }
