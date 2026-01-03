@@ -6,7 +6,7 @@ description = "Cryptography primitives and wrappers"
 repository = "https://github.com/dark-bio/crypto-rs"
 documentation = "https://docs.rs/darkbio-crypto"
 categories = ["cryptography", "encoding"]
-keywords = ["c-mldsa", "x-wing", "stream"]
+keywords = ["post-quantum", "c-mldsa", "x-wing", "hpke", "cose"]
 license = "BSD-3-Clause"
 edition = "2024"
 
@@ -19,6 +19,7 @@ default = []
 argon2 = ["dep:argon2"]
 async = ["dep:futures"]
 cbor = ["dep:thiserror"]
+cose = ["cbor", "xhpke"]
 eddsa = ["dep:ed25519-dalek", "dep:sha2", "dep:signature"]
 hkdf = ["dep:hkdf", "dep:sha2"]
 mldsa = ["dep:der", "dep:ml-dsa", "dep:pem", "dep:pkcs8", "dep:sha2", "dep:spki", "dep:subtle", "dep:zeroize"]
@@ -28,7 +29,6 @@ stream = ["dep:age-core", "dep:chacha20poly1305", "dep:pin-project", "dep:zeroiz
 x509 = ["xdsa", "dep:bcder", "dep:bytes", "dep:chrono", "dep:ring", "dep:x509-certificate"]
 xdsa = ["eddsa", "mldsa", "x509", "dep:x509-parser"]
 xhpke = ["xdsa", "dep:generic-array", "dep:hpke", "dep:rand", "dep:rand_chacha", "dep:x-wing"]
-xutil = ["cbor", "xhpke"]
 
 [dependencies]
 age-core = { version = "0.11.0", optional = true }
@@ -65,7 +65,7 @@ zeroize = { version = "1.8.1", optional = true }
 
 [[example]]
 name = "demo"
-required-features = ["xutil"]
+required-features = ["cose"]
 
 [dev-dependencies]
 futures-test = "0.3"

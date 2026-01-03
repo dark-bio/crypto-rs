@@ -135,26 +135,23 @@ impl SecretKey {
     }
 
     /// open consumes a standalone cryptographic construct encrypted to this secret
-    /// key. The method will deconstruct the given message-to-open (encrypted) and
-    /// will also verify the authenticity of the (unencrypted) message-to-auth (not
-    /// included in the ciphertext).
+    /// key. The method will deconstruct the given encapsulated key and ciphertext
+    /// and will also verify the authenticity of the (unencrypted) message-to-auth
+    /// (not included in the ciphertext).
     ///
     /// Note: X-Wing uses Base mode (no sender authentication). The sender's identity
     /// cannot be verified from the ciphertext alone.
     pub fn open(
         &self,
+        session_key: &[u8; 1120],
         msg_to_open: &[u8],
         msg_to_auth: &[u8],
         domain: &str,
     ) -> Result<Vec<u8>, HpkeError> {
         let info = INFO_PREFIX.to_string() + domain;
 
-        // Split out the session key from the ciphertext
-        let encapsize = <KEM as Kem>::EncappedKey::size();
-        if msg_to_open.len() < encapsize {
-            return Err(HpkeError::OpenError);
-        }
-        let session = <KEM as Kem>::EncappedKey::from_bytes(&msg_to_open[0..encapsize])?;
+        // Parse the encapsulated session key
+        let session = <KEM as Kem>::EncappedKey::from_bytes(session_key)?;
 
         // Create a receiver session using Base mode (X-Wing doesn't support Auth mode)
         let mut ctx = hpke::setup_receiver::<AEAD, KDF, KEM>(
@@ -164,7 +161,7 @@ impl SecretKey {
             info.as_bytes(),
         )?;
         // Verify the construct and decrypt the message if everything checks out
-        ctx.open(&msg_to_open[encapsize..], msg_to_auth)
+        ctx.open(msg_to_open, msg_to_auth)
     }
 }
 
@@ -255,9 +252,9 @@ impl PublicKey {
     /// also an authenticity proof for the (unencrypted) message-to-auth (message
     /// not included).
     ///
-    /// The method returns an encapsulated session key concatenated with the ciphertext
-    /// containing the encrypted data and authenticity proofs. To open it on the other
-    /// side needs transmitting the `concat-session-key-ciphertext` and `msg_to_auth`.
+    /// The method returns the encapsulated session key and the ciphertext separately.
+    /// To open it on the other side needs transmitting both components along with
+    /// `msg_to_auth`.
     ///
     /// Note: X-Wing uses Base mode (no sender authentication). The recipient cannot
     /// verify the sender's identity from the ciphertext alone.
@@ -266,7 +263,7 @@ impl PublicKey {
         msg_to_seal: &[u8],
         msg_to_auth: &[u8],
         domain: &str,
-    ) -> Result<Vec<u8>, HpkeError> {
+    ) -> Result<([u8; 1120], Vec<u8>), HpkeError> {
         let info = INFO_PREFIX.to_string() + domain;
 
         // Create a random number stream that works in WASM
@@ -283,11 +280,11 @@ impl PublicKey {
         )?;
 
         // Encrypt the messages and seal all the crypto details into a nice box
-        let mut enc = ctx.seal(msg_to_seal, msg_to_auth)?;
+        let enc = ctx.seal(msg_to_seal, msg_to_auth)?;
 
-        let mut res = key.to_bytes().to_vec();
-        res.append(&mut enc);
-        Ok(res)
+        let mut encap_key = [0u8; 1120];
+        encap_key.copy_from_slice(&key.to_bytes());
+        Ok((encap_key, enc))
     }
 }
 
@@ -383,13 +380,13 @@ mod tests {
 
         for tt in &tests {
             // Seal the message to the public key
-            let cipher = public
+            let (sess_key, seal_msg) = public
                 .seal(tt.seal_msg, tt.auth_msg, "test")
                 .unwrap_or_else(|e| panic!("failed to seal message: {}", e));
 
             // Open the sealed message with the secret key
             let cleartext = secret
-                .open(cipher.as_slice(), tt.auth_msg, "test")
+                .open(&sess_key, &seal_msg, tt.auth_msg, "test")
                 .unwrap_or_else(|e| panic!("failed to open message: {}", e));
 
             // Validate that the cleartext matches our expected encrypted payload.

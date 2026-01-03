@@ -13,7 +13,7 @@
 //! 4. Verifying identity chains through the root
 //! 5. Sign and encrypt a message, then decrypt and verify on the other side
 
-use darkbio_crypto::{x509, xdsa, xhpke, xutil};
+use darkbio_crypto::{cose, x509, xdsa, xhpke};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn main() {
@@ -168,8 +168,8 @@ fn main() {
         String::from_utf8_lossy(message)
     );
 
-    // Alice signs and encrypts the message to Bob using xutil helper
-    let ciphertext = xutil::sign_and_encrypt(
+    // Alice signs and encrypts the message to Bob using cose
+    let ciphertext = cose::seal(
         message,
         &[],
         &alice_xdsa_secret,
@@ -187,8 +187,8 @@ fn main() {
     // =========================================================================
     println!("\n9. Bob receives and verifies the message...");
 
-    // Bob decrypts and verifies the message using xutil helper
-    let decrypted = xutil::decrypt_and_verify(
+    // Bob decrypts and verifies the message using cose
+    let decrypted = cose::open(
         &ciphertext,
         &[],
         &bob_xhpke_secret,

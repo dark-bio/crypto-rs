@@ -42,5 +42,5 @@ pub mod xdsa;
 #[cfg(feature = "xhpke")]
 pub mod xhpke;
 
-#[cfg(feature = "xutil")]
-pub mod xutil;
+#[cfg(feature = "cose")]
+pub mod cose;
