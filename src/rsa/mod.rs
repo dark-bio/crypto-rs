@@ -41,16 +41,16 @@ impl SecretKey {
     ///
     /// Format: p (128 bytes) || q (128 bytes) || d (256 bytes) || e (8 bytes),
     /// all in big-endian.
-    pub fn from_bytes(bytes: &[u8; 520]) -> Self {
+    pub fn from_bytes(bytes: &[u8; 520]) -> Result<Self, rsa::Error> {
         let p = BigUint::from_bytes_be(&bytes[0..128]);
         let q = BigUint::from_bytes_be(&bytes[128..256]);
         let d = BigUint::from_bytes_be(&bytes[256..512]);
         let e = BigUint::from_bytes_be(&bytes[512..520]);
 
         let n = &p * &q;
-        let key = RsaPrivateKey::from_components(n, e, d, vec![p, q]).unwrap();
+        let key = RsaPrivateKey::from_components(n, e, d, vec![p, q])?;
         let sig = rsa::pkcs1v15::SigningKey::<Sha256>::new(key);
-        Self { inner: sig }
+        Ok(Self { inner: sig })
     }
 
     /// from_der parses a DER buffer into a private key.
@@ -137,13 +137,13 @@ impl PublicKey {
     /// from_bytes parses a 264-byte array into a public key.
     ///
     /// Format: n (256 bytes) || e (8 bytes), all in big-endian.
-    pub fn from_bytes(bytes: &[u8; 264]) -> Self {
+    pub fn from_bytes(bytes: &[u8; 264]) -> Result<Self, rsa::Error> {
         let n = BigUint::from_bytes_be(&bytes[0..256]);
         let e = BigUint::from_bytes_be(&bytes[256..264]);
 
-        let key = RsaPublicKey::new(n, e).unwrap();
+        let key = RsaPublicKey::new(n, e)?;
         let inner = rsa::pkcs1v15::VerifyingKey::<Sha256>::new(key);
-        Self { inner }
+        Ok(Self { inner })
     }
 
     /// from_der parses a DER buffer into a public key.
@@ -257,7 +257,7 @@ c9ab9ccdd77b098fc6c0c647ed663781";
         let input = [part_prime1, part_prime2, part_priv_exp, part_pub_exp].concat();
 
         let bytes: [u8; 520] = hex::decode(&input).unwrap().try_into().unwrap();
-        let key = SecretKey::from_bytes(&bytes);
+        let key = SecretKey::from_bytes(&bytes).unwrap();
         assert_eq!(hex::encode(key.to_bytes()), input);
     }
 
@@ -284,7 +284,7 @@ f78fcdf089bc2cb4086af8a7980637fb9cf0b4ed86d6a21208ae5a4e49d1\
         let input = [part_mod, part_pub_exp].concat();
 
         let bytes: [u8; 264] = hex::decode(&input).unwrap().try_into().unwrap();
-        let key = PublicKey::from_bytes(&bytes);
+        let key = PublicKey::from_bytes(&bytes).unwrap();
         assert_eq!(hex::encode(key.to_bytes()), input);
     }
 

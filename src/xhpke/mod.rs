@@ -389,7 +389,7 @@ mod tests {
                 .open(&sess_key, &seal_msg, tt.auth_msg, "test")
                 .unwrap_or_else(|e| panic!("failed to open message: {}", e));
 
-            // Validate that the cleartext matches our expected encrypted payload.
+            // Validate that the cleartext matches our expected encrypted payload
             assert_eq!(cleartext, tt.seal_msg, "unexpected cleartext");
         }
     }
