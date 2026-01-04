@@ -31,3 +31,7 @@ This repository is parameter selection and lightweight wrapper around a number o
 All functionality is WASM ready.
 
 *The entire library is hidden behind feature flags to allow selectively depending on it from the firmware, cloud and mobile app, each cherry-picking only what's needed. Please consult the docs on how to enable them.*
+
+## Siblings
+
+This is a sibling package with the Go [`github.com/dark-bio/crypto-go`](https://github.com/dark-bio/crypto-go); as in, both repositories implement the same feature sets and API surfaces at the same version points. This naturally means PRs merged into one project necessarily have to have a counter-PR in the other project.
