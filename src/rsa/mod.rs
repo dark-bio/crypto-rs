@@ -47,6 +47,10 @@ impl SecretKey {
 
         let n = &p * &q;
 
+        // The modulus must be exactly 2048 bits
+        if n.bits() != 2048 {
+            return Err(rsa::Error::InvalidModulus);
+        }
         // Whilst the RSA algorithm permits different exponents, every modern
         // system only ever uses 65537 and most also enforce this. Might as
         // well do the same.
@@ -62,10 +66,14 @@ impl SecretKey {
     pub fn from_der(der: &[u8]) -> Result<Self, Box<dyn std::error::Error>> {
         let inner = rsa::pkcs1v15::SigningKey::<Sha256>::from_pkcs8_der(der)?;
 
+        // The modulus must be exactly 2048 bits
+        let key: &RsaPrivateKey = inner.as_ref();
+        if key.n().bits() != 2048 {
+            return Err(Error::KeyMalformed.into());
+        }
         // Whilst the RSA algorithm permits different exponents, every modern
         // system only ever uses 65537 and most also enforce this. Might as
         // well do the same.
-        let key: &RsaPrivateKey = inner.as_ref();
         if *key.e() != BigUint::from(65537u32) {
             return Err(Error::KeyMalformed.into());
         }
@@ -166,6 +174,10 @@ impl PublicKey {
         let n = BigUint::from_bytes_be(&bytes[0..256]);
         let e = BigUint::from_bytes_be(&bytes[256..264]);
 
+        // The modulus must be exactly 2048 bits
+        if n.bits() != 2048 {
+            return Err(rsa::Error::InvalidModulus);
+        }
         // Whilst the RSA algorithm permits different exponents, every modern
         // system only ever uses 65537 and most also enforce this. Might as
         // well do the same.
@@ -181,10 +193,14 @@ impl PublicKey {
     pub fn from_der(der: &[u8]) -> Result<Self, Box<dyn std::error::Error>> {
         let inner = rsa::pkcs1v15::VerifyingKey::<Sha256>::from_public_key_der(der)?;
 
+        // The modulus must be exactly 2048 bits
+        let key: &RsaPublicKey = inner.as_ref();
+        if key.n().bits() != 2048 {
+            return Err(Error::KeyMalformed.into());
+        }
         // Whilst the RSA algorithm permits different exponents, every modern
         // system only ever uses 65537 and most also enforce this. Might as
         // well do the same.
-        let key: &RsaPublicKey = inner.as_ref();
         if *key.e() != BigUint::from(65537u32) {
             return Err(Error::KeyMalformed.into());
         }
