@@ -141,6 +141,12 @@ impl PublicKey {
         let n = BigUint::from_bytes_be(&bytes[0..256]);
         let e = BigUint::from_bytes_be(&bytes[256..264]);
 
+        // Whilst the RSA algorithm permits different exponents, every modern
+        // system only ever uses 65537 and most also enforce this. Might as
+        // well do the same.
+        if e != BigUint::from(65537u32) {
+            return Err(rsa::Error::InvalidExponent);
+        }
         let key = RsaPublicKey::new(n, e)?;
         let inner = rsa::pkcs1v15::VerifyingKey::<Sha256>::new(key);
         Ok(Self { inner })
