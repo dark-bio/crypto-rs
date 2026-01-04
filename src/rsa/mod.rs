@@ -9,9 +9,7 @@
 //! https://datatracker.ietf.org/doc/html/rfc8017
 
 use rsa::pkcs1v15::Signature;
-use rsa::pkcs8::{
-    DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey, Error, LineEnding,
-};
+use rsa::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey, Error};
 use rsa::rand_core::OsRng;
 use rsa::sha2::{Digest, Sha256};
 use rsa::signature::hazmat::PrehashVerifier;
@@ -48,21 +46,48 @@ impl SecretKey {
         let e = BigUint::from_bytes_be(&bytes[512..520]);
 
         let n = &p * &q;
+
+        // Whilst the RSA algorithm permits different exponents, every modern
+        // system only ever uses 65537 and most also enforce this. Might as
+        // well do the same.
+        if e != BigUint::from(65537u32) {
+            return Err(rsa::Error::InvalidExponent);
+        }
         let key = RsaPrivateKey::from_components(n, e, d, vec![p, q])?;
         let sig = rsa::pkcs1v15::SigningKey::<Sha256>::new(key);
         Ok(Self { inner: sig })
     }
 
     /// from_der parses a DER buffer into a private key.
-    pub fn from_der(der: &[u8]) -> Result<Self, Error> {
+    pub fn from_der(der: &[u8]) -> Result<Self, Box<dyn std::error::Error>> {
         let inner = rsa::pkcs1v15::SigningKey::<Sha256>::from_pkcs8_der(der)?;
+
+        // Whilst the RSA algorithm permits different exponents, every modern
+        // system only ever uses 65537 and most also enforce this. Might as
+        // well do the same.
+        let key: &RsaPrivateKey = inner.as_ref();
+        if *key.e() != BigUint::from(65537u32) {
+            return Err(Error::KeyMalformed.into());
+        }
+        // The upstream rsa crate ignores CRT parameters (dP, dQ, qInv) and
+        // recomputes them, accepting malformed values. We don't want to allow
+        // that, so just round trip the format and see if it's matching or not.
+        let recoded = rsa::pkcs1v15::SigningKey::<Sha256>::to_pkcs8_der(&inner)?;
+        if recoded.as_bytes() != der {
+            return Err(Error::KeyMalformed.into());
+        }
         Ok(Self { inner })
     }
 
     /// from_pem parses a PEM string into a private key.
-    pub fn from_pem(pem: &str) -> Result<Self, Error> {
-        let inner = rsa::pkcs1v15::SigningKey::<Sha256>::from_pkcs8_pem(pem)?;
-        Ok(Self { inner })
+    pub fn from_pem(pem: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        // Crack open the PEM to get to the private key info
+        let res = pem::parse(pem.as_bytes())?;
+        if res.tag() != "PRIVATE KEY" {
+            return Err(format!("invalid PEM tag {}", res.tag()).into());
+        }
+        // Parse the DER content
+        Self::from_der(res.contents())
     }
 
     /// to_bytes serializes a private key into a 520-byte array.
@@ -98,12 +123,12 @@ impl SecretKey {
             .to_vec()
     }
 
-    /// to_pem serializes a public key into a PEM string.
+    /// to_pem serializes a private key into a PEM string.
     pub fn to_pem(&self) -> String {
-        rsa::pkcs1v15::SigningKey::<Sha256>::to_pkcs8_pem(&self.inner, LineEnding::LF)
-            .unwrap()
-            .as_str()
-            .to_string()
+        pem::encode_config(
+            &pem::Pem::new("PRIVATE KEY", self.to_der()),
+            pem::EncodeConfig::new().set_line_ending(pem::LineEnding::LF),
+        )
     }
 
     /// public_key retrieves the public counterpart of the secret key.
@@ -153,15 +178,28 @@ impl PublicKey {
     }
 
     /// from_der parses a DER buffer into a public key.
-    pub fn from_der(der: &[u8]) -> Result<Self, Error> {
+    pub fn from_der(der: &[u8]) -> Result<Self, Box<dyn std::error::Error>> {
         let inner = rsa::pkcs1v15::VerifyingKey::<Sha256>::from_public_key_der(der)?;
+
+        // Whilst the RSA algorithm permits different exponents, every modern
+        // system only ever uses 65537 and most also enforce this. Might as
+        // well do the same.
+        let key: &RsaPublicKey = inner.as_ref();
+        if *key.e() != BigUint::from(65537u32) {
+            return Err(Error::KeyMalformed.into());
+        }
         Ok(Self { inner })
     }
 
     /// from_pem parses a PEM string into a public key.
-    pub fn from_pem(pem: &str) -> Result<Self, Error> {
-        let inner = rsa::pkcs1v15::VerifyingKey::<Sha256>::from_public_key_pem(pem)?;
-        Ok(Self { inner })
+    pub fn from_pem(pem: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        // Crack open the PEM to get to the public key info
+        let res = pem::parse(pem.as_bytes())?;
+        if res.tag() != "PUBLIC KEY" {
+            return Err(format!("invalid PEM tag {}", res.tag()).into());
+        }
+        // Parse the DER content
+        Self::from_der(res.contents())
     }
 
     /// to_bytes serializes a public key into a 264-byte array.
@@ -191,8 +229,10 @@ impl PublicKey {
 
     /// to_pem serializes a public key into a PEM string.
     pub fn to_pem(&self) -> String {
-        rsa::pkcs1v15::VerifyingKey::<Sha256>::to_public_key_pem(&self.inner, LineEnding::LF)
-            .unwrap()
+        pem::encode_config(
+            &pem::Pem::new("PUBLIC KEY", self.to_der()),
+            pem::EncodeConfig::new().set_line_ending(pem::LineEnding::LF),
+        )
     }
 
     /// fingerprint returns a 256bit unique identified for this key. For RSA, that
