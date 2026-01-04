@@ -24,6 +24,9 @@ const SIGNATURE_PREFIX: &[u8] = b"CompositeAlgorithmSignatures2025";
 /// Label is the signature label for ML-DSA-65-Ed25519-SHA512.
 const SIGNATURE_DOMAIN: &[u8] = b"COMPSIG-MLDSA65-Ed25519-SHA512";
 
+/// OID is the ASN.1 object identifier for MLDSA65-Ed25519-SHA512.
+const OID: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.6.48");
+
 /// SecretKey is an ML-DSA-65 private key paired with an Ed25519 private key for
 /// creating and verifying quantum resistant digital signatures.    
 #[derive(Clone)]
@@ -68,22 +71,17 @@ impl SecretKey {
         // Parse the DER encoded container
         let info = pkcs8::PrivateKeyInfo::from_der(der)?;
 
-        // Ensure the algorithm OID matches MLDSA65-Ed25519-SHA512 (1.3.6.1.5.5.7.6.48)
-        if info.algorithm.oid.to_string() != "1.3.6.1.5.5.7.6.48" {
+        // Ensure the algorithm OID matches MLDSA65-Ed25519-SHA512
+        if info.algorithm.oid != OID {
             return Err("not a composite ML-DSA-65-Ed25519-SHA512 private key".into());
         }
         // Private key is ML-DSA seed (32) || Ed25519 seed (32) = 64 bytes
-        let key_bytes = info.private_key;
-        if key_bytes.len() != 64 {
-            return Err("composite private key must be 64 bytes".into());
-        }
-        let ml_seed: [u8; 32] = key_bytes[..32].try_into()?;
-        let ed_seed: [u8; 32] = key_bytes[32..64].try_into()?;
+        let seed: [u8; 64] = info
+            .private_key
+            .try_into()
+            .map_err(|_| "composite private key must be 64 bytes")?;
 
-        let ml_key = mldsa::SecretKey::from_seed(&ml_seed);
-        let ed_key = eddsa::SecretKey::from_bytes(&ed_seed);
-
-        Ok(Self { ml_key, ed_key })
+        Ok(Self::from_seed(&seed))
     }
 
     /// from_pem parses a PEM string into a private key.
@@ -118,13 +116,11 @@ impl SecretKey {
         // Create the MLDSA65-Ed25519-SHA512 algorithm identifier; parameters
         // MUST be absent
         let alg = pkcs8::AlgorithmIdentifierRef {
-            oid: ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.6.48"),
+            oid: OID,
             parameters: None,
         };
         // The private key is ML-DSA seed (32) || Ed25519 seed (32) = 64 bytes
-        let mut key_bytes = Vec::with_capacity(64);
-        key_bytes.extend_from_slice(&self.ml_key.to_seed());
-        key_bytes.extend_from_slice(&self.ed_key.to_bytes());
+        let key_bytes = self.to_seed();
 
         let info = pkcs8::PrivateKeyInfo {
             algorithm: alg,
@@ -209,22 +205,19 @@ impl PublicKey {
         let info: SubjectPublicKeyInfo<AlgorithmIdentifier<AnyRef>, BitStringRef> =
             SubjectPublicKeyInfo::from_der(der)?;
 
-        // Ensure the algorithm OID matches MLDSA65-Ed25519-SHA512 (1.3.6.1.5.5.7.6.48)
-        if info.algorithm.oid.to_string() != "1.3.6.1.5.5.7.6.48" {
+        // Ensure the algorithm OID matches MLDSA65-Ed25519-SHA512
+        if info.algorithm.oid != OID {
             return Err("not a composite ML-DSA-65-Ed25519-SHA512 public key".into());
         }
         // Public key is ML-DSA-65 (1952 bytes) || Ed25519 (32 bytes) = 1984 bytes
-        let key_bytes = info.subject_public_key.as_bytes().unwrap();
-        if key_bytes.len() != 1984 {
-            return Err("composite public key must be 1984 bytes".into());
-        }
-        let ml_bytes: [u8; 1952] = key_bytes[..1952].try_into()?;
-        let ed_bytes: [u8; 32] = key_bytes[1952..].try_into()?;
+        let key_bytes: [u8; 1984] = info
+            .subject_public_key
+            .as_bytes()
+            .ok_or("invalid public key bit string")?
+            .try_into()
+            .map_err(|_| "composite public key must be 1984 bytes")?;
 
-        let ml_key = mldsa::PublicKey::from_bytes(&ml_bytes);
-        let ed_key = eddsa::PublicKey::from_bytes(&ed_bytes)?;
-
-        Ok(Self { ml_key, ed_key })
+        Self::from_bytes(&key_bytes)
     }
 
     /// from_pem parses a PEM string into a public key.
@@ -251,13 +244,11 @@ impl PublicKey {
         // Create the MLDSA65-Ed25519-SHA512 algorithm identifier; parameters
         // MUST be absent
         let alg = spki::AlgorithmIdentifierRef {
-            oid: ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.6.48"),
+            oid: OID,
             parameters: None,
         };
         // The public key info is the BITSTRING of the two keys concatenated
-        let mut key_bytes = Vec::with_capacity(1984);
-        key_bytes.extend_from_slice(&self.ml_key.to_bytes());
-        key_bytes.extend_from_slice(&self.ed_key.to_bytes());
+        let key_bytes = self.to_bytes();
 
         let info = SubjectPublicKeyInfo::<AnyRef, BitStringRef> {
             algorithm: alg,
