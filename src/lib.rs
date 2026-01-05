@@ -18,8 +18,13 @@ pub mod hkdf;
 #[cfg(feature = "cbor")]
 pub mod cbor;
 
+#[cfg(feature = "cose")]
+pub mod cose;
+
 #[cfg(feature = "eddsa")]
 pub mod eddsa;
+
+pub(crate) mod internal;
 
 #[cfg(feature = "mldsa")]
 pub mod mldsa;
@@ -41,6 +46,3 @@ pub mod xdsa;
 
 #[cfg(feature = "xhpke")]
 pub mod xhpke;
-
-#[cfg(feature = "cose")]
-pub mod cose;

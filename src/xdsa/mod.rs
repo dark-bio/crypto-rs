@@ -44,24 +44,13 @@ impl SecretKey {
         }
     }
 
-    /// from_seed creates a private key from a 64-byte seed.
-    pub fn from_seed(seed: &[u8; 64]) -> Self {
+    /// from_bytes creates a private key from a 64-byte seed.
+    pub fn from_bytes(seed: &[u8; 64]) -> Self {
         let ml_seed: [u8; 32] = seed[..32].try_into().unwrap();
         let ed_seed: [u8; 32] = seed[32..].try_into().unwrap();
 
         Self {
-            ml_key: mldsa::SecretKey::from_seed(&ml_seed),
-            ed_key: eddsa::SecretKey::from_bytes(&ed_seed),
-        }
-    }
-
-    /// from_bytes creates a private key from a 4064-byte expanded key.
-    pub fn from_bytes(bytes: &[u8; 4064]) -> Self {
-        let ml_bytes: [u8; 4032] = bytes[..4032].try_into().unwrap();
-        let ed_seed: [u8; 32] = bytes[4032..].try_into().unwrap();
-
-        Self {
-            ml_key: mldsa::SecretKey::from_bytes(&ml_bytes),
+            ml_key: mldsa::SecretKey::from_bytes(&ml_seed),
             ed_key: eddsa::SecretKey::from_bytes(&ed_seed),
         }
     }
@@ -81,13 +70,13 @@ impl SecretKey {
             .try_into()
             .map_err(|_| "composite private key must be 64 bytes")?;
 
-        Ok(Self::from_seed(&seed))
+        Ok(Self::from_bytes(&seed))
     }
 
     /// from_pem parses a PEM string into a private key.
-    pub fn from_pem(pem: &str) -> Result<Self, Box<dyn Error>> {
+    pub fn from_pem(pem_str: &str) -> Result<Self, Box<dyn Error>> {
         // Crack open the PEM to get to the private key info
-        let res = pem::parse(pem.as_bytes())?;
+        let res = crate::internal::pem::parse(pem_str)?;
         if res.tag() != "PRIVATE KEY" {
             return Err(format!("invalid PEM tag {}", res.tag()).into());
         }
@@ -95,19 +84,11 @@ impl SecretKey {
         Self::from_der(res.contents())
     }
 
-    /// to_seed converts a secret key into a 64-byte seed.
-    pub fn to_seed(&self) -> [u8; 64] {
+    /// to_bytes converts a secret key into a 64-byte array.
+    pub fn to_bytes(&self) -> [u8; 64] {
         let mut out = [0u8; 64];
-        out[..32].copy_from_slice(&self.ml_key.to_seed());
+        out[..32].copy_from_slice(&self.ml_key.to_bytes());
         out[32..].copy_from_slice(&self.ed_key.to_bytes());
-        out
-    }
-
-    /// to_bytes converts a secret key into a 4064-byte array.
-    pub fn to_bytes(&self) -> [u8; 4064] {
-        let mut out = [0u8; 4064];
-        out[..4032].copy_from_slice(&self.ml_key.to_bytes());
-        out[4032..].copy_from_slice(&self.ed_key.to_bytes());
         out
     }
 
@@ -120,7 +101,7 @@ impl SecretKey {
             parameters: None,
         };
         // The private key is ML-DSA seed (32) || Ed25519 seed (32) = 64 bytes
-        let key_bytes = self.to_seed();
+        let key_bytes = self.to_bytes();
 
         let info = pkcs8::PrivateKeyInfo {
             algorithm: alg,
@@ -221,9 +202,9 @@ impl PublicKey {
     }
 
     /// from_pem parses a PEM string into a public key.
-    pub fn from_pem(pem: &str) -> Result<Self, Box<dyn Error>> {
+    pub fn from_pem(pem_str: &str) -> Result<Self, Box<dyn Error>> {
         // Crack open the PEM to get to the public key info
-        let res = pem::parse(pem.as_bytes())?;
+        let res = crate::internal::pem::parse(pem_str)?;
         if res.tag() != "PUBLIC KEY" {
             return Err(format!("invalid PEM tag {}", res.tag()).into());
         }
@@ -510,7 +491,7 @@ f6e178bcc044204110444ea2b7e80548769ae5010c22707493adb0baf55f\
         // Parse the secret key seed (ML-DSA seed || Ed25519 seed)
         let seed_bytes = hex::decode(ietf_vectors::TEST_SECKEY).unwrap();
         let seed: [u8; 64] = seed_bytes.try_into().unwrap();
-        let seckey = SecretKey::from_seed(&seed);
+        let seckey = SecretKey::from_bytes(&seed);
 
         // Verify the public key matches (ML-DSA || Ed25519)
         let expected_pubkey = hex::decode(ietf_vectors::TEST_PUBKEY).unwrap();
@@ -537,7 +518,7 @@ f6e178bcc044204110444ea2b7e80548769ae5010c22707493adb0baf55f\
         // Parse the secret key from seed and from PKCS8
         let seed_bytes = hex::decode(ietf_vectors::TEST_SECKEY).unwrap();
         let seed: [u8; 64] = seed_bytes.try_into().unwrap();
-        let seckey_from_seed = SecretKey::from_seed(&seed);
+        let seckey_from_seed = SecretKey::from_bytes(&seed);
 
         let pkcs8_bytes = hex::decode(ietf_vectors::TEST_SECKEY_PKCS8).unwrap();
         let seckey_from_pkcs8 = SecretKey::from_der(&pkcs8_bytes).unwrap();

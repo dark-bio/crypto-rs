@@ -88,9 +88,9 @@ impl SecretKey {
     }
 
     /// from_pem parses a PEM string into a private key.
-    pub fn from_pem(pem: &str) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn from_pem(pem_str: &str) -> Result<Self, Box<dyn std::error::Error>> {
         // Crack open the PEM to get to the private key info
-        let res = pem::parse(pem.as_bytes())?;
+        let res = crate::internal::pem::parse(pem_str)?;
         if res.tag() != "PRIVATE KEY" {
             return Err(format!("invalid PEM tag {}", res.tag()).into());
         }
@@ -208,9 +208,9 @@ impl PublicKey {
     }
 
     /// from_pem parses a PEM string into a public key.
-    pub fn from_pem(pem: &str) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn from_pem(pem_str: &str) -> Result<Self, Box<dyn std::error::Error>> {
         // Crack open the PEM to get to the public key info
-        let res = pem::parse(pem.as_bytes())?;
+        let res = crate::internal::pem::parse(pem_str)?;
         if res.tag() != "PUBLIC KEY" {
             return Err(format!("invalid PEM tag {}", res.tag()).into());
         }

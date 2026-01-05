@@ -50,21 +50,11 @@ impl SecretKey {
         Self { inner, seed }
     }
 
-    /// from_seed creates a private key from a 32-byte seed.
-    pub fn from_seed(seed: &[u8; 32]) -> Self {
+    /// from_bytes creates a private key from a 32-byte seed.
+    pub fn from_bytes(seed: &[u8; 32]) -> Self {
         let array = ml_dsa::Seed::try_from(seed.as_slice()).unwrap();
         let inner = ml_dsa::SigningKey::<MlDsa65>::from_seed(&array);
         Self { inner, seed: array }
-    }
-
-    /// from_bytes creates a private key from a 4032-byte expanded key.
-    pub fn from_bytes(bytes: &[u8; 4032]) -> Self {
-        let enc = ml_dsa::EncodedSigningKey::<MlDsa65>::try_from(bytes.as_slice()).unwrap();
-        let inner = ml_dsa::SigningKey::<MlDsa65>::decode(&enc);
-        Self {
-            inner,
-            seed: ml_dsa::Seed::default(),
-        }
     }
 
     /// from_der parses a DER buffer into a private key.
@@ -102,9 +92,9 @@ impl SecretKey {
     }
 
     /// from_pem parses a PEM string into a private key.
-    pub fn from_pem(pem: &str) -> Result<Self, Box<dyn Error>> {
+    pub fn from_pem(pem_str: &str) -> Result<Self, Box<dyn Error>> {
         // Crack open the PEM to get to the private key info
-        let res = pem::parse(pem.as_bytes())?;
+        let res = crate::internal::pem::parse(pem_str)?;
         if res.tag() != "PRIVATE KEY" {
             return Err(format!("invalid PEM tag {}", res.tag()).into());
         }
@@ -112,18 +102,10 @@ impl SecretKey {
         Self::from_der(res.contents())
     }
 
-    /// to_seed returns the 32-byte seed of the private key.
-    pub fn to_seed(&self) -> [u8; 32] {
+    /// to_bytes returns the 32-byte seed of the private key.
+    pub fn to_bytes(&self) -> [u8; 32] {
         let mut out = [0u8; 32];
         out.copy_from_slice(self.seed.as_slice());
-        out
-    }
-
-    /// to_bytes converts a secret key into a 4032-byte array.
-    pub fn to_bytes(&self) -> [u8; 4032] {
-        let enc = self.inner.encode();
-        let mut out = [0u8; 4032];
-        out.copy_from_slice(enc.as_slice());
         out
     }
 
@@ -217,8 +199,8 @@ impl PublicKey {
     }
 
     /// from_pem parses a PEM string into a public key.
-    pub fn from_pem(pem: &str) -> Result<Self, Box<dyn Error>> {
-        let res = pem::parse(pem.as_bytes())?;
+    pub fn from_pem(pem_str: &str) -> Result<Self, Box<dyn Error>> {
+        let res = crate::internal::pem::parse(pem_str)?;
         if res.tag() != "PUBLIC KEY" {
             return Err(format!("invalid PEM tag {}", res.tag()).into());
         }
