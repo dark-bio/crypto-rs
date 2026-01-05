@@ -143,9 +143,8 @@ impl Encoder {
         self.encode_length(MAJOR_MAP, len as u64);
     }
 
-    // encode_length encodes a major type, injecting an unsigned integer after,
-    // which will for most types define the length. For integers, it will simply
-    // be the value itself.
+    // encodeLength encodes a major type with an unsigned integer, which defines
+    // the length for most types, or the value itself for integers.
     fn encode_length(&mut self, major_type: u8, len: u64) {
         if len < 24 {
             self.buf.push(major_type << 5 | len as u8);
@@ -185,7 +184,7 @@ impl<'a> Decoder<'a> {
         Self { data, pos: 0 }
     }
 
-    // finish terminates decoding and returns whether trailing bytes linger.
+    // finish terminates decoding and returns an error if trailing bytes remain.
     pub fn finish(self) -> Result<(), Error> {
         if self.pos != self.data.len() {
             return Err(Error::TrailingBytes);
