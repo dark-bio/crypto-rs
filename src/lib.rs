@@ -24,10 +24,11 @@ pub mod cose;
 #[cfg(feature = "eddsa")]
 pub mod eddsa;
 
-pub(crate) mod internal;
-
 #[cfg(feature = "mldsa")]
 pub mod mldsa;
+
+#[cfg(feature = "pem")]
+pub mod pem;
 
 #[cfg(feature = "rsa")]
 pub mod rsa;

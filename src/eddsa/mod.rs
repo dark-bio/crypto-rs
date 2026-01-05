@@ -9,11 +9,12 @@
 //! https://datatracker.ietf.org/doc/html/rfc8032
 
 use ed25519_dalek::ed25519::signature::rand_core::OsRng;
-use ed25519_dalek::pkcs8::spki::der::pem::LineEnding;
 use ed25519_dalek::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey};
 use ed25519_dalek::{Signature, SignatureError, Signer, Verifier};
 use sha2::Digest;
 use std::error::Error;
+
+use crate::pem;
 
 /// SecretKey contains an Ed25519 private key usable for signing.
 #[derive(Clone)]
@@ -44,9 +45,12 @@ impl SecretKey {
     }
 
     /// from_pem parses a PEM string into a private key.
-    pub fn from_pem(pem: &str) -> Result<Self, Box<dyn Error>> {
-        let inner = ed25519_dalek::SigningKey::from_pkcs8_pem(pem)?;
-        Ok(Self { inner })
+    pub fn from_pem(pem_str: &str) -> Result<Self, Box<dyn Error>> {
+        let (kind, data) = pem::decode(pem_str.as_bytes())?;
+        if kind != "PRIVATE KEY" {
+            return Err(format!("invalid PEM tag {}", kind).into());
+        }
+        Self::from_der(&data)
     }
 
     /// to_bytes converts a private key into a 32-byte array.
@@ -61,7 +65,7 @@ impl SecretKey {
 
     /// to_pem serializes a private key into a PEM string.
     pub fn to_pem(&self) -> String {
-        self.inner.to_pkcs8_pem(LineEnding::LF).unwrap().to_string()
+        pem::encode("PRIVATE KEY", &self.to_der())
     }
 
     /// public_key retrieves the public counterpart of the secret key.
@@ -103,9 +107,12 @@ impl PublicKey {
     }
 
     /// from_pem parses a PEM string into a public key.
-    pub fn from_pem(pem: &str) -> Result<Self, Box<dyn Error>> {
-        let inner = ed25519_dalek::VerifyingKey::from_public_key_pem(pem)?;
-        Ok(Self { inner })
+    pub fn from_pem(pem_str: &str) -> Result<Self, Box<dyn Error>> {
+        let (kind, data) = pem::decode(pem_str.as_bytes())?;
+        if kind != "PUBLIC KEY" {
+            return Err(format!("invalid PEM tag {}", kind).into());
+        }
+        Self::from_der(&data)
     }
 
     /// to_bytes converts a public key into a 32-byte array.
@@ -120,10 +127,7 @@ impl PublicKey {
 
     /// to_pem serializes a public key into a PEM string.
     pub fn to_pem(&self) -> String {
-        self.inner
-            .to_public_key_pem(LineEnding::LF)
-            .unwrap()
-            .to_string()
+        pem::encode("PUBLIC KEY", &self.to_der())
     }
 
     /// fingerprint returns a 256bit unique identified for this key. For Ed25519,

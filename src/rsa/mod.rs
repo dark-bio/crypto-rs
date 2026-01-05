@@ -8,6 +8,7 @@
 //!
 //! https://datatracker.ietf.org/doc/html/rfc8017
 
+use crate::pem;
 use rsa::pkcs1v15::Signature;
 use rsa::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey, Error};
 use rsa::rand_core::OsRng;
@@ -90,12 +91,12 @@ impl SecretKey {
     /// from_pem parses a PEM string into a private key.
     pub fn from_pem(pem_str: &str) -> Result<Self, Box<dyn std::error::Error>> {
         // Crack open the PEM to get to the private key info
-        let res = crate::internal::pem::parse(pem_str)?;
-        if res.tag() != "PRIVATE KEY" {
-            return Err(format!("invalid PEM tag {}", res.tag()).into());
+        let (kind, data) = pem::decode(pem_str.as_bytes())?;
+        if kind != "PRIVATE KEY" {
+            return Err(format!("invalid PEM tag {}", kind).into());
         }
         // Parse the DER content
-        Self::from_der(res.contents())
+        Self::from_der(&data)
     }
 
     /// to_bytes serializes a private key into a 520-byte array.
@@ -133,10 +134,7 @@ impl SecretKey {
 
     /// to_pem serializes a private key into a PEM string.
     pub fn to_pem(&self) -> String {
-        pem::encode_config(
-            &pem::Pem::new("PRIVATE KEY", self.to_der()),
-            pem::EncodeConfig::new().set_line_ending(pem::LineEnding::LF),
-        )
+        pem::encode("PRIVATE KEY", &self.to_der())
     }
 
     /// public_key retrieves the public counterpart of the secret key.
@@ -210,12 +208,12 @@ impl PublicKey {
     /// from_pem parses a PEM string into a public key.
     pub fn from_pem(pem_str: &str) -> Result<Self, Box<dyn std::error::Error>> {
         // Crack open the PEM to get to the public key info
-        let res = crate::internal::pem::parse(pem_str)?;
-        if res.tag() != "PUBLIC KEY" {
-            return Err(format!("invalid PEM tag {}", res.tag()).into());
+        let (kind, data) = pem::decode(pem_str.as_bytes())?;
+        if kind != "PUBLIC KEY" {
+            return Err(format!("invalid PEM tag {}", kind).into());
         }
         // Parse the DER content
-        Self::from_der(res.contents())
+        Self::from_der(&data)
     }
 
     /// to_bytes serializes a public key into a 264-byte array.
@@ -245,10 +243,7 @@ impl PublicKey {
 
     /// to_pem serializes a public key into a PEM string.
     pub fn to_pem(&self) -> String {
-        pem::encode_config(
-            &pem::Pem::new("PUBLIC KEY", self.to_der()),
-            pem::EncodeConfig::new().set_line_ending(pem::LineEnding::LF),
-        )
+        pem::encode("PUBLIC KEY", &self.to_der())
     }
 
     /// fingerprint returns a 256bit unique identified for this key. For RSA, that

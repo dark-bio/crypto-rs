@@ -20,6 +20,8 @@ use std::error::Error;
 use subtle::ConstantTimeEq;
 use zeroize::Zeroize;
 
+use crate::pem;
+
 /// OpenSSL ML-DSA-65 private key inner structure.
 #[derive(Clone, Debug, Eq, PartialEq, Sequence)]
 struct MlDsa65PrivateKeyInner {
@@ -94,12 +96,12 @@ impl SecretKey {
     /// from_pem parses a PEM string into a private key.
     pub fn from_pem(pem_str: &str) -> Result<Self, Box<dyn Error>> {
         // Crack open the PEM to get to the private key info
-        let res = crate::internal::pem::parse(pem_str)?;
-        if res.tag() != "PRIVATE KEY" {
-            return Err(format!("invalid PEM tag {}", res.tag()).into());
+        let (kind, data) = pem::decode(pem_str.as_bytes())?;
+        if kind != "PRIVATE KEY" {
+            return Err(format!("invalid PEM tag {}", kind).into());
         }
         // Parse the DER content
-        Self::from_der(res.contents())
+        Self::from_der(&data)
     }
 
     /// to_bytes returns the 32-byte seed of the private key.
@@ -136,11 +138,7 @@ impl SecretKey {
 
     /// to_pem serializes a private key into a PEM string.
     pub fn to_pem(&self) -> String {
-        let der = self.to_der();
-        pem::encode_config(
-            &pem::Pem::new("PRIVATE KEY", der),
-            pem::EncodeConfig::new().set_line_ending(pem::LineEnding::LF),
-        )
+        pem::encode("PRIVATE KEY", &self.to_der())
     }
 
     /// public_key retrieves the public counterpart of the secret key.
@@ -200,11 +198,11 @@ impl PublicKey {
 
     /// from_pem parses a PEM string into a public key.
     pub fn from_pem(pem_str: &str) -> Result<Self, Box<dyn Error>> {
-        let res = crate::internal::pem::parse(pem_str)?;
-        if res.tag() != "PUBLIC KEY" {
-            return Err(format!("invalid PEM tag {}", res.tag()).into());
+        let (kind, data) = pem::decode(pem_str.as_bytes())?;
+        if kind != "PUBLIC KEY" {
+            return Err(format!("invalid PEM tag {}", kind).into());
         }
-        Self::from_der(res.contents())
+        Self::from_der(&data)
     }
 
     /// to_bytes converts a public key into a 1952-byte array.
@@ -233,11 +231,7 @@ impl PublicKey {
 
     /// to_pem serializes a public key into a PEM string.
     pub fn to_pem(&self) -> String {
-        let der = self.to_der();
-        pem::encode_config(
-            &pem::Pem::new("PUBLIC KEY", der),
-            pem::EncodeConfig::new().set_line_ending(pem::LineEnding::LF),
-        )
+        pem::encode("PUBLIC KEY", &self.to_der())
     }
 
     /// fingerprint returns a 256bit unique identified for this key. For ML-DSA,
