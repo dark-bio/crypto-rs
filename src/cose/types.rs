@@ -6,7 +6,7 @@
 
 //! COSE structure types with CBOR serialization.
 
-use crate::cbor::{Cbor, Encode, Encoder};
+use crate::cbor::Cbor;
 
 /// xDSA signature size: 3309 (ML-DSA-65) + 64 (Ed25519) = 3373 bytes.
 pub const SIGNATURE_SIZE: usize = 3373;
@@ -87,23 +87,13 @@ pub struct CoseEncrypt0 {
 ///     payload:        bstr
 /// ]
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SigStructure<'a> {
-    pub protected: &'a [u8],
-    pub external_aad: &'a [u8],
-    pub payload: &'a [u8],
-}
-
-impl Encode for SigStructure<'_> {
-    fn encode_cbor(&self) -> Vec<u8> {
-        let mut encoder = Encoder::new();
-        encoder.encode_array_header(4);
-        encoder.encode_text("Signature1");
-        encoder.encode_bytes(self.protected);
-        encoder.encode_bytes(self.external_aad);
-        encoder.encode_bytes(self.payload);
-        encoder.finish()
-    }
+#[derive(Debug, Clone, PartialEq, Eq, Cbor)]
+#[cbor(array)]
+pub struct SigStructure {
+    pub context: String,
+    pub protected: Vec<u8>,
+    pub external_aad: Vec<u8>,
+    pub payload: Vec<u8>,
 }
 
 /// Enc_structure for computing AAD per RFC 9052 Section 5.3.
@@ -115,19 +105,10 @@ impl Encode for SigStructure<'_> {
 ///     external_aad: bstr
 /// ]
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EncStructure<'a> {
-    pub protected: &'a [u8],
-    pub external_aad: &'a [u8],
-}
-
-impl Encode for EncStructure<'_> {
-    fn encode_cbor(&self) -> Vec<u8> {
-        let mut encoder = Encoder::new();
-        encoder.encode_array_header(3);
-        encoder.encode_text("Encrypt0");
-        encoder.encode_bytes(self.protected);
-        encoder.encode_bytes(self.external_aad);
-        encoder.finish()
-    }
+#[derive(Debug, Clone, PartialEq, Eq, Cbor)]
+#[cbor(array)]
+pub struct EncStructure {
+    pub context: String,
+    pub protected: Vec<u8>,
+    pub external_aad: Vec<u8>,
 }

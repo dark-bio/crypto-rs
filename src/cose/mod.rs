@@ -58,9 +58,10 @@ pub fn sign(msg_to_embed: &[u8], msg_to_auth: &[u8], signer: &xdsa::SecretKey) -
     // Build and sign Sig_structure
     let signature = signer.sign(
         &SigStructure {
-            protected: &protected,
-            external_aad: msg_to_auth,
-            payload: msg_to_embed,
+            context: "Signature1".to_string(),
+            protected: protected.clone(),
+            external_aad: msg_to_auth.to_vec(),
+            payload: msg_to_embed.to_vec(),
         }
         .encode_cbor(),
     );
@@ -93,9 +94,10 @@ pub fn verify(
 
     // Reconstruct Sig_structure to verify
     let blob = SigStructure {
-        protected: &sign1.protected,
-        external_aad: msg_to_auth,
-        payload: &sign1.payload,
+        context: "Signature1".to_string(),
+        protected: sign1.protected.clone(),
+        external_aad: msg_to_auth.to_vec(),
+        payload: sign1.payload.clone(),
     }
     .encode_cbor();
 
@@ -136,8 +138,9 @@ pub fn seal(
         .seal(
             &signed,
             &EncStructure {
-                protected: &protected,
-                external_aad: msg_to_auth,
+                context: "Encrypt0".to_string(),
+                protected: protected.clone(),
+                external_aad: msg_to_auth.to_vec(),
             }
             .encode_cbor(),
             domain,
@@ -192,8 +195,9 @@ pub fn open(
             encap_key,
             &encrypt0.ciphertext,
             &EncStructure {
-                protected: &encrypt0.protected,
-                external_aad: msg_to_auth,
+                context: "Encrypt0".to_string(),
+                protected: encrypt0.protected.clone(),
+                external_aad: msg_to_auth.to_vec(),
             }
             .encode_cbor(),
             domain,
