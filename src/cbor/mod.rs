@@ -1208,6 +1208,75 @@ mod tests {
         }
     }
 
+    // Test struct for array encoding/decoding with derive macros.
+    #[derive(Debug, PartialEq, Cbor)]
+    #[cbor(array)]
+    struct TestArray {
+        first: u64,
+        second: String,
+        third: Vec<u8>,
+    }
+
+    // Tests that array structs encode correctly in field declaration order.
+    #[test]
+    fn test_array_encoding() {
+        let arr = TestArray {
+            first: 42,
+            second: "hello".to_string(),
+            third: vec![1, 2, 3],
+        };
+        let encoded = encode(&arr);
+
+        // Should be: [42, "hello", h'010203']
+        let mut expected = vec![0x83]; // array with 3 elements
+        expected.extend_from_slice(&encode(&42u64));
+        expected.extend_from_slice(&encode(&"hello".to_string()));
+        expected.extend_from_slice(&encode(&vec![1u8, 2, 3]));
+
+        assert_eq!(encoded, expected);
+    }
+
+    // Tests that array structs decode correctly.
+    #[test]
+    fn test_array_decoding() {
+        let mut data = vec![0x83]; // array with 3 elements
+        data.extend_from_slice(&encode(&100u64));
+        data.extend_from_slice(&encode(&"world".to_string()));
+        data.extend_from_slice(&encode(&vec![4u8, 5, 6]));
+
+        let decoded = decode::<TestArray>(&data).unwrap();
+        assert_eq!(decoded.first, 100);
+        assert_eq!(decoded.second, "world");
+        assert_eq!(decoded.third, vec![4, 5, 6]);
+    }
+
+    // Tests that array structs are rejected if the size does not match.
+    #[test]
+    fn test_array_rejection() {
+        // Too few elements (2 instead of 3)
+        let mut data = vec![0x82]; // array with 2 elements
+        data.extend_from_slice(&encode(&42u64));
+        data.extend_from_slice(&encode(&"test".to_string()));
+        let result = decode::<TestArray>(&data);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            Error::UnexpectedItemCount(2, 3) => {}
+            other => panic!("Expected UnexpectedItemCount(2, 3) error, got {:?}", other),
+        }
+        // Too many elements (4 instead of 3)
+        let mut data = vec![0x84]; // array with 4 elements
+        data.extend_from_slice(&encode(&42u64));
+        data.extend_from_slice(&encode(&"test".to_string()));
+        data.extend_from_slice(&encode(&vec![1u8]));
+        data.extend_from_slice(&encode(&42u64));
+        let result = decode::<TestArray>(&data);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            Error::UnexpectedItemCount(4, 3) => {}
+            other => panic!("Expected UnexpectedItemCount(4, 3) error, got {:?}", other),
+        }
+    }
+
     // Test struct for map encoding/decoding with derive macros.
     #[derive(Debug, PartialEq, Cbor)]
     struct TestMap {
