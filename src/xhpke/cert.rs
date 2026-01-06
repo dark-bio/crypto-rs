@@ -81,7 +81,11 @@ impl PublicKey {
     ///
     /// Note, HPKE certificates are always end-entity certificates. The `is_ca`
     /// and `path_len` fields in params are ignored and set to `false`/`None`.
-    pub fn to_cert_pem(&self, signer: &xdsa::SecretKey, params: &x509::Params) -> Result<String, Box<dyn Error>> {
+    pub fn to_cert_pem(
+        &self,
+        signer: &xdsa::SecretKey,
+        params: &x509::Params,
+    ) -> Result<String, Box<dyn Error>> {
         Ok(self.to_cert(signer, params)?.encode_pem().unwrap())
     }
 
@@ -90,7 +94,11 @@ impl PublicKey {
     ///
     /// Note, HPKE certificates are always end-entity certificates. The `is_ca`
     /// and `path_len` fields in params are ignored and set to `false`/`None`.
-    pub fn to_cert_der(&self, signer: &xdsa::SecretKey, params: &x509::Params) -> Result<Vec<u8>, Box<dyn Error>> {
+    pub fn to_cert_der(
+        &self,
+        signer: &xdsa::SecretKey,
+        params: &x509::Params,
+    ) -> Result<Vec<u8>, Box<dyn Error>> {
         Ok(self.to_cert(signer, params)?.encode_der().unwrap())
     }
 
@@ -99,7 +107,11 @@ impl PublicKey {
     ///
     /// Note, HPKE certificates are always end-entity certificates. The `is_ca`
     /// and `path_len` fields in params are ignored and set to `false`/`None`.
-    pub fn to_cert(&self, signer: &xdsa::SecretKey, params: &x509::Params) -> Result<X509Certificate, Box<dyn Error>> {
+    pub fn to_cert(
+        &self,
+        signer: &xdsa::SecretKey,
+        params: &x509::Params,
+    ) -> Result<X509Certificate, Box<dyn Error>> {
         let ee_params = x509::Params {
             subject_name: params.subject_name,
             issuer_name: params.issuer_name,
@@ -136,17 +148,19 @@ mod test {
         let until = start + 3600;
 
         // Test PEM roundtrip
-        let pem = alice_public.to_cert_pem(
-            &bobby_secret,
-            &Params {
-                subject_name: "Alice",
-                issuer_name: "Bobby",
-                not_before: start,
-                not_after: until,
-                is_ca: false,
-                path_len: None,
-            },
-        ).unwrap();
+        let pem = alice_public
+            .to_cert_pem(
+                &bobby_secret,
+                &Params {
+                    subject_name: "Alice",
+                    issuer_name: "Bobby",
+                    not_before: start,
+                    not_after: until,
+                    is_ca: false,
+                    path_len: None,
+                },
+            )
+            .unwrap();
         let (parsed_key, parsed_start, parsed_until) =
             PublicKey::from_cert_pem(pem.as_str(), bobby_public.clone()).unwrap();
         assert_eq!(parsed_key.to_bytes(), alice_public.to_bytes());
@@ -154,17 +168,19 @@ mod test {
         assert_eq!(parsed_until, until);
 
         // Test DER roundtrip
-        let der = alice_public.to_cert_der(
-            &bobby_secret,
-            &Params {
-                subject_name: "Alice",
-                issuer_name: "Bobby",
-                not_before: start,
-                not_after: until,
-                is_ca: false,
-                path_len: None,
-            },
-        ).unwrap();
+        let der = alice_public
+            .to_cert_der(
+                &bobby_secret,
+                &Params {
+                    subject_name: "Alice",
+                    issuer_name: "Bobby",
+                    not_before: start,
+                    not_after: until,
+                    is_ca: false,
+                    path_len: None,
+                },
+            )
+            .unwrap();
         let (parsed_key, parsed_start, parsed_until) =
             PublicKey::from_cert_der(der.as_slice(), bobby_public.clone()).unwrap();
         assert_eq!(parsed_key.to_bytes(), alice_public.to_bytes());
@@ -190,17 +206,19 @@ mod test {
         let until = start + 3600;
 
         // Sign a new certificate and verify with the wrong signer
-        let pem = alice_public.to_cert_pem(
-            &bobby_secret,
-            &Params {
-                subject_name: "Alice",
-                issuer_name: "Bobby",
-                not_before: start,
-                not_after: until,
-                is_ca: false,
-                path_len: None,
-            },
-        ).unwrap();
+        let pem = alice_public
+            .to_cert_pem(
+                &bobby_secret,
+                &Params {
+                    subject_name: "Alice",
+                    issuer_name: "Bobby",
+                    not_before: start,
+                    not_after: until,
+                    is_ca: false,
+                    path_len: None,
+                },
+            )
+            .unwrap();
         let result = PublicKey::from_cert_pem(pem.as_str(), wrong_secret.public_key());
         assert!(result.is_err());
     }

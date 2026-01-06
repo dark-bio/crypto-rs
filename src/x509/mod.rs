@@ -56,7 +56,7 @@ pub struct Params<'a> {
     pub path_len: Option<u8>,
 }
 
-/// Creates a common name field for X.509 certificates.
+/// Creates a common name field.
 fn make_cn_name(cn: &str) -> Name {
     let cn_oid = Oid(Bytes::from_static(&[85, 4, 3])); // OID 2.5.4.3 (CommonName)
     let cn_value = AttributeValue::new_utf8_string(cn).unwrap();
@@ -71,7 +71,7 @@ fn make_cn_name(cn: &str) -> Name {
     Name::RdnSequence(seq)
 }
 
-/// Creates a SubjectKeyIdentifier extension for X.509 certificates.
+/// Creates a SubjectKeyIdentifier extension.
 fn make_ski_ext(public_key: &[u8]) -> Extension {
     // Create the SHA1 hash of the subject public key
     let id = {
@@ -92,7 +92,7 @@ fn make_ski_ext(public_key: &[u8]) -> Extension {
     }
 }
 
-/// Creates an AuthorityKeyIdentifier extension for X.509 certificates.
+/// Creates an AuthorityKeyIdentifier extension.
 fn make_aki_ext(public_key: &[u8]) -> Extension {
     // Create the SHA1 hash of the issuer public key
     let id = {
@@ -116,7 +116,7 @@ fn make_aki_ext(public_key: &[u8]) -> Extension {
     }
 }
 
-/// Creates a BasicConstraints extension for X.509 certificates.
+/// Creates a BasicConstraints extension.
 ///
 /// For CA certificates, set `is_ca=true`. The `path_len` constrains how many
 /// intermediate CAs can follow (e.g., 0 means can only sign end-entity certs).
@@ -144,7 +144,7 @@ fn make_basic_constraints_ext(is_ca: bool, path_len: Option<u8>) -> Extension {
     }
 }
 
-/// Creates a KeyUsage extension for X.509 certificates.
+/// Creates a KeyUsage extension.
 ///
 /// For CA certificates, sets keyCertSign (bit 5) and cRLSign (bit 6).
 /// For end-entity certificates, sets digitalSignature (bit 0).
