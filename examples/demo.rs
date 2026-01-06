@@ -51,7 +51,7 @@ fn main() {
         is_ca: true,
         path_len: Some(0),
     };
-    let alice_xdsa_cert = alice_xdsa_public.to_cert_pem(&root_secret, &alice_xdsa_params);
+    let alice_xdsa_cert = alice_xdsa_public.to_cert_pem(&root_secret, &alice_xdsa_params).unwrap();
     println!(
         "   Alice xDSA fingerprint: {}",
         hex::encode(&alice_xdsa_public.fingerprint())
@@ -73,7 +73,7 @@ fn main() {
         is_ca: true,
         path_len: Some(0),
     };
-    let bob_xdsa_cert = bob_xdsa_public.to_cert_pem(&root_secret, &bob_xdsa_params);
+    let bob_xdsa_cert = bob_xdsa_public.to_cert_pem(&root_secret, &bob_xdsa_params).unwrap();
     println!(
         "   Bob xDSA fingerprint: {}",
         hex::encode(&bob_xdsa_public.fingerprint())
@@ -95,7 +95,7 @@ fn main() {
         is_ca: false,
         path_len: None,
     };
-    let alice_xhpke_cert = alice_xhpke_public.to_cert_pem(&alice_xdsa_secret, &alice_xhpke_params);
+    let alice_xhpke_cert = alice_xhpke_public.to_cert_pem(&alice_xdsa_secret, &alice_xhpke_params).unwrap();
     println!(
         "   Alice xHPKE fingerprint: {}",
         hex::encode(&alice_xhpke_public.fingerprint())
@@ -117,7 +117,7 @@ fn main() {
         is_ca: false,
         path_len: None,
     };
-    let bob_xhpke_cert = bob_xhpke_public.to_cert_pem(&bob_xdsa_secret, &bob_xhpke_params);
+    let bob_xhpke_cert = bob_xhpke_public.to_cert_pem(&bob_xdsa_secret, &bob_xhpke_params).unwrap();
     println!(
         "   Bob xHPKE fingerprint: {}",
         hex::encode(&bob_xhpke_public.fingerprint())

@@ -15,6 +15,7 @@ use bcder::encode::Values;
 use bytes::Bytes;
 use chrono::{TimeZone, Utc};
 use ring::digest::{Context, SHA1_FOR_LEGACY_USE_ONLY};
+use std::error::Error;
 use x509_certificate::asn1time::Time;
 use x509_certificate::rfc3280::{
     AttributeTypeAndValue, AttributeValue, Name, RdnSequence, RelativeDistinguishedName,
@@ -167,7 +168,15 @@ fn make_aki_ext(public_key: &[u8]) -> Extension {
 }
 
 /// Creates an X.509 certificate for a subject, signed by an issuer.
-pub fn new<S: Subject>(subject: &S, issuer: &xdsa::SecretKey, params: &Params) -> X509Certificate {
+pub fn new<S: Subject>(subject: &S, issuer: &xdsa::SecretKey, params: &Params) -> Result<X509Certificate, Box<dyn Error>> {
+    // Validate and convert timestamps
+    let not_before = Utc.timestamp_opt(params.not_before as i64, 0)
+        .single()
+        .ok_or_else(|| format!("invalid not_before timestamp: {}", params.not_before))?;
+    let not_after = Utc.timestamp_opt(params.not_after as i64, 0)
+        .single()
+        .ok_or_else(|| format!("invalid not_after timestamp: {}", params.not_after))?;
+
     // Create a dummy parameter that doesn't encode to NULL
     // https://github.com/indygreg/cryptography-rs/issues/26
     let no_params = AlgorithmParameter::from_captured(bcder::Captured::empty(Mode::Der));
@@ -202,8 +211,8 @@ pub fn new<S: Subject>(subject: &S, issuer: &xdsa::SecretKey, params: &Params) -
         signature: composite_alg.clone(),
         issuer: make_cn_name(params.issuer_name),
         validity: rfc5280::Validity {
-            not_before: Time::from(Utc.timestamp_opt(params.not_before as i64, 0).unwrap()),
-            not_after: Time::from(Utc.timestamp_opt(params.not_after as i64, 0).unwrap()),
+            not_before: Time::from(not_before),
+            not_after: Time::from(not_after),
         },
         subject: make_cn_name(params.subject_name),
         subject_public_key_info: rfc5280::SubjectPublicKeyInfo {
@@ -231,9 +240,9 @@ pub fn new<S: Subject>(subject: &S, issuer: &xdsa::SecretKey, params: &Params) -
     let signature = issuer.sign(&tbs_der);
 
     // Create the final certificate
-    X509Certificate::from(rfc5280::Certificate {
+    Ok(X509Certificate::from(rfc5280::Certificate {
         tbs_certificate,
         signature_algorithm: composite_alg,
         signature: bcder::BitString::new(0, Bytes::copy_from_slice(signature.as_ref())),
-    })
+    }))
 }

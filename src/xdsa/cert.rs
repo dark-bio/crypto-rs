@@ -73,19 +73,19 @@ impl PublicKey {
 
     /// to_cert_pem generates a PEM encoded X.509 certificate for this public
     /// key, signed by an xDSA issuer.
-    pub fn to_cert_pem(&self, signer: &SecretKey, params: &x509::Params) -> String {
-        self.to_cert(signer, params).encode_pem().unwrap()
+    pub fn to_cert_pem(&self, signer: &SecretKey, params: &x509::Params) -> Result<String, Box<dyn Error>> {
+        Ok(self.to_cert(signer, params)?.encode_pem().unwrap())
     }
 
     /// to_cert_der generates a DER encoded X.509 certificate for this public
     /// key, signed by an xDSA issuer.
-    pub fn to_cert_der(&self, signer: &SecretKey, params: &x509::Params) -> Vec<u8> {
-        self.to_cert(signer, params).encode_der().unwrap()
+    pub fn to_cert_der(&self, signer: &SecretKey, params: &x509::Params) -> Result<Vec<u8>, Box<dyn Error>> {
+        Ok(self.to_cert(signer, params)?.encode_der().unwrap())
     }
 
     /// to_cert generates an X.509 certificate for this public key, signed by an
     /// xDSA issuer.
-    pub fn to_cert(&self, signer: &SecretKey, params: &x509::Params) -> X509Certificate {
+    pub fn to_cert(&self, signer: &SecretKey, params: &x509::Params) -> Result<X509Certificate, Box<dyn Error>> {
         x509::new(self, signer, params)
     }
 }
@@ -123,7 +123,7 @@ mod test {
                 is_ca: false,
                 path_len: None,
             },
-        );
+        ).unwrap();
         let (parsed_key, parsed_start, parsed_until) =
             PublicKey::from_cert_pem(pem.as_str(), bobby_public.clone()).unwrap();
         assert_eq!(parsed_key.to_bytes(), alice_public.to_bytes());
@@ -141,7 +141,7 @@ mod test {
                 is_ca: true,
                 path_len: Some(0),
             },
-        );
+        ).unwrap();
         let (parsed_key, parsed_start, parsed_until) =
             PublicKey::from_cert_der(der.as_slice(), bobby_public.clone()).unwrap();
         assert_eq!(parsed_key.to_bytes(), alice_public.to_bytes());
@@ -177,7 +177,7 @@ mod test {
                 is_ca: false,
                 path_len: None,
             },
-        );
+        ).unwrap();
         let result = PublicKey::from_cert_pem(pem.as_str(), wrong_secret.public_key());
         assert!(result.is_err());
     }
