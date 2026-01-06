@@ -28,8 +28,6 @@ pub enum Error {
     Signature(String),
     #[error("decryption failed: {0}")]
     Decryption(String),
-    #[error("missing algorithm in protected header")]
-    MissingProtectedHeaderAlgorithm,
     #[error("unexpected algorithm: have {0}, want {1}")]
     UnexpectedProtectedHeaderAlgorithm(i64, i64),
     #[error("invalid encapsulated key size: {0}, expected {1}")]
