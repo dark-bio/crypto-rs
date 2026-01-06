@@ -19,11 +19,12 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
-
-//! I/O helper structs for age file encryption and decryption.
-//! <https://github.com/str4d/rage/blob/main/age/src/primitives/stream.rs>
+//
+// Source: https://github.com/str4d/rage/blob/main/age/src/primitives/stream.rs
 
 #![allow(clippy::all)]
+
+//! I/O helper structs for age file encryption and decryption.
 
 use age_core::secrecy::{ExposeSecret, SecretSlice};
 use chacha20poly1305::{
@@ -466,7 +467,7 @@ impl<R> StreamReader<R> {
                     assert!(last);
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
-                        "err-stream-last-chunk-empty",
+                        "last chunk is empty",
                     ));
                 }
                 (Ok(chunk), _) => Some(chunk),
@@ -560,7 +561,7 @@ impl<R: Read + Seek> StreamReader<R> {
     fn start(&mut self) -> io::Result<u64> {
         match self.start {
             StartPos::Implicit(offset) => {
-                let current = self.inner.seek(SeekFrom::Current(0))?;
+                let current = self.inner.stream_position()?;
                 let start = current - offset;
 
                 // Cache the start for future calls.
@@ -578,7 +579,7 @@ impl<R: Read + Seek> StreamReader<R> {
             None => {
                 // Cache the current position and nonce, and then grab the start and end
                 // ciphertext positions.
-                let cur_pos = self.inner.seek(SeekFrom::Current(0))?;
+                let cur_pos = self.inner.stream_position()?;
                 let cur_nonce = self.stream.nonce.0;
                 let ct_start = self.start()?;
                 let ct_end = self.inner.seek(SeekFrom::End(0))?;
