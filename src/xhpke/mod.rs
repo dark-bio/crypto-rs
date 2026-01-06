@@ -170,7 +170,15 @@ pub struct PublicKey {
 
 impl PublicKey {
     /// from_bytes converts a 1216-byte array into a public key.
+    ///
+    /// This validates the ML-KEM-768 component by checking that all polynomial
+    /// coefficients are in the valid range [0, 3329). This matches Go's validation.
     pub fn from_bytes(bin: &[u8; 1216]) -> Result<Self, Box<dyn Error>> {
+        // Validate ML-KEM-768 encapsulation key (first 1184 bytes).
+        // The key contains 3 polynomials of 256 coefficients each, encoded as 12-bit values.
+        // Each coefficient must be < 3329 (the modulus q).
+        validate_mlkem768_encapsulation_key(&bin[..1184])?;
+
         let inner = <KEM as Kem>::PublicKey::from_bytes(bin)?;
         Ok(Self { inner })
     }
@@ -279,6 +287,32 @@ impl PublicKey {
         encap_key.copy_from_slice(&key.to_bytes());
         Ok((encap_key, enc))
     }
+}
+
+/// Validates an ML-KEM-768 encapsulation key by checking that all polynomial
+/// coefficients are in the valid range [0, 3329).
+///
+/// The encapsulation key is 1184 bytes: 3 polynomials × 256 coefficients × 12 bits
+/// = 1152 bytes for the coefficient vectors, plus 32 bytes for the seed ρ.
+fn validate_mlkem768_encapsulation_key(key: &[u8]) -> Result<(), Box<dyn Error>> {
+    const Q: u16 = 3329;
+
+    // Process 3 bytes at a time (24 bits = 2 coefficients of 12 bits each)
+    // Only validate the first 1152 bytes (the polynomial coefficients)
+    let coeff_bytes = &key[..1152];
+    for chunk in coeff_bytes.chunks(3) {
+        // Decode two 12-bit coefficients from 3 bytes (little-endian)
+        let coeff1 = u16::from(chunk[0]) | ((u16::from(chunk[1]) & 0x0F) << 8);
+        let coeff2 = (u16::from(chunk[1]) >> 4) | (u16::from(chunk[2]) << 4);
+
+        if coeff1 >= Q {
+            return Err(format!("invalid ML-KEM coefficient: {} >= {}", coeff1, Q).into());
+        }
+        if coeff2 >= Q {
+            return Err(format!("invalid ML-KEM coefficient: {} >= {}", coeff2, Q).into());
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
