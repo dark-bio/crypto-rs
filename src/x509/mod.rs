@@ -92,6 +92,30 @@ fn make_ski_ext(public_key: &[u8]) -> Extension {
     }
 }
 
+/// Creates an AuthorityKeyIdentifier extension for X.509 certificates.
+fn make_aki_ext(public_key: &[u8]) -> Extension {
+    // Create the SHA1 hash of the issuer public key
+    let id = {
+        let mut ctx = Context::new(&SHA1_FOR_LEGACY_USE_ONLY);
+        ctx.update(public_key);
+        ctx.finish()
+    };
+    // Encode the issuer extension value
+    let mut buf = vec![
+        0x30, // SEQUENCE tag
+        22,   // length (context tag + length + 20 bytes)
+        0x80, // context tag [0] implicit
+        20,   // length
+    ];
+    buf.extend_from_slice(id.as_ref());
+
+    Extension {
+        id: Oid(Bytes::from_static(&[85, 29, 35])), // OID 2.5.29.35
+        critical: Some(false),
+        value: bcder::OctetString::new(Bytes::copy_from_slice(&buf)),
+    }
+}
+
 /// Creates a BasicConstraints extension for X.509 certificates.
 ///
 /// For CA certificates, set `is_ca=true`. The `path_len` constrains how many
@@ -143,37 +167,19 @@ fn make_key_usage_ext(is_ca: bool) -> Extension {
     }
 }
 
-/// Creates an AuthorityKeyIdentifier extension for X.509 certificates.
-fn make_aki_ext(public_key: &[u8]) -> Extension {
-    // Create the SHA1 hash of the issuer public key
-    let id = {
-        let mut ctx = Context::new(&SHA1_FOR_LEGACY_USE_ONLY);
-        ctx.update(public_key);
-        ctx.finish()
-    };
-    // Encode the issuer extension value
-    let mut buf = vec![
-        0x30, // SEQUENCE tag
-        22,   // length (context tag + length + 20 bytes)
-        0x80, // context tag [0] implicit
-        20,   // length
-    ];
-    buf.extend_from_slice(id.as_ref());
-
-    Extension {
-        id: Oid(Bytes::from_static(&[85, 29, 35])), // OID 2.5.29.35
-        critical: Some(false),
-        value: bcder::OctetString::new(Bytes::copy_from_slice(&buf)),
-    }
-}
-
 /// Creates an X.509 certificate for a subject, signed by an issuer.
-pub fn new<S: Subject>(subject: &S, issuer: &xdsa::SecretKey, params: &Params) -> Result<X509Certificate, Box<dyn Error>> {
+pub fn new<S: Subject>(
+    subject: &S,
+    issuer: &xdsa::SecretKey,
+    params: &Params,
+) -> Result<X509Certificate, Box<dyn Error>> {
     // Validate and convert timestamps
-    let not_before = Utc.timestamp_opt(params.not_before as i64, 0)
+    let not_before = Utc
+        .timestamp_opt(params.not_before as i64, 0)
         .single()
         .ok_or_else(|| format!("invalid not_before timestamp: {}", params.not_before))?;
-    let not_after = Utc.timestamp_opt(params.not_after as i64, 0)
+    let not_after = Utc
+        .timestamp_opt(params.not_after as i64, 0)
         .single()
         .ok_or_else(|| format!("invalid not_after timestamp: {}", params.not_after))?;
 
