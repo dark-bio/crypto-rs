@@ -423,6 +423,7 @@ dependencies = [
  "bytes",
  "chacha20poly1305",
  "chrono",
+ "darkbio-crypto-cbor-derive",
  "der 0.7.10",
  "ed25519-dalek",
  "futures",
@@ -450,6 +451,15 @@ dependencies = [
  "x509-certificate",
  "x509-parser",
  "zeroize",
+]
+
+[[package]]
+name = "darkbio-crypto-cbor-derive"
+version = "0.11.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

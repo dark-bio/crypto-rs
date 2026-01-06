@@ -12,12 +12,12 @@
 mod types;
 
 pub use types::{
-    CoseEncrypt0, CoseSign1, ENCAP_KEY_SIZE, EncStructure, SIGNATURE_SIZE, SigStructure,
+    CoseEncrypt0, CoseSign1, ENCAP_KEY_SIZE, EmptyHeader, EncStructure, EncapKeyHeader,
+    ProtectedHeader, SIGNATURE_SIZE, SigStructure,
 };
 
 use crate::cbor::{self, Encode};
 use crate::{xdsa, xhpke};
-use std::collections::HashMap;
 
 /// Error is the failures that can occur during COSE operations.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -28,18 +28,10 @@ pub enum Error {
     Signature(String),
     #[error("decryption failed: {0}")]
     Decryption(String),
-    #[error("invalid protected header count: have {0}, want 1")]
-    InvalidProtectedHeaderCount(usize),
     #[error("missing algorithm in protected header")]
     MissingProtectedHeaderAlgorithm,
     #[error("unexpected algorithm: have {0}, want {1}")]
     UnexpectedProtectedHeaderAlgorithm(i64, i64),
-    #[error("unprotected header must be empty")]
-    InvalidUnprotectedHeaderNotEmpty,
-    #[error("invalid unprotected header count: have {0}, want 1")]
-    InvalidUnprotectedHeaderCount(usize),
-    #[error("unprotected header must contain only the encapsulated key")]
-    UnexpectedUnprotectedHeader,
     #[error("invalid encapsulated key size: {0}, expected {1}")]
     InvalidEncapKeySize(usize, usize),
 }
@@ -50,12 +42,6 @@ pub const ALGORITHM_ID_XDSA: i64 = -70000;
 /// Private COSE algorithm identifier for X-Wing (ML-KEM-768 + X25519).
 pub const ALGORITHM_ID_XHPKE: i64 = -70001;
 
-/// COSE header label for algorithm.
-pub const HEADER_ALGORITHM: i64 = 1;
-
-/// COSE header label for encapsulated key (draft-ietf-cose-hpke, assumed -4).
-pub const HEADER_ENCAP_KEY: i64 = -4;
-
 /// sign creates a COSE_Sign1 digital signature of the msg_to_embed.
 ///
 /// - `msg_to_embed`: The message to sign (embedded in COSE_Sign1)
@@ -65,7 +51,9 @@ pub const HEADER_ENCAP_KEY: i64 = -4;
 /// Returns the serialized COSE_Sign1 structure.
 pub fn sign(msg_to_embed: &[u8], msg_to_auth: &[u8], signer: &xdsa::SecretKey) -> Vec<u8> {
     // Build protected header
-    let protected = cbor::encode(&HashMap::from([(HEADER_ALGORITHM, ALGORITHM_ID_XDSA)]));
+    let protected = cbor::encode(&ProtectedHeader {
+        algorithm: ALGORITHM_ID_XDSA,
+    });
 
     // Build and sign Sig_structure
     let signature = signer.sign(
@@ -79,7 +67,7 @@ pub fn sign(msg_to_embed: &[u8], msg_to_auth: &[u8], signer: &xdsa::SecretKey) -
     // Build and encode COSE_Sign1
     cbor::encode(&CoseSign1 {
         protected,
-        unprotected: HashMap::new(),
+        unprotected: EmptyHeader {},
         payload: msg_to_embed.to_vec(),
         signature,
     })
@@ -100,11 +88,9 @@ pub fn verify(
     // Parse COSE_Sign1
     let sign1: CoseSign1 = cbor::decode(msg_to_check)?;
 
-    // Verify the protected and unprotected headers
+    // Verify the protected header
     verify_protected_header(&sign1.protected, ALGORITHM_ID_XDSA)?;
-    if !sign1.unprotected.is_empty() {
-        return Err(Error::InvalidUnprotectedHeaderNotEmpty);
-    }
+
     // Reconstruct Sig_structure to verify
     let blob = SigStructure {
         protected: &sign1.protected,
@@ -141,7 +127,9 @@ pub fn seal(
     let signed = sign(msg_to_seal, msg_to_auth, signer);
 
     // Build protected header
-    let protected = cbor::encode(&HashMap::from([(HEADER_ALGORITHM, ALGORITHM_ID_XHPKE)]));
+    let protected = cbor::encode(&ProtectedHeader {
+        algorithm: ALGORITHM_ID_XHPKE,
+    });
 
     // Build and seal Enc_structure
     let (encap_key, ciphertext) = recipient
@@ -159,7 +147,9 @@ pub fn seal(
     // Build and encode COSE_Encrypt0
     Ok(cbor::encode(&CoseEncrypt0 {
         protected,
-        unprotected: HashMap::from([(HEADER_ENCAP_KEY, encap_key.to_vec())]),
+        unprotected: EncapKeyHeader {
+            encap_key: encap_key.to_vec(),
+        },
         ciphertext,
     }))
 }
@@ -183,16 +173,16 @@ pub fn open(
     // Parse COSE_Encrypt0
     let encrypt0: CoseEncrypt0 = cbor::decode(msg_to_open)?;
 
-    // Verify protected and unprotected headers
+    // Verify protected header
     verify_protected_header(&encrypt0.protected, ALGORITHM_ID_XHPKE)?;
-    verify_unprotected_header_encap_only(&encrypt0.unprotected)?;
 
     // Extract encapsulated key from the unprotected headers
-    let encap_key_vec = &encrypt0.unprotected[&HEADER_ENCAP_KEY];
-    let encap_key: &[u8; ENCAP_KEY_SIZE] = encap_key_vec
+    let encap_key: &[u8; ENCAP_KEY_SIZE] = encrypt0
+        .unprotected
+        .encap_key
         .as_slice()
         .try_into()
-        .map_err(|_| Error::InvalidEncapKeySize(encap_key_vec.len(), ENCAP_KEY_SIZE))?;
+        .map_err(|_| Error::InvalidEncapKeySize(encrypt0.unprotected.encap_key.len(), ENCAP_KEY_SIZE))?;
 
     // Rebuild and open Enc_structure
     let msg_to_check = recipient
@@ -212,35 +202,14 @@ pub fn open(
     verify(&msg_to_check, msg_to_auth, sender)
 }
 
-/// Verifies the protected header contains exactly the expected algorithm
-/// and nothing else.
+/// Verifies the protected header contains exactly the expected algorithm.
 fn verify_protected_header(bytes: &[u8], exp_algo: i64) -> Result<(), Error> {
-    // Ensure there's exactly one header present
-    let header: HashMap<i64, i64> = cbor::decode(bytes)?;
-    if header.len() != 1 {
-        return Err(Error::InvalidProtectedHeaderCount(header.len()));
-    }
-    // Ensure that it's the algorithm header and ensure it's correct
-    let algo = header
-        .get(&HEADER_ALGORITHM)
-        .ok_or(Error::MissingProtectedHeaderAlgorithm)?;
-
-    if *algo != exp_algo {
-        return Err(Error::UnexpectedProtectedHeaderAlgorithm(*algo, exp_algo));
-    }
-    Ok(())
-}
-
-/// Verifies the unprotected header contains exactly the encapsulated key,
-/// and nothing else.
-fn verify_unprotected_header_encap_only(unprotected: &HashMap<i64, Vec<u8>>) -> Result<(), Error> {
-    // Ensure there's exactly one header present
-    if unprotected.len() != 1 {
-        return Err(Error::InvalidUnprotectedHeaderCount(unprotected.len()));
-    }
-    // Ensure that it's the encapsulated key header
-    if !unprotected.contains_key(&HEADER_ENCAP_KEY) {
-        return Err(Error::UnexpectedUnprotectedHeader);
+    let header: ProtectedHeader = cbor::decode(bytes)?;
+    if header.algorithm != exp_algo {
+        return Err(Error::UnexpectedProtectedHeaderAlgorithm(
+            header.algorithm,
+            exp_algo,
+        ));
     }
     Ok(())
 }

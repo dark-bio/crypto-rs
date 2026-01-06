@@ -9,6 +9,10 @@
 // Enable the experimental doc_cfg feature
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
+// Allow derive macros to reference this crate as `darkbio_crypto` even when
+// used internally (proc macros can't distinguish internal vs external use).
+extern crate self as darkbio_crypto;
+
 #[cfg(feature = "argon2")]
 pub mod argon2;
 

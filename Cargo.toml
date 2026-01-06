@@ -18,7 +18,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 default = []
 argon2 = ["dep:argon2"]
 async = ["dep:futures"]
-cbor = ["dep:thiserror"]
+cbor = ["dep:thiserror", "dep:darkbio-crypto-cbor-derive"]
 cose = ["cbor", "xhpke"]
 eddsa = ["pem", "dep:ed25519-dalek", "dep:sha2", "dep:signature"]
 hkdf = ["dep:hkdf", "dep:sha2"]
@@ -32,6 +32,7 @@ xdsa = ["pem", "eddsa", "mldsa", "x509", "dep:x509-parser"]
 xhpke = ["pem", "xdsa", "dep:generic-array", "dep:hpke", "dep:rand", "dep:rand_chacha", "dep:x-wing"]
 
 [dependencies]
+darkbio-crypto-cbor-derive = { version = "0.11.0", path = "src/cbor/derive", optional = true }
 age-core = { version = "0.11.0", optional = true }
 argon2 = { version = "0.5.3", optional = true }
 base64 = { version = "0.22.1", optional = true }
