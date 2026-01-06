@@ -174,7 +174,7 @@ fn main() {
         &[],
         &alice_xdsa_secret,
         &verified_bob_xhpke,
-        "demo-crypto-domain",
+        b"demo-crypto-domain",
     )
     .expect("Failed to sign and encrypt message");
     println!(
@@ -193,7 +193,7 @@ fn main() {
         &[],
         &bob_xhpke_secret,
         &verified_alice_xdsa,
-        "demo-crypto-domain",
+        b"demo-crypto-domain",
     )
     .expect("Failed to decrypt and verify message");
     println!("   ✓ Message decrypted & verified");

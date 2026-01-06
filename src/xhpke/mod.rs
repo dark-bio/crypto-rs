@@ -43,7 +43,7 @@ type KDF = hpke::kdf::HkdfSha256;
 //
 // The final info will be this prefix concatenated with another contextual info
 // from an app layer action.
-const INFO_PREFIX: &str = "dark-bio-v1:";
+const INFO_PREFIX: &[u8] = b"dark-bio-v1:";
 
 /// SecretKey contains a private key of the type bound to the configured crypto.
 #[derive(Clone, PartialEq, Eq)]
@@ -143,9 +143,9 @@ impl SecretKey {
         session_key: &[u8; 1120],
         msg_to_open: &[u8],
         msg_to_auth: &[u8],
-        domain: &str,
+        domain: &[u8],
     ) -> Result<Vec<u8>, HpkeError> {
-        let info = INFO_PREFIX.to_string() + domain;
+        let info = [INFO_PREFIX, domain].concat();
 
         // Parse the encapsulated session key
         let session = <KEM as Kem>::EncappedKey::from_bytes(session_key)?;
@@ -155,7 +155,7 @@ impl SecretKey {
             &hpke::OpModeR::Base,
             &self.inner,
             &session,
-            info.as_bytes(),
+            &info,
         )?;
         // Verify the construct and decrypt the message if everything checks out
         ctx.open(msg_to_open, msg_to_auth)
@@ -255,9 +255,9 @@ impl PublicKey {
         &self,
         msg_to_seal: &[u8],
         msg_to_auth: &[u8],
-        domain: &str,
+        domain: &[u8],
     ) -> Result<([u8; 1120], Vec<u8>), HpkeError> {
-        let info = INFO_PREFIX.to_string() + domain;
+        let info = [INFO_PREFIX, domain].concat();
 
         // Create a random number stream that works in WASM
         let mut seed = [0u8; 32];
@@ -268,7 +268,7 @@ impl PublicKey {
         let (key, mut ctx) = hpke::setup_sender::<AEAD, KDF, KEM, _>(
             &hpke::OpModeS::Base,
             &self.inner,
-            info.as_bytes(),
+            &info,
             &mut rng,
         )?;
 
@@ -374,12 +374,12 @@ mod tests {
         for tt in &tests {
             // Seal the message to the public key
             let (sess_key, seal_msg) = public
-                .seal(tt.seal_msg, tt.auth_msg, "test")
+                .seal(tt.seal_msg, tt.auth_msg, b"test")
                 .unwrap_or_else(|e| panic!("failed to seal message: {}", e));
 
             // Open the sealed message with the secret key
             let cleartext = secret
-                .open(&sess_key, &seal_msg, tt.auth_msg, "test")
+                .open(&sess_key, &seal_msg, tt.auth_msg, b"test")
                 .unwrap_or_else(|e| panic!("failed to open message: {}", e));
 
             // Validate that the cleartext matches our expected encrypted payload
