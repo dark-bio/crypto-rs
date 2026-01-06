@@ -182,7 +182,9 @@ pub fn open(
         .encap_key
         .as_slice()
         .try_into()
-        .map_err(|_| Error::InvalidEncapKeySize(encrypt0.unprotected.encap_key.len(), ENCAP_KEY_SIZE))?;
+        .map_err(|_| {
+            Error::InvalidEncapKeySize(encrypt0.unprotected.encap_key.len(), ENCAP_KEY_SIZE)
+        })?;
 
     // Rebuild and open Enc_structure
     let msg_to_check = recipient
