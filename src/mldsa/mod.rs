@@ -155,12 +155,11 @@ impl SecretKey {
     }
 
     /// sign creates a digital signature of the message with an optional context string.
-    pub fn sign(&self, message: &[u8], ctx: &[u8]) -> Vec<u8> {
-        self.inner
-            .sign_deterministic(message, ctx)
-            .unwrap()
-            .encode()
-            .to_vec()
+    pub fn sign(&self, message: &[u8], ctx: &[u8]) -> [u8; 3309] {
+        let sig = self.inner.sign_deterministic(message, ctx).unwrap();
+        let encoded = sig.encode();
+        let slice: &[u8] = encoded.as_ref();
+        slice.try_into().unwrap()
     }
 }
 
@@ -247,9 +246,9 @@ impl PublicKey {
         &self,
         message: &[u8],
         ctx: &[u8],
-        signature: &[u8],
+        signature: &[u8; 3309],
     ) -> Result<(), ml_dsa::Error> {
-        let sig = ml_dsa::Signature::<MlDsa65>::try_from(signature)?;
+        let sig = ml_dsa::Signature::<MlDsa65>::try_from(signature.as_slice())?;
         if self.inner.verify_with_context(message, ctx, &sig) {
             Ok(())
         } else {
@@ -691,14 +690,12 @@ dbdfd1dd95f38d72218ceeae2461974019c705ef7d2d16a56e7b50a0cd51
         for tt in &tests {
             // Sign and verify the message
             let signature = secret.sign(tt.message, tt.ctx);
-            public
-                .verify(tt.message, tt.ctx, signature.as_slice())
-                .unwrap();
+            public.verify(tt.message, tt.ctx, &signature).unwrap();
 
             // Verify wrong context fails
             assert!(
                 public
-                    .verify(tt.message, b"wrong context", signature.as_slice())
+                    .verify(tt.message, b"wrong context", &signature)
                     .is_err()
             );
         }

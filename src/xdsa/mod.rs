@@ -264,8 +264,8 @@ impl PublicKey {
         m_prime.extend_from_slice(&prehash);
 
         // Split and verify both signatures
-        let ml_sig = &signature[..3309];
-        let ed_sig = &signature[3309..];
+        let ml_sig: &[u8; 3309] = signature[..3309].try_into().unwrap();
+        let ed_sig: &[u8; 64] = signature[3309..].try_into().unwrap();
 
         self.ml_key.verify(&m_prime, SIGNATURE_DOMAIN, ml_sig)?;
         self.ed_key.verify(&m_prime, ed_sig)?;

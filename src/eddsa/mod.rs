@@ -82,8 +82,8 @@ impl SecretKey {
     }
 
     /// sign creates a digital signature of the message.
-    pub fn sign(&self, message: &[u8]) -> Vec<u8> {
-        self.inner.sign(message).to_vec()
+    pub fn sign(&self, message: &[u8]) -> [u8; 64] {
+        self.inner.sign(message).to_bytes()
     }
 }
 
@@ -139,8 +139,8 @@ impl PublicKey {
     }
 
     /// verify verifies a digital signature.
-    pub fn verify(&self, message: &[u8], signature: &[u8]) -> Result<(), SignatureError> {
-        let sig = Signature::try_from(signature)?;
+    pub fn verify(&self, message: &[u8], signature: &[u8; 64]) -> Result<(), SignatureError> {
+        let sig = Signature::from_bytes(signature);
         self.inner.verify(message, &sig)
     }
 }
@@ -174,7 +174,7 @@ mod tests {
 
             // Verify the signature message
             public
-                .verify(tt.message, signature.as_slice())
+                .verify(tt.message, &signature)
                 .unwrap_or_else(|e| panic!("failed to verify message: {}", e));
         }
     }
