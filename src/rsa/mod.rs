@@ -18,6 +18,17 @@ use rsa::signature::{Keypair, SignatureEncoding, Signer, Verifier};
 use rsa::traits::{PrivateKeyParts, PublicKeyParts};
 use rsa::{BigUint, RsaPrivateKey, RsaPublicKey};
 
+/// Size of the raw secret key in bytes.
+/// Format: p (128 bytes) || q (128 bytes) || d (256 bytes) || e (8 bytes)
+pub const SECRET_KEY_SIZE: usize = 520;
+
+/// Size of the raw public key in bytes.
+/// Format: n (256 bytes) || e (8 bytes)
+pub const PUBLIC_KEY_SIZE: usize = 264;
+
+/// Size of an RSA-2048 signature.
+pub const SIGNATURE_SIZE: usize = 256;
+
 /// SecretKey contains a 2048-bit RSA private key usable for signing, with SHA256
 /// as the underlying hash algorithm. Whilst RSA could also be used for encryption,
 /// that is not exposed on the API as it's not required by the project.
@@ -40,7 +51,7 @@ impl SecretKey {
     ///
     /// Format: p (128 bytes) || q (128 bytes) || d (256 bytes) || e (8 bytes),
     /// all in big-endian.
-    pub fn from_bytes(bytes: &[u8; 520]) -> Result<Self, rsa::Error> {
+    pub fn from_bytes(bytes: &[u8; SECRET_KEY_SIZE]) -> Result<Self, rsa::Error> {
         let p = BigUint::from_bytes_be(&bytes[0..128]);
         let q = BigUint::from_bytes_be(&bytes[128..256]);
         let d = BigUint::from_bytes_be(&bytes[256..512]);
@@ -103,7 +114,7 @@ impl SecretKey {
     ///
     /// Format: p (128 bytes) || q (128 bytes) || d (256 bytes) || e (8 bytes),
     /// all in big-endian.
-    pub fn to_bytes(&self) -> [u8; 520] {
+    pub fn to_bytes(&self) -> [u8; SECRET_KEY_SIZE] {
         let key: &RsaPrivateKey = self.inner.as_ref();
         let primes = key.primes();
 
@@ -150,7 +161,7 @@ impl SecretKey {
     }
 
     /// sign creates a digital signature of the message.
-    pub fn sign(&self, message: &[u8]) -> [u8; 256] {
+    pub fn sign(&self, message: &[u8]) -> [u8; SIGNATURE_SIZE] {
         let sig = self.inner.sign(message);
         sig.to_bytes().as_ref().try_into().unwrap()
     }
@@ -169,7 +180,7 @@ impl PublicKey {
     /// from_bytes parses a 264-byte array into a public key.
     ///
     /// Format: n (256 bytes) || e (8 bytes), all in big-endian.
-    pub fn from_bytes(bytes: &[u8; 264]) -> Result<Self, rsa::Error> {
+    pub fn from_bytes(bytes: &[u8; PUBLIC_KEY_SIZE]) -> Result<Self, rsa::Error> {
         let n = BigUint::from_bytes_be(&bytes[0..256]);
         let e = BigUint::from_bytes_be(&bytes[256..264]);
 
@@ -220,7 +231,7 @@ impl PublicKey {
     /// to_bytes serializes a public key into a 264-byte array.
     ///
     /// Format: n (256 bytes) || e (8 bytes), all in big-endian.
-    pub fn to_bytes(&self) -> [u8; 264] {
+    pub fn to_bytes(&self) -> [u8; PUBLIC_KEY_SIZE] {
         let key: &RsaPublicKey = self.inner.as_ref();
 
         let mut out = [0u8; 264];
@@ -264,13 +275,13 @@ impl PublicKey {
     }
 
     /// verify verifies a digital signature.
-    pub fn verify(&self, message: &[u8], signature: &[u8; 256]) -> Result<(), signature::Error> {
+    pub fn verify(&self, message: &[u8], signature: &[u8; SIGNATURE_SIZE]) -> Result<(), signature::Error> {
         let sig = Signature::try_from(signature.as_slice())?;
         self.inner.verify(message, &sig)
     }
 
     /// verify_hash verifies a digital signature on an already hashed message.
-    pub fn verify_hash(&self, hash: &[u8], signature: &[u8; 256]) -> Result<(), signature::Error> {
+    pub fn verify_hash(&self, hash: &[u8], signature: &[u8; SIGNATURE_SIZE]) -> Result<(), signature::Error> {
         let sig = Signature::try_from(signature.as_slice())?;
         self.inner.verify_prehash(hash, &sig)
     }

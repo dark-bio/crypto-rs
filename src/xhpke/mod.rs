@@ -45,6 +45,15 @@ type KDF = hpke::kdf::HkdfSha256;
 // from an app layer action.
 const INFO_PREFIX: &[u8] = b"dark-bio-v1:";
 
+/// Size of the secret key seed in bytes.
+pub const SECRET_KEY_SIZE: usize = 32;
+
+/// Size of the public key in bytes.
+pub const PUBLIC_KEY_SIZE: usize = 1216;
+
+/// Size of the encapsulated key in bytes.
+pub const ENCAP_KEY_SIZE: usize = 1120;
+
 /// SecretKey contains a private key of the type bound to the configured crypto.
 #[derive(Clone, PartialEq, Eq)]
 pub struct SecretKey {
@@ -61,7 +70,7 @@ impl SecretKey {
     }
 
     /// from_bytes converts a 32-byte seed into a private key.
-    pub fn from_bytes(bin: &[u8; 32]) -> Self {
+    pub fn from_bytes(bin: &[u8; SECRET_KEY_SIZE]) -> Self {
         let inner = <KEM as Kem>::PrivateKey::from_bytes(bin).unwrap();
         Self { inner }
     }
@@ -91,7 +100,7 @@ impl SecretKey {
     }
 
     /// to_bytes converts a private key into a 32-byte seed.
-    pub fn to_bytes(&self) -> [u8; 32] {
+    pub fn to_bytes(&self) -> [u8; SECRET_KEY_SIZE] {
         self.inner.to_bytes().into()
     }
 
@@ -140,7 +149,7 @@ impl SecretKey {
     /// cannot be verified from the ciphertext alone.
     pub fn open(
         &self,
-        session_key: &[u8; 1120],
+        session_key: &[u8; ENCAP_KEY_SIZE],
         msg_to_open: &[u8],
         msg_to_auth: &[u8],
         domain: &[u8],
@@ -173,7 +182,7 @@ impl PublicKey {
     ///
     /// This validates the ML-KEM-768 component by checking that all polynomial
     /// coefficients are in the valid range [0, 3329). This matches Go's validation.
-    pub fn from_bytes(bin: &[u8; 1216]) -> Result<Self, Box<dyn Error>> {
+    pub fn from_bytes(bin: &[u8; PUBLIC_KEY_SIZE]) -> Result<Self, Box<dyn Error>> {
         // Validate ML-KEM-768 encapsulation key (first 1184 bytes).
         // The key contains 3 polynomials of 256 coefficients each, encoded as 12-bit values.
         // Each coefficient must be < 3329 (the modulus q).
@@ -212,7 +221,7 @@ impl PublicKey {
     }
 
     /// to_bytes converts a public key into a 1216-byte array.
-    pub fn to_bytes(&self) -> [u8; 1216] {
+    pub fn to_bytes(&self) -> [u8; PUBLIC_KEY_SIZE] {
         let mut result = [0u8; 1216];
         result.copy_from_slice(&self.inner.to_bytes());
         result
@@ -264,7 +273,7 @@ impl PublicKey {
         msg_to_seal: &[u8],
         msg_to_auth: &[u8],
         domain: &[u8],
-    ) -> Result<([u8; 1120], Vec<u8>), HpkeError> {
+    ) -> Result<([u8; ENCAP_KEY_SIZE], Vec<u8>), HpkeError> {
         let info = [INFO_PREFIX, domain].concat();
 
         // Create a random number stream that works in WASM

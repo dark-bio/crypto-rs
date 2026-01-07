@@ -28,6 +28,18 @@ const SIGNATURE_DOMAIN: &[u8] = b"COMPSIG-MLDSA65-Ed25519-SHA512";
 /// OID is the ASN.1 object identifier for MLDSA65-Ed25519-SHA512.
 const OID: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.6.48");
 
+/// Size of the secret key in bytes.
+/// Format: ML-DSA seed (32 bytes) || Ed25519 seed (32 bytes)
+pub const SECRET_KEY_SIZE: usize = 64;
+
+/// Size of the public key in bytes.
+/// Format: ML-DSA (1952 bytes) || Ed25519 (32 bytes)
+pub const PUBLIC_KEY_SIZE: usize = 1984;
+
+/// Size of a composite signature in bytes.
+/// Format: ML-DSA (3309 bytes) || Ed25519 (64 bytes)
+pub const SIGNATURE_SIZE: usize = 3373;
+
 /// SecretKey is an ML-DSA-65 private key paired with an Ed25519 private key for
 /// creating and verifying quantum resistant digital signatures.    
 #[derive(Clone)]
@@ -46,7 +58,7 @@ impl SecretKey {
     }
 
     /// from_bytes creates a private key from a 64-byte seed.
-    pub fn from_bytes(seed: &[u8; 64]) -> Self {
+    pub fn from_bytes(seed: &[u8; SECRET_KEY_SIZE]) -> Self {
         let ml_seed: [u8; 32] = seed[..32].try_into().unwrap();
         let ed_seed: [u8; 32] = seed[32..].try_into().unwrap();
 
@@ -86,7 +98,7 @@ impl SecretKey {
     }
 
     /// to_bytes converts a secret key into a 64-byte array.
-    pub fn to_bytes(&self) -> [u8; 64] {
+    pub fn to_bytes(&self) -> [u8; SECRET_KEY_SIZE] {
         let mut out = [0u8; 64];
         out[..32].copy_from_slice(&self.ml_key.to_bytes());
         out[32..].copy_from_slice(&self.ed_key.to_bytes());
@@ -131,7 +143,7 @@ impl SecretKey {
     }
 
     /// sign creates a digital signature of the message.
-    pub fn sign(&self, message: &[u8]) -> [u8; 3373] {
+    pub fn sign(&self, message: &[u8]) -> [u8; SIGNATURE_SIZE] {
         // Construct M' = Prefix || Label || len(ctx) || ctx || PH(M)
         // where ctx is empty and PH is SHA512
         let mut hasher = sha2::Sha512::new();
@@ -167,7 +179,7 @@ pub struct PublicKey {
 
 impl PublicKey {
     /// from_bytes converts a 1984-byte array into a public key.
-    pub fn from_bytes(bytes: &[u8; 1984]) -> Result<Self, Box<dyn Error>> {
+    pub fn from_bytes(bytes: &[u8; PUBLIC_KEY_SIZE]) -> Result<Self, Box<dyn Error>> {
         let ml_bytes: [u8; 1952] = bytes[..1952].try_into().unwrap();
         let ed_bytes: [u8; 32] = bytes[1952..].try_into().unwrap();
 
@@ -210,7 +222,7 @@ impl PublicKey {
     }
 
     /// to_bytes converts a public key into a 1984-byte array.
-    pub fn to_bytes(&self) -> [u8; 1984] {
+    pub fn to_bytes(&self) -> [u8; PUBLIC_KEY_SIZE] {
         let mut out = [0u8; 1984];
         out[..1952].copy_from_slice(&self.ml_key.to_bytes());
         out[1952..].copy_from_slice(&self.ed_key.to_bytes());
@@ -249,7 +261,7 @@ impl PublicKey {
     }
 
     /// verify verifies a digital signature.
-    pub fn verify(&self, message: &[u8], signature: &[u8; 3373]) -> Result<(), Box<dyn Error>> {
+    pub fn verify(&self, message: &[u8], signature: &[u8; SIGNATURE_SIZE]) -> Result<(), Box<dyn Error>> {
         // Construct M' = Prefix || Label || len(ctx) || ctx || PH(M)
         // where ctx is empty and PH is SHA512
         let mut hasher = sha2::Sha512::new();

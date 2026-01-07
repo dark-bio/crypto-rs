@@ -16,6 +16,15 @@ use std::error::Error;
 
 use crate::pem;
 
+/// Size of the secret key in bytes.
+pub const SECRET_KEY_SIZE: usize = 32;
+
+/// Size of the public key in bytes.
+pub const PUBLIC_KEY_SIZE: usize = 32;
+
+/// Size of a signature in bytes.
+pub const SIGNATURE_SIZE: usize = 64;
+
 /// SecretKey contains an Ed25519 private key usable for signing.
 #[derive(Clone)]
 pub struct SecretKey {
@@ -32,7 +41,7 @@ impl SecretKey {
     }
 
     /// from_bytes converts a 32-byte array into a private key.
-    pub fn from_bytes(bin: &[u8; 32]) -> Self {
+    pub fn from_bytes(bin: &[u8; SECRET_KEY_SIZE]) -> Self {
         let key = ed25519_dalek::SecretKey::from(*bin);
         let sig = ed25519_dalek::SigningKey::from(&key);
         Self { inner: sig }
@@ -54,7 +63,7 @@ impl SecretKey {
     }
 
     /// to_bytes converts a private key into a 32-byte array.
-    pub fn to_bytes(&self) -> [u8; 32] {
+    pub fn to_bytes(&self) -> [u8; SECRET_KEY_SIZE] {
         self.inner.to_bytes()
     }
 
@@ -82,7 +91,7 @@ impl SecretKey {
     }
 
     /// sign creates a digital signature of the message.
-    pub fn sign(&self, message: &[u8]) -> [u8; 64] {
+    pub fn sign(&self, message: &[u8]) -> [u8; SIGNATURE_SIZE] {
         self.inner.sign(message).to_bytes()
     }
 }
@@ -95,7 +104,7 @@ pub struct PublicKey {
 
 impl PublicKey {
     /// from_bytes converts a 32-byte array into a public key.
-    pub fn from_bytes(bin: &[u8; 32]) -> Result<Self, Box<dyn Error>> {
+    pub fn from_bytes(bin: &[u8; PUBLIC_KEY_SIZE]) -> Result<Self, Box<dyn Error>> {
         let inner = ed25519_dalek::VerifyingKey::from_bytes(bin)?;
         Ok(Self { inner })
     }
@@ -116,7 +125,7 @@ impl PublicKey {
     }
 
     /// to_bytes converts a public key into a 32-byte array.
-    pub fn to_bytes(&self) -> [u8; 32] {
+    pub fn to_bytes(&self) -> [u8; PUBLIC_KEY_SIZE] {
         self.inner.to_bytes()
     }
 
@@ -139,7 +148,7 @@ impl PublicKey {
     }
 
     /// verify verifies a digital signature.
-    pub fn verify(&self, message: &[u8], signature: &[u8; 64]) -> Result<(), SignatureError> {
+    pub fn verify(&self, message: &[u8], signature: &[u8; SIGNATURE_SIZE]) -> Result<(), SignatureError> {
         let sig = Signature::from_bytes(signature);
         self.inner.verify(message, &sig)
     }

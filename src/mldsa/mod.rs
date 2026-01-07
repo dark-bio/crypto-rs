@@ -22,6 +22,15 @@ use zeroize::Zeroize;
 
 use crate::pem;
 
+/// Size of the secret key seed in bytes.
+pub const SECRET_KEY_SIZE: usize = 32;
+
+/// Size of the public key in bytes.
+pub const PUBLIC_KEY_SIZE: usize = 1952;
+
+/// Size of a signature in bytes.
+pub const SIGNATURE_SIZE: usize = 3309;
+
 /// OpenSSL ML-DSA-65 private key inner structure.
 #[derive(Clone, Debug, Eq, PartialEq, Sequence)]
 struct MlDsa65PrivateKeyInner {
@@ -53,7 +62,7 @@ impl SecretKey {
     }
 
     /// from_bytes creates a private key from a 32-byte seed.
-    pub fn from_bytes(seed: &[u8; 32]) -> Self {
+    pub fn from_bytes(seed: &[u8; SECRET_KEY_SIZE]) -> Self {
         let array = ml_dsa::Seed::try_from(seed.as_slice()).unwrap();
         let inner = ml_dsa::SigningKey::<MlDsa65>::from_seed(&array);
         Self { inner, seed: array }
@@ -105,7 +114,7 @@ impl SecretKey {
     }
 
     /// to_bytes returns the 32-byte seed of the private key.
-    pub fn to_bytes(&self) -> [u8; 32] {
+    pub fn to_bytes(&self) -> [u8; SECRET_KEY_SIZE] {
         let mut out = [0u8; 32];
         out.copy_from_slice(self.seed.as_slice());
         out
@@ -155,7 +164,7 @@ impl SecretKey {
     }
 
     /// sign creates a digital signature of the message with an optional context string.
-    pub fn sign(&self, message: &[u8], ctx: &[u8]) -> [u8; 3309] {
+    pub fn sign(&self, message: &[u8], ctx: &[u8]) -> [u8; SIGNATURE_SIZE] {
         let sig = self.inner.sign_deterministic(message, ctx).unwrap();
         let encoded = sig.encode();
         let slice: &[u8] = encoded.as_ref();
@@ -171,7 +180,7 @@ pub struct PublicKey {
 
 impl PublicKey {
     /// from_bytes converts a 1952-byte array into a public key.
-    pub fn from_bytes(bytes: &[u8; 1952]) -> Self {
+    pub fn from_bytes(bytes: &[u8; PUBLIC_KEY_SIZE]) -> Self {
         let enc = EncodedVerifyingKey::<MlDsa65>::try_from(bytes.as_slice()).unwrap();
         let inner = ml_dsa::VerifyingKey::<MlDsa65>::decode(&enc);
         Self { inner }
@@ -205,7 +214,7 @@ impl PublicKey {
     }
 
     /// to_bytes converts a public key into a 1952-byte array.
-    pub fn to_bytes(&self) -> [u8; 1952] {
+    pub fn to_bytes(&self) -> [u8; PUBLIC_KEY_SIZE] {
         let enc = self.inner.encode();
         let mut out = [0u8; 1952];
         out.copy_from_slice(enc.as_slice());
@@ -246,7 +255,7 @@ impl PublicKey {
         &self,
         message: &[u8],
         ctx: &[u8],
-        signature: &[u8; 3309],
+        signature: &[u8; SIGNATURE_SIZE],
     ) -> Result<(), ml_dsa::Error> {
         let sig = ml_dsa::Signature::<MlDsa65>::try_from(signature.as_slice())?;
         if self.inner.verify_with_context(message, ctx, &sig) {
@@ -699,5 +708,15 @@ dbdfd1dd95f38d72218ceeae2461974019c705ef7d2d16a56e7b50a0cd51
                     .is_err()
             );
         }
+    }
+
+    #[test]
+    fn test_bad_pubkey_does_not_panic() {
+        // Ensure malformed public keys don't crash
+        let zeros = [0u8; 1952];
+        let _ = PublicKey::from_bytes(&zeros);
+
+        let ones = [0xFFu8; 1952];
+        let _ = PublicKey::from_bytes(&ones);
     }
 }
