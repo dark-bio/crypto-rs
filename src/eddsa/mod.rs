@@ -148,7 +148,11 @@ impl PublicKey {
     }
 
     /// verify verifies a digital signature.
-    pub fn verify(&self, message: &[u8], signature: &[u8; SIGNATURE_SIZE]) -> Result<(), SignatureError> {
+    pub fn verify(
+        &self,
+        message: &[u8],
+        signature: &[u8; SIGNATURE_SIZE],
+    ) -> Result<(), SignatureError> {
         let sig = Signature::from_bytes(signature);
         self.inner.verify(message, &sig)
     }
