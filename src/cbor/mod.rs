@@ -632,6 +632,75 @@ mod tuple_impls {
     impl_tuple!(T1, T2, T3, T4, T5, T6, T7, T8);
 }
 
+/// Raw is a placeholder type to allow only partially parsing CBOR objects when
+/// some part might depend on another (e.g. version tag, method in an RPC, etc).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Raw(pub Vec<u8>);
+
+impl std::ops::Deref for Raw {
+    type Target = Vec<u8>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Raw {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl Encode for Raw {
+    fn encode_cbor(&self) -> Vec<u8> {
+        self.0.clone()
+    }
+}
+
+impl Decode for Raw {
+    fn decode_cbor(data: &[u8]) -> Result<Self, Error> {
+        let mut decoder = Decoder::new(data);
+        let result = Self::decode_cbor_notrail(&mut decoder)?;
+        decoder.finish()?;
+        Ok(result)
+    }
+
+    fn decode_cbor_notrail(decoder: &mut Decoder<'_>) -> Result<Self, Error> {
+        let start = decoder.pos;
+        skip_object(decoder)?;
+        let end = decoder.pos;
+        Ok(Raw(decoder.data[start..end].to_vec()))
+    }
+}
+
+// skip_object advances the decoder past one CBOR item without validation. It
+// does do some minimal type checks as walking the CBOR does require walking
+// all the inner fields too.
+fn skip_object(decoder: &mut Decoder<'_>) -> Result<(), Error> {
+    let (major, value) = decoder.decode_header()?;
+    match major {
+        MAJOR_UINT | MAJOR_NINT => Ok(()),
+        MAJOR_BYTES | MAJOR_TEXT => {
+            decoder.read_bytes(value)?;
+            Ok(())
+        }
+        MAJOR_ARRAY => {
+            for _ in 0..value {
+                skip_object(decoder)?;
+            }
+            Ok(())
+        }
+        MAJOR_MAP => {
+            for _ in 0..value {
+                skip_object(decoder)?;
+                skip_object(decoder)?;
+            }
+            Ok(())
+        }
+        _ => Err(Error::UnsupportedType(major)),
+    }
+}
+
 // map_key_cmp compares two i64 keys according to CBOR deterministic encoding
 // order (RFC 8949 Section 4.2.1): bytewise lexicographic order of encoded keys.
 //
@@ -1348,6 +1417,76 @@ mod tests {
             0x20, 0x18, 0x64, // -1: 100
         ]);
         assert!(result.is_err());
+    }
+
+    // Tests that Raw encodes correctly (passthrough of inner bytes).
+    #[test]
+    fn test_raw_encoding() {
+        // Unsigned integer (42)
+        let raw = Raw(vec![0x18, 0x2a]);
+        assert_eq!(encode(&raw), vec![0x18, 0x2a]);
+
+        // String "hello"
+        let raw = Raw(vec![0x65, 0x68, 0x65, 0x6c, 0x6c, 0x6f]);
+        assert_eq!(encode(&raw), vec![0x65, 0x68, 0x65, 0x6c, 0x6c, 0x6f]);
+
+        // Tuple with Raw inside: ("method", <raw bytes for u64 1>)
+        let raw = Raw(vec![0x01]);
+        let encoded = encode(&("method", raw));
+        assert_eq!(
+            encoded,
+            vec![
+                0x82, // array of 2
+                0x66, 0x6d, 0x65, 0x74, 0x68, 0x6f, 0x64, // "method"
+                0x01  // raw: u64 1
+            ]
+        );
+    }
+
+    // Tests that Raw decodes correctly (captures raw CBOR bytes).
+    #[test]
+    fn test_raw_decoding() {
+        // Unsigned integer (42)
+        let data = vec![0x18, 0x2a];
+        let raw: Raw = decode(&data).unwrap();
+        assert_eq!(raw.0, vec![0x18, 0x2a]);
+
+        // String "hello"
+        let data = vec![0x65, 0x68, 0x65, 0x6c, 0x6c, 0x6f];
+        let raw: Raw = decode(&data).unwrap();
+        assert_eq!(raw.0, vec![0x65, 0x68, 0x65, 0x6c, 0x6c, 0x6f]);
+
+        // Tuple with Raw: ("method", <raw params>)
+        let data = vec![
+            0x82, // array of 2
+            0x66, 0x6d, 0x65, 0x74, 0x68, 0x6f, 0x64, // "method"
+            0x82, 0x01, 0x63, 0x61, 0x72, 0x67, // (1, "arg")
+        ];
+        let (method, params): (String, Raw) = decode(&data).unwrap();
+        assert_eq!(method, "method");
+        assert_eq!(params.0, vec![0x82, 0x01, 0x63, 0x61, 0x72, 0x67]);
+    }
+
+    // Tests that Raw rejects unsupported major types.
+    #[test]
+    fn test_raw_rejection() {
+        // Major type 6 (tags) - unsupported
+        let data = vec![0xc0, 0x01]; // tag(0) followed by 1
+        assert!(matches!(
+            decode::<Raw>(&data),
+            Err(Error::UnsupportedType(6))
+        ));
+
+        // Major type 7 (floats/bools) - unsupported
+        let data = vec![0xf5]; // true
+        assert!(matches!(
+            decode::<Raw>(&data),
+            Err(Error::UnsupportedType(7))
+        ));
+
+        // Trailing bytes
+        let data = vec![0x18, 0x2a, 0x00]; // u64 42 + trailing 0x00
+        assert!(matches!(decode::<Raw>(&data), Err(Error::TrailingBytes)));
     }
 
     // Tests that the dry-decoding verifier properly restricts the allowed types.

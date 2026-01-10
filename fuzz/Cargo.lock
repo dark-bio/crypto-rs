@@ -36,9 +36,19 @@ checksum = "2fd1289c04a9ea8cb22300a459a72a385d7c73d3259e2ed7dcb2af674838cfa9"
 name = "darkbio-crypto"
 version = "0.11.0"
 dependencies = [
+ "darkbio-crypto-cbor-derive",
  "getrandom 0.2.16",
  "getrandom 0.3.3",
  "thiserror",
+]
+
+[[package]]
+name = "darkbio-crypto-cbor-derive"
+version = "0.11.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

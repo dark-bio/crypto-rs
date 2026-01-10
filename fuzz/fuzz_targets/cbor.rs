@@ -6,9 +6,38 @@
 
 #![no_main]
 
-use darkbio_crypto::cbor::{decode, encode};
+use darkbio_crypto::cbor::{decode, encode, Cbor, Raw};
 use libfuzzer_sys::fuzz_target;
-use std::collections::HashMap;
+
+#[derive(Debug, PartialEq, Cbor)]
+struct MapSimple {
+    #[cbor(key = 1)]
+    a: u64,
+    #[cbor(key = 2)]
+    b: String,
+}
+
+#[derive(Debug, PartialEq, Cbor)]
+struct MapNested {
+    #[cbor(key = 1)]
+    x: MapSimple,
+    #[cbor(key = -1)]
+    y: Vec<u8>,
+}
+
+#[derive(Debug, PartialEq, Cbor)]
+#[cbor(array)]
+struct ArraySimple {
+    a: u64,
+    b: String,
+}
+
+#[derive(Debug, PartialEq, Cbor)]
+#[cbor(array)]
+struct ArrayWithRaw {
+    method: String,
+    params: Raw,
+}
 
 macro_rules! roundtrip {
     ($data:expr, $( $typ:ty ),+ $(,)?) => {
@@ -47,9 +76,12 @@ fuzz_target!(|data: &[u8]| {
         [u8; 8],
         ((u64, [u8; 4]), (String, u64)),
         ((i64, [u8; 4]), (String, i64)),
-        HashMap<i64, u64>,
-        HashMap<i64, String>,
-        HashMap<i64, Vec<u8>>,
-        HashMap<i64, HashMap<i64, u64>>,
+        Raw,
+        (String, Raw),
+        (Raw, u64),
+        MapSimple,
+        MapNested,
+        ArraySimple,
+        ArrayWithRaw,
     );
 });
