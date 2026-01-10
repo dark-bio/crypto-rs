@@ -47,12 +47,13 @@ impl PublicKey {
 
         // Validate the content against the provided signer (composite signature)
         let tbs = cert.tbs_certificate.as_ref();
-        let sig: [u8; 3373] = cert
+        let sig_bytes: [u8; 3373] = cert
             .signature_value
             .data
             .as_ref()
             .try_into()
             .map_err(|_| "invalid signature length")?;
+        let sig = super::Signature::from_bytes(&sig_bytes);
         signer.verify(tbs, &sig)?;
 
         // Extract the embedded public key (ML-DSA-65 1952 bytes || Ed25519 32 bytes)

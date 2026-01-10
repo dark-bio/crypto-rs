@@ -249,6 +249,6 @@ pub fn new<S: Subject>(
     Ok(X509Certificate::from(rfc5280::Certificate {
         tbs_certificate,
         signature_algorithm: composite_alg,
-        signature: bcder::BitString::new(0, Bytes::copy_from_slice(signature.as_ref())),
+        signature: bcder::BitString::new(0, Bytes::copy_from_slice(&signature.to_bytes())),
     }))
 }

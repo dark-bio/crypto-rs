@@ -57,6 +57,18 @@ impl SecretKey {
         }
     }
 
+    /// compose creates a secret key from its constituent ML-DSA-65 and Ed25519
+    /// secret keys.
+    pub fn compose(ml_key: mldsa::SecretKey, ed_key: eddsa::SecretKey) -> Self {
+        Self { ml_key, ed_key }
+    }
+
+    /// split decomposes a secret key into its constituent ML-DSA-65 and Ed25519
+    /// secret keys.
+    pub fn split(self) -> (mldsa::SecretKey, eddsa::SecretKey) {
+        (self.ml_key, self.ed_key)
+    }
+
     /// from_bytes creates a private key from a 64-byte seed.
     pub fn from_bytes(seed: &[u8; SECRET_KEY_SIZE]) -> Self {
         let ml_seed: [u8; 32] = seed[..32].try_into().unwrap();
@@ -143,7 +155,7 @@ impl SecretKey {
     }
 
     /// sign creates a digital signature of the message.
-    pub fn sign(&self, message: &[u8]) -> [u8; SIGNATURE_SIZE] {
+    pub fn sign(&self, message: &[u8]) -> Signature {
         // Construct M' = Prefix || Label || len(ctx) || ctx || PH(M)
         // where ctx is empty and PH is SHA512
         let mut hasher = sha2::Sha512::new();
@@ -161,11 +173,7 @@ impl SecretKey {
         let ml_sig = self.ml_key.sign(&m_prime, SIGNATURE_DOMAIN);
         let ed_sig = self.ed_key.sign(&m_prime);
 
-        // Concatenate: ML-DSA-65 (3309 bytes) || Ed25519 (64 bytes)
-        let mut sig = [0u8; 3373];
-        sig[..3309].copy_from_slice(&ml_sig);
-        sig[3309..].copy_from_slice(&ed_sig);
-        sig
+        Signature::compose(ml_sig, ed_sig)
     }
 }
 
@@ -178,6 +186,18 @@ pub struct PublicKey {
 }
 
 impl PublicKey {
+    /// compose creates a public key from its constituent ML-DSA-65 and Ed25519
+    /// public keys.
+    pub fn compose(ml_key: mldsa::PublicKey, ed_key: eddsa::PublicKey) -> Self {
+        Self { ml_key, ed_key }
+    }
+
+    /// split decomposes a public key into its constituent ML-DSA-65 and Ed25519
+    /// public keys.
+    pub fn split(self) -> (mldsa::PublicKey, eddsa::PublicKey) {
+        (self.ml_key, self.ed_key)
+    }
+
     /// from_bytes converts a 1984-byte array into a public key.
     pub fn from_bytes(bytes: &[u8; PUBLIC_KEY_SIZE]) -> Result<Self, Box<dyn Error>> {
         let ml_bytes: [u8; 1952] = bytes[..1952].try_into().unwrap();
@@ -261,11 +281,7 @@ impl PublicKey {
     }
 
     /// verify verifies a digital signature.
-    pub fn verify(
-        &self,
-        message: &[u8],
-        signature: &[u8; SIGNATURE_SIZE],
-    ) -> Result<(), Box<dyn Error>> {
+    pub fn verify(&self, message: &[u8], signature: &Signature) -> Result<(), Box<dyn Error>> {
         // Construct M' = Prefix || Label || len(ctx) || ctx || PH(M)
         // where ctx is empty and PH is SHA512
         let mut hasher = sha2::Sha512::new();
@@ -280,13 +296,52 @@ impl PublicKey {
         m_prime.extend_from_slice(&prehash);
 
         // Split and verify both signatures
-        let ml_sig: &[u8; 3309] = signature[..3309].try_into().unwrap();
-        let ed_sig: &[u8; 64] = signature[3309..].try_into().unwrap();
+        let (ml_sig, ed_sig) = signature.split();
 
-        self.ml_key.verify(&m_prime, SIGNATURE_DOMAIN, ml_sig)?;
-        self.ed_key.verify(&m_prime, ed_sig)?;
+        self.ml_key.verify(&m_prime, SIGNATURE_DOMAIN, &ml_sig)?;
+        self.ed_key.verify(&m_prime, &ed_sig)?;
 
         Ok(())
+    }
+}
+
+/// Signature is an ML-DSA-65 signature paired with an Ed25519 signature.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Signature {
+    ml_sig: mldsa::Signature,
+    ed_sig: eddsa::Signature,
+}
+
+impl Signature {
+    /// compose creates a signature from its constituent ML-DSA-65 and Ed25519
+    /// signatures.
+    pub fn compose(ml_sig: mldsa::Signature, ed_sig: eddsa::Signature) -> Self {
+        Self { ml_sig, ed_sig }
+    }
+
+    /// split decomposes a signature into its constituent ML-DSA-65 and Ed25519
+    /// signatures.
+    pub fn split(&self) -> (mldsa::Signature, eddsa::Signature) {
+        (self.ml_sig.clone(), self.ed_sig)
+    }
+
+    /// from_bytes converts a 3373-byte array into a signature.
+    pub fn from_bytes(bytes: &[u8; SIGNATURE_SIZE]) -> Self {
+        let ml_bytes: [u8; 3309] = bytes[..3309].try_into().unwrap();
+        let ed_bytes: [u8; 64] = bytes[3309..].try_into().unwrap();
+
+        Self {
+            ml_sig: mldsa::Signature::from_bytes(&ml_bytes),
+            ed_sig: eddsa::Signature::from_bytes(&ed_bytes),
+        }
+    }
+
+    /// to_bytes converts a signature into a 3373-byte array.
+    pub fn to_bytes(&self) -> [u8; SIGNATURE_SIZE] {
+        let mut out = [0u8; SIGNATURE_SIZE];
+        out[..3309].copy_from_slice(&self.ml_sig.to_bytes());
+        out[3309..].copy_from_slice(&self.ed_sig.to_bytes());
+        out
     }
 }
 
@@ -509,16 +564,16 @@ f6e178bcc044204110444ea2b7e80548769ae5010c22707493adb0baf55f\
 
         // Sign and verify (ML-DSA uses randomized signing, so we can't compare bytes)
         let signature = seckey.sign(ietf_vectors::TEST_MSG.as_bytes());
-        let sig_array: [u8; 3373] = signature.try_into().unwrap();
         pubkey
-            .verify(ietf_vectors::TEST_MSG.as_bytes(), &sig_array)
+            .verify(ietf_vectors::TEST_MSG.as_bytes(), &signature)
             .unwrap();
 
         // Verify the IETF test signature can be verified
         let expected_sig = hex::decode(ietf_vectors::TEST_SIG).unwrap();
         let expected_sig_array: [u8; 3373] = expected_sig.try_into().unwrap();
+        let expected_signature = Signature::from_bytes(&expected_sig_array);
         pubkey
-            .verify(ietf_vectors::TEST_MSG.as_bytes(), &expected_sig_array)
+            .verify(ietf_vectors::TEST_MSG.as_bytes(), &expected_signature)
             .unwrap();
     }
 
@@ -545,5 +600,68 @@ f6e178bcc044204110444ea2b7e80548769ae5010c22707493adb0baf55f\
         // Round-trip: decode and re-encode
         let roundtrip = SecretKey::from_der(&encoded_der).unwrap();
         assert_eq!(roundtrip.to_der(), encoded_der);
+    }
+
+    #[test]
+    fn test_secretkey_compose_split() {
+        let ml_key = mldsa::SecretKey::generate();
+        let ed_key = eddsa::SecretKey::generate();
+
+        let ml_bytes = ml_key.to_bytes();
+        let ed_bytes = ed_key.to_bytes();
+
+        let composite = SecretKey::compose(ml_key, ed_key);
+        let (ml_key2, ed_key2) = composite.split();
+
+        assert_eq!(ml_key2.to_bytes(), ml_bytes);
+        assert_eq!(ed_key2.to_bytes(), ed_bytes);
+    }
+
+    #[test]
+    fn test_publickey_compose_split() {
+        let ml_key = mldsa::SecretKey::generate().public_key();
+        let ed_key = eddsa::SecretKey::generate().public_key();
+
+        let ml_bytes = ml_key.to_bytes();
+        let ed_bytes = ed_key.to_bytes();
+
+        let composite = PublicKey::compose(ml_key, ed_key);
+        let (ml_key2, ed_key2) = composite.split();
+
+        assert_eq!(ml_key2.to_bytes(), ml_bytes);
+        assert_eq!(ed_key2.to_bytes(), ed_bytes);
+    }
+
+    #[test]
+    fn test_signature_compose_split() {
+        let ml_sec = mldsa::SecretKey::generate();
+        let ed_sec = eddsa::SecretKey::generate();
+
+        let message = b"test message";
+        let ml_sig = ml_sec.sign(message, b"");
+        let ed_sig = ed_sec.sign(message);
+
+        let ml_bytes = ml_sig.to_bytes();
+        let ed_bytes = ed_sig.to_bytes();
+
+        let composite = Signature::compose(ml_sig, ed_sig);
+        let (ml_sig2, ed_sig2) = composite.split();
+
+        assert_eq!(ml_sig2.to_bytes(), ml_bytes);
+        assert_eq!(ed_sig2.to_bytes(), ed_bytes);
+    }
+
+    #[test]
+    fn test_compose_sign_verify() {
+        let ml_sec = mldsa::SecretKey::generate();
+        let ed_sec = eddsa::SecretKey::generate();
+
+        let composite_sec = SecretKey::compose(ml_sec.clone(), ed_sec.clone());
+        let composite_pub = composite_sec.public_key();
+
+        let message = b"message to sign with composite key";
+        let signature = composite_sec.sign(message);
+
+        composite_pub.verify(message, &signature).unwrap();
     }
 }

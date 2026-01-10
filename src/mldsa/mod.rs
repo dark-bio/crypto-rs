@@ -164,11 +164,11 @@ impl SecretKey {
     }
 
     /// sign creates a digital signature of the message with an optional context string.
-    pub fn sign(&self, message: &[u8], ctx: &[u8]) -> [u8; SIGNATURE_SIZE] {
+    pub fn sign(&self, message: &[u8], ctx: &[u8]) -> Signature {
         let sig = self.inner.sign_deterministic(message, ctx).unwrap();
         let encoded = sig.encode();
         let slice: &[u8] = encoded.as_ref();
-        slice.try_into().unwrap()
+        Signature(slice.try_into().unwrap())
     }
 }
 
@@ -255,14 +255,30 @@ impl PublicKey {
         &self,
         message: &[u8],
         ctx: &[u8],
-        signature: &[u8; SIGNATURE_SIZE],
+        signature: &Signature,
     ) -> Result<(), ml_dsa::Error> {
-        let sig = ml_dsa::Signature::<MlDsa65>::try_from(signature.as_slice())?;
+        let sig = ml_dsa::Signature::<MlDsa65>::try_from(signature.to_bytes().as_slice())?;
         if self.inner.verify_with_context(message, ctx, &sig) {
             Ok(())
         } else {
             Err(ml_dsa::Error::default())
         }
+    }
+}
+
+/// Signature contains an ML-DSA-65 signature.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Signature([u8; SIGNATURE_SIZE]);
+
+impl Signature {
+    /// from_bytes converts a 3309-byte array into a signature.
+    pub fn from_bytes(bytes: &[u8; SIGNATURE_SIZE]) -> Self {
+        Self(*bytes)
+    }
+
+    /// to_bytes converts a signature into a 3309-byte array.
+    pub fn to_bytes(&self) -> [u8; SIGNATURE_SIZE] {
+        self.0
     }
 }
 

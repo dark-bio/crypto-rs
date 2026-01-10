@@ -68,7 +68,7 @@ pub fn sign(msg_to_embed: &[u8], msg_to_auth: &[u8], signer: &xdsa::SecretKey) -
         protected,
         unprotected: EmptyHeader {},
         payload: msg_to_embed.to_vec(),
-        signature,
+        signature: signature.to_bytes(),
     })
 }
 
@@ -100,8 +100,9 @@ pub fn verify(
     .encode_cbor();
 
     // Verify signature
+    let signature = xdsa::Signature::from_bytes(&sign1.signature);
     verifier
-        .verify(&blob, &sign1.signature)
+        .verify(&blob, &signature)
         .map_err(|e| Error::Signature(e.to_string()))?;
 
     Ok(sign1.payload)

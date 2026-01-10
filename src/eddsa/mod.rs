@@ -8,13 +8,12 @@
 //!
 //! https://datatracker.ietf.org/doc/html/rfc8032
 
+use crate::pem;
 use ed25519_dalek::ed25519::signature::rand_core::OsRng;
 use ed25519_dalek::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey};
-use ed25519_dalek::{Signature, SignatureError, Signer, Verifier};
+use ed25519_dalek::{SignatureError, Signer, Verifier};
 use sha2::Digest;
 use std::error::Error;
-
-use crate::pem;
 
 /// Size of the secret key in bytes.
 pub const SECRET_KEY_SIZE: usize = 32;
@@ -91,8 +90,8 @@ impl SecretKey {
     }
 
     /// sign creates a digital signature of the message.
-    pub fn sign(&self, message: &[u8]) -> [u8; SIGNATURE_SIZE] {
-        self.inner.sign(message).to_bytes()
+    pub fn sign(&self, message: &[u8]) -> Signature {
+        Signature(self.inner.sign(message).to_bytes())
     }
 }
 
@@ -148,13 +147,25 @@ impl PublicKey {
     }
 
     /// verify verifies a digital signature.
-    pub fn verify(
-        &self,
-        message: &[u8],
-        signature: &[u8; SIGNATURE_SIZE],
-    ) -> Result<(), SignatureError> {
-        let sig = Signature::from_bytes(signature);
+    pub fn verify(&self, message: &[u8], signature: &Signature) -> Result<(), SignatureError> {
+        let sig = ed25519_dalek::Signature::from_bytes(&signature.to_bytes());
         self.inner.verify(message, &sig)
+    }
+}
+
+/// Signature contains an Ed25519 signature.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Signature([u8; SIGNATURE_SIZE]);
+
+impl Signature {
+    /// from_bytes converts a 64-byte array into a signature.
+    pub fn from_bytes(bytes: &[u8; SIGNATURE_SIZE]) -> Self {
+        Self(*bytes)
+    }
+
+    /// to_bytes converts a signature into a 64-byte array.
+    pub fn to_bytes(&self) -> [u8; SIGNATURE_SIZE] {
+        self.0
     }
 }
 

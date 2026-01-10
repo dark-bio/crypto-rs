@@ -9,7 +9,6 @@
 //! https://datatracker.ietf.org/doc/html/rfc8017
 
 use crate::pem;
-use rsa::pkcs1v15::Signature;
 use rsa::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey, Error};
 use rsa::rand_core::OsRng;
 use rsa::sha2::{Digest, Sha256};
@@ -161,9 +160,9 @@ impl SecretKey {
     }
 
     /// sign creates a digital signature of the message.
-    pub fn sign(&self, message: &[u8]) -> [u8; SIGNATURE_SIZE] {
+    pub fn sign(&self, message: &[u8]) -> Signature {
         let sig = self.inner.sign(message);
-        sig.to_bytes().as_ref().try_into().unwrap()
+        Signature(sig.to_bytes().as_ref().try_into().unwrap())
     }
 }
 
@@ -278,9 +277,9 @@ impl PublicKey {
     pub fn verify(
         &self,
         message: &[u8],
-        signature: &[u8; SIGNATURE_SIZE],
-    ) -> Result<(), signature::Error> {
-        let sig = Signature::try_from(signature.as_slice())?;
+        signature: &Signature,
+    ) -> Result<(), rsa::signature::Error> {
+        let sig = rsa::pkcs1v15::Signature::try_from(signature.to_bytes().as_slice())?;
         self.inner.verify(message, &sig)
     }
 
@@ -288,10 +287,26 @@ impl PublicKey {
     pub fn verify_hash(
         &self,
         hash: &[u8],
-        signature: &[u8; SIGNATURE_SIZE],
-    ) -> Result<(), signature::Error> {
-        let sig = Signature::try_from(signature.as_slice())?;
+        signature: &Signature,
+    ) -> Result<(), rsa::signature::Error> {
+        let sig = rsa::pkcs1v15::Signature::try_from(signature.to_bytes().as_slice())?;
         self.inner.verify_prehash(hash, &sig)
+    }
+}
+
+/// Signature contains an RSA-2048 signature.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Signature([u8; SIGNATURE_SIZE]);
+
+impl Signature {
+    /// from_bytes converts a 256-byte array into a signature.
+    pub fn from_bytes(bytes: &[u8; SIGNATURE_SIZE]) -> Self {
+        Self(*bytes)
+    }
+
+    /// to_bytes converts a signature into a 256-byte array.
+    pub fn to_bytes(&self) -> [u8; SIGNATURE_SIZE] {
+        self.0
     }
 }
 
