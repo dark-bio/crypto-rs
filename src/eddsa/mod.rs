@@ -9,11 +9,19 @@
 //! https://datatracker.ietf.org/doc/html/rfc8032
 
 use crate::pem;
+use der::Encode;
+use der::asn1::OctetString;
 use ed25519_dalek::ed25519::signature::rand_core::OsRng;
-use ed25519_dalek::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey};
+use ed25519_dalek::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePublicKey};
 use ed25519_dalek::{SignatureError, Signer, Verifier};
+use pkcs8::PrivateKeyInfo;
 use sha2::Digest;
+use spki::ObjectIdentifier;
+use spki::der::AnyRef;
 use std::error::Error;
+
+/// OID is the ASN.1 object identifier for Ed25519.
+const OID: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.101.112");
 
 /// Size of the secret key in bytes.
 pub const SECRET_KEY_SIZE: usize = 32;
@@ -48,6 +56,10 @@ impl SecretKey {
 
     /// from_der parses a DER buffer into a private key.
     pub fn from_der(der: &[u8]) -> Result<Self, Box<dyn Error>> {
+        let info = PrivateKeyInfo::try_from(der)?;
+        if info.public_key.is_some() {
+            return Err("embedded public key not supported".into());
+        }
         let inner = ed25519_dalek::SigningKey::from_pkcs8_der(der)?;
         Ok(Self { inner })
     }
@@ -68,7 +80,20 @@ impl SecretKey {
 
     /// to_der serializes a private key into a DER buffer.
     pub fn to_der(&self) -> Vec<u8> {
-        self.inner.to_pkcs8_der().unwrap().as_bytes().to_vec()
+        // The private key field contains an OCTET STRING wrapping the seed
+        let seed = OctetString::new(self.inner.to_bytes()).unwrap();
+        let inner = seed.to_der().unwrap();
+
+        let alg = pkcs8::AlgorithmIdentifierRef {
+            oid: OID,
+            parameters: None::<AnyRef>,
+        };
+        let info = PrivateKeyInfo {
+            algorithm: alg,
+            private_key: &inner,
+            public_key: None,
+        };
+        info.to_der().unwrap()
     }
 
     /// to_pem serializes a private key into a PEM string.
