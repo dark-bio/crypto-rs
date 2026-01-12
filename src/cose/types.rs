@@ -14,12 +14,32 @@ pub const SIGNATURE_SIZE: usize = 3373;
 /// X-Wing encapsulated key size: 1088 (ML-KEM-768) + 32 (X25519) = 1120 bytes.
 pub const ENCAP_KEY_SIZE: usize = 1120;
 
-/// Protected header containing just the algorithm.
+/// Private COSE header label for Unix timestamp.
+pub const HEADER_TIMESTAMP: i64 = -70002;
+
+/// Protected header for COSE_Sign1.
 #[derive(Debug, Clone, PartialEq, Eq, Cbor)]
-pub struct ProtectedHeader {
+pub struct SigProtectedHeader {
     /// Algorithm identifier (COSE header label 1)
     #[cbor(key = 1)]
     pub algorithm: i64,
+    /// Key identifier - signer's fingerprint (COSE header label 4)
+    #[cbor(key = 4)]
+    pub kid: [u8; 32],
+    /// Unix timestamp in seconds (private header label)
+    #[cbor(key = -70002)]
+    pub timestamp: i64,
+}
+
+/// Protected header for COSE_Encrypt0.
+#[derive(Debug, Clone, PartialEq, Eq, Cbor)]
+pub struct EncProtectedHeader {
+    /// Algorithm identifier (COSE header label 1)
+    #[cbor(key = 1)]
+    pub algorithm: i64,
+    /// Key identifier - recipient's fingerprint (COSE header label 4)
+    #[cbor(key = 4)]
+    pub kid: [u8; 32],
 }
 
 /// Empty unprotected header map (for COSE_Sign1).

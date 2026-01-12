@@ -202,6 +202,7 @@ fn main() {
         &bob_xhpke_secret,
         &verified_alice_xdsa,
         b"demo-crypto-domain",
+        None,
     )
     .expect("Failed to decrypt and verify message");
     println!("   ✓ Message decrypted & verified");
