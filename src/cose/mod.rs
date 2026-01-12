@@ -31,7 +31,7 @@ pub enum Error {
     #[error("decryption failed: {0}")]
     Decryption(String),
     #[error("unexpected algorithm: have {0}, want {1}")]
-    UnexpectedProtectedHeaderAlgorithm(i64, i64),
+    UnexpectedAlgorithm(i64, i64),
     #[error("invalid encapsulated key size: {0}, expected {1}")]
     InvalidEncapKeySize(usize, usize),
     #[error("signature stale: time drift {0}s exceeds max {1}s")]
@@ -446,10 +446,7 @@ pub fn open(
 fn verify_sig_protected_header(bytes: &[u8], exp_algo: i64) -> Result<SigProtectedHeader, Error> {
     let header: SigProtectedHeader = cbor::decode(bytes)?;
     if header.algorithm != exp_algo {
-        return Err(Error::UnexpectedProtectedHeaderAlgorithm(
-            header.algorithm,
-            exp_algo,
-        ));
+        return Err(Error::UnexpectedAlgorithm(header.algorithm, exp_algo));
     }
     Ok(header)
 }
@@ -458,10 +455,7 @@ fn verify_sig_protected_header(bytes: &[u8], exp_algo: i64) -> Result<SigProtect
 fn verify_enc_protected_header(bytes: &[u8], exp_algo: i64) -> Result<EncProtectedHeader, Error> {
     let header: EncProtectedHeader = cbor::decode(bytes)?;
     if header.algorithm != exp_algo {
-        return Err(Error::UnexpectedProtectedHeaderAlgorithm(
-            header.algorithm,
-            exp_algo,
-        ));
+        return Err(Error::UnexpectedAlgorithm(header.algorithm, exp_algo));
     }
     Ok(header)
 }
