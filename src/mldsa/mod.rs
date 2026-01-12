@@ -34,7 +34,7 @@ pub const PUBLIC_KEY_SIZE: usize = 1952;
 /// Size of a signature in bytes.
 pub const SIGNATURE_SIZE: usize = 3309;
 
-/// OpenSSL ML-DSA-65 private key inner structure.
+/// ML-DSA-65 private key inner structure.
 #[derive(Clone, Debug, Eq, PartialEq, Sequence)]
 struct MlDsa65PrivateKeyInner {
     seed: OctetString,
@@ -80,7 +80,7 @@ impl SecretKey {
         if info.algorithm.oid != OID {
             return Err("not an ML-DSA-65 private key".into());
         }
-        // OpenSSL wraps the private key in a SEQUENCE containing:
+        // Wrap the private key in a SEQUENCE containing:
         //   - OCTET STRING (32 bytes): seed
         //   - OCTET STRING (4032 bytes): expanded key
         let inner_key = MlDsa65PrivateKeyInner::from_der(info.private_key)?;
@@ -124,9 +124,6 @@ impl SecretKey {
     }
 
     /// to_der serializes a private key into a DER buffer.
-    ///
-    /// The format matches OpenSSL: a SEQUENCE containing the seed (32 bytes)
-    /// and the expanded key (4032 bytes).
     pub fn to_der(&self) -> Vec<u8> {
         let enc = self.inner.encode();
 
