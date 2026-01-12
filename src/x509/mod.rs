@@ -23,7 +23,6 @@ use x509_certificate::rfc3280::{
 use x509_certificate::rfc5280::{AlgorithmIdentifier, AlgorithmParameter, Extension, Extensions};
 use x509_certificate::{X509Certificate, rfc5280};
 
-
 /// Subject is a trait for types that can be embedded into X.509 certificates
 /// as the subject's public key.
 pub trait Subject {
