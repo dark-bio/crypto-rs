@@ -22,6 +22,9 @@ use zeroize::Zeroize;
 
 use crate::pem;
 
+/// OID is the ASN.1 object identifier for ML-DSA-65.
+pub const OID: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.3.18");
+
 /// Size of the secret key seed in bytes.
 pub const SECRET_KEY_SIZE: usize = 32;
 
@@ -74,7 +77,7 @@ impl SecretKey {
         let info = PrivateKeyInfo::from_der(der)?;
 
         // Ensure the algorithm OID matches ML_DSA_65 (OID: 2.16.840.1.101.3.4.3.18)
-        if info.algorithm.oid.to_string() != "2.16.840.1.101.3.4.3.18" {
+        if info.algorithm.oid != OID {
             return Err("not an ML-DSA-65 private key".into());
         }
         // OpenSSL wraps the private key in a SEQUENCE containing:
@@ -134,7 +137,7 @@ impl SecretKey {
         let inner = inner_key.to_der().unwrap();
 
         let alg = pkcs8::AlgorithmIdentifierRef {
-            oid: ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.3.18"),
+            oid: OID,
             parameters: None::<AnyRef>,
         };
         let info = PrivateKeyInfo {
@@ -191,7 +194,7 @@ impl PublicKey {
         let info: SubjectPublicKeyInfo<AlgorithmIdentifier<AnyRef>, BitStringRef> =
             SubjectPublicKeyInfo::from_der(der)?;
 
-        if info.algorithm.oid.to_string() != "2.16.840.1.101.3.4.3.18" {
+        if info.algorithm.oid != OID {
             return Err("not an ML-DSA-65 public key".into());
         }
         let key = info.subject_public_key.as_bytes().unwrap();
@@ -227,7 +230,7 @@ impl PublicKey {
         let bytes = enc.as_slice();
 
         let alg = AlgorithmIdentifier::<AnyRef> {
-            oid: ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.3.18"),
+            oid: OID,
             parameters: None::<AnyRef>,
         };
         let info = SubjectPublicKeyInfo::<AnyRef, BitStringRef> {

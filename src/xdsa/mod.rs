@@ -26,7 +26,7 @@ const SIGNATURE_PREFIX: &[u8] = b"CompositeAlgorithmSignatures2025";
 const SIGNATURE_DOMAIN: &[u8] = b"COMPSIG-MLDSA65-Ed25519-SHA512";
 
 /// OID is the ASN.1 object identifier for MLDSA65-Ed25519-SHA512.
-const OID: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.6.48");
+pub const OID: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.6.48");
 
 /// Size of the secret key in bytes.
 /// Format: ML-DSA seed (32 bytes) || Ed25519 seed (32 bytes)

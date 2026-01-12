@@ -23,8 +23,6 @@ use x509_certificate::rfc3280::{
 use x509_certificate::rfc5280::{AlgorithmIdentifier, AlgorithmParameter, Extension, Extensions};
 use x509_certificate::{X509Certificate, rfc5280};
 
-/// OID for id-MLDSA65-Ed25519-SHA512: 1.3.6.1.5.5.7.6.48
-const CMLDSA_OID: &[u8] = &[43, 6, 1, 5, 5, 7, 6, 48];
 
 /// Subject is a trait for types that can be embedded into X.509 certificates
 /// as the subject's public key.
@@ -188,7 +186,7 @@ pub fn new<S: Subject>(
     let no_params = AlgorithmParameter::from_captured(bcder::Captured::empty(Mode::Der));
 
     // Create the composite algorithm identifier for signing (C-MLDSA)
-    let composite_oid = Oid(Bytes::from_static(CMLDSA_OID));
+    let composite_oid = Oid(Bytes::copy_from_slice(xdsa::OID.as_bytes()));
     let composite_alg = AlgorithmIdentifier {
         algorithm: composite_oid,
         parameters: Some(no_params.clone()),

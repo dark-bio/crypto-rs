@@ -21,7 +21,7 @@ use spki::der::AnyRef;
 use std::error::Error;
 
 /// OID is the ASN.1 object identifier for Ed25519.
-const OID: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.101.112");
+pub const OID: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.101.112");
 
 /// Size of the secret key in bytes.
 pub const SECRET_KEY_SIZE: usize = 32;
