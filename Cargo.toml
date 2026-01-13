@@ -17,7 +17,6 @@ rustdoc-args = ["--cfg", "docsrs"]
 [features]
 default = []
 argon2 = ["dep:argon2"]
-async = ["dep:futures"]
 cbor = ["dep:thiserror", "dep:darkbio-crypto-cbor-derive"]
 cose = ["cbor", "xhpke"]
 eddsa = ["pem", "dep:der", "dep:ed25519-dalek", "dep:pkcs8", "dep:sha2", "dep:signature", "dep:spki", ]
@@ -43,7 +42,6 @@ chrono = { version = "0.4.41", optional = true }
 der = { version = "0.7.10", features = ["derive"], optional = true }
 ed25519-dalek = { version = "2.2.0", features = ["pem", "rand_core"], optional = true }
 ml-dsa = { version = "0.1.0-rc.2", features = ["rand_core"], optional = true }
-futures = { version = "0.3", optional = true }
 generic-array = { version = "0.14.7", optional = true }
 hkdf = { version = "0.12.4", optional = true }
 getrandom02 = { package = "getrandom", version = "0.2", features = ["js"] }
@@ -70,6 +68,4 @@ name = "demo"
 required-features = ["cose"]
 
 [dev-dependencies]
-futures-test = "0.3"
 hex = "0.4"
-tokio = { version = "1.0", features = ["rt", "macros"] }

@@ -23,6 +23,7 @@
 // Source: https://github.com/str4d/rage/blob/main/age/src/primitives/stream.rs
 
 #![allow(clippy::all)]
+#![allow(unexpected_cfgs)]
 
 //! I/O helper structs for age file encryption and decryption.
 
