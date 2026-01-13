@@ -125,7 +125,7 @@ pub fn sign_at(
 ) -> Vec<u8> {
     let protected = cbor::encode(&SigProtectedHeader {
         algorithm: ALGORITHM_ID_XDSA,
-        kid: signer.fingerprint(),
+        kid: signer.fingerprint().to_bytes(),
         timestamp,
     });
 
@@ -335,7 +335,7 @@ pub fn seal_at(
     // Build protected header with recipient's fingerprint
     let protected = cbor::encode(&EncProtectedHeader {
         algorithm: ALGORITHM_ID_XHPKE,
-        kid: recipient.fingerprint(),
+        kid: recipient.fingerprint().to_bytes(),
     });
 
     // Build and seal Enc_structure
@@ -455,8 +455,11 @@ fn verify_sig_protected_header(
     if header.algorithm != exp_algo {
         return Err(Error::UnexpectedAlgorithm(header.algorithm, exp_algo));
     }
-    if header.kid != verifier.fingerprint() {
-        return Err(Error::UnexpectedKey(header.kid, verifier.fingerprint()));
+    if header.kid != verifier.fingerprint().to_bytes() {
+        return Err(Error::UnexpectedKey(
+            header.kid,
+            verifier.fingerprint().to_bytes(),
+        ));
     }
     Ok(header)
 }
@@ -472,8 +475,11 @@ fn verify_enc_protected_header(
     if header.algorithm != exp_algo {
         return Err(Error::UnexpectedAlgorithm(header.algorithm, exp_algo));
     }
-    if header.kid != recipient.fingerprint() {
-        return Err(Error::UnexpectedKey(header.kid, recipient.fingerprint()));
+    if header.kid != recipient.fingerprint().to_bytes() {
+        return Err(Error::UnexpectedKey(
+            header.kid,
+            recipient.fingerprint().to_bytes(),
+        ));
     }
     Ok(header)
 }

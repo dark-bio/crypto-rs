@@ -28,6 +28,9 @@ pub const PUBLIC_KEY_SIZE: usize = 264;
 /// Size of an RSA-2048 signature.
 pub const SIGNATURE_SIZE: usize = 256;
 
+/// Size of an RSA key fingerprint (SHA256 hash).
+pub const FINGERPRINT_SIZE: usize = 32;
+
 /// SecretKey contains a 2048-bit RSA private key usable for signing, with SHA256
 /// as the underlying hash algorithm. Whilst RSA could also be used for encryption,
 /// that is not exposed on the API as it's not required by the project.
@@ -155,7 +158,7 @@ impl SecretKey {
 
     /// fingerprint returns a 256bit unique identified for this key. For RSA, that
     /// is the SHA256 hash of the raw (le modulus || le exponent) public key.
-    pub fn fingerprint(&self) -> [u8; 32] {
+    pub fn fingerprint(&self) -> Fingerprint {
         self.public_key().fingerprint()
     }
 
@@ -259,7 +262,7 @@ impl PublicKey {
 
     /// fingerprint returns a 256bit unique identified for this key. For RSA, that
     /// is the SHA256 hash of the raw (le modulus || le exponent) public key.
-    pub fn fingerprint(&self) -> [u8; 32] {
+    pub fn fingerprint(&self) -> Fingerprint {
         let pubkey: RsaPublicKey = self.inner.as_ref().clone();
 
         let mut mod_le = pubkey.n().to_bytes_le();
@@ -270,7 +273,7 @@ impl PublicKey {
         let mut hasher = Sha256::new();
         hasher.update(&mod_le);
         hasher.update(&exp_le);
-        hasher.finalize().into()
+        Fingerprint(hasher.finalize().into())
     }
 
     /// verify verifies a digital signature.
@@ -306,6 +309,22 @@ impl Signature {
 
     /// to_bytes converts a signature into a 256-byte array.
     pub fn to_bytes(&self) -> [u8; SIGNATURE_SIZE] {
+        self.0
+    }
+}
+
+/// Fingerprint contains an RSA key fingerprint (SHA256 hash).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Fingerprint([u8; FINGERPRINT_SIZE]);
+
+impl Fingerprint {
+    /// from_bytes converts a 32-byte array into a fingerprint.
+    pub fn from_bytes(bytes: &[u8; FINGERPRINT_SIZE]) -> Self {
+        Self(*bytes)
+    }
+
+    /// to_bytes converts a fingerprint into a 32-byte array.
+    pub fn to_bytes(&self) -> [u8; FINGERPRINT_SIZE] {
         self.0
     }
 }
@@ -557,7 +576,7 @@ fQIDAQAB
 -----END PUBLIC KEY-----",
         )
         .unwrap();
-        assert_eq!(hex::encode(key.fingerprint()), input);
+        assert_eq!(hex::encode(key.fingerprint().to_bytes()), input);
     }
 
     // Tests signing and verifying messages. Note, this test is not meant to test

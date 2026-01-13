@@ -54,6 +54,9 @@ pub const PUBLIC_KEY_SIZE: usize = 1216;
 /// Size of the encapsulated key in bytes.
 pub const ENCAP_KEY_SIZE: usize = 1120;
 
+/// Size of the fingerprint in bytes.
+pub const FINGERPRINT_SIZE: usize = 32;
+
 /// SecretKey contains a private key of the type bound to the configured crypto.
 #[derive(Clone, PartialEq, Eq)]
 pub struct SecretKey {
@@ -136,7 +139,7 @@ impl SecretKey {
 
     /// fingerprint returns a 256bit unique identifier for this key. For HPKE,
     /// that is the SHA256 hash of the raw public key.
-    pub fn fingerprint(&self) -> [u8; 32] {
+    pub fn fingerprint(&self) -> Fingerprint {
         self.public_key().fingerprint()
     }
 
@@ -251,10 +254,10 @@ impl PublicKey {
 
     /// fingerprint returns a 256bit unique identifier for this key. For HPKE,
     /// that is the SHA256 hash of the raw public key.
-    pub fn fingerprint(&self) -> [u8; 32] {
+    pub fn fingerprint(&self) -> Fingerprint {
         let mut hasher = sha2::Sha256::new();
         hasher.update(self.to_bytes());
-        hasher.finalize().into()
+        Fingerprint(hasher.finalize().into())
     }
 
     /// seal creates a standalone cryptographic construct encrypted to this public
@@ -295,6 +298,22 @@ impl PublicKey {
         let mut encap_key = [0u8; 1120];
         encap_key.copy_from_slice(&key.to_bytes());
         Ok((encap_key, enc))
+    }
+}
+
+/// Fingerprint contains a 256-bit unique identifier for an HPKE key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Fingerprint([u8; FINGERPRINT_SIZE]);
+
+impl Fingerprint {
+    /// from_bytes converts a 32-byte array into a fingerprint.
+    pub fn from_bytes(bytes: &[u8; FINGERPRINT_SIZE]) -> Self {
+        Self(*bytes)
+    }
+
+    /// to_bytes converts a fingerprint into a 32-byte array.
+    pub fn to_bytes(&self) -> [u8; FINGERPRINT_SIZE] {
+        self.0
     }
 }
 

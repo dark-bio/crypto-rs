@@ -34,6 +34,9 @@ pub const PUBLIC_KEY_SIZE: usize = 1952;
 /// Size of a signature in bytes.
 pub const SIGNATURE_SIZE: usize = 3309;
 
+/// Size of a fingerprint in bytes.
+pub const FINGERPRINT_SIZE: usize = 32;
+
 /// ML-DSA-65 private key inner structure.
 #[derive(Clone, Debug, Eq, PartialEq, Sequence)]
 struct MlDsa65PrivateKeyInner {
@@ -159,7 +162,7 @@ impl SecretKey {
 
     /// fingerprint returns a 256bit unique identified for this key. For ML-DSA,
     /// that is the SHA256 hash of the raw public key.
-    pub fn fingerprint(&self) -> [u8; 32] {
+    pub fn fingerprint(&self) -> Fingerprint {
         self.public_key().fingerprint()
     }
 
@@ -244,10 +247,10 @@ impl PublicKey {
 
     /// fingerprint returns a 256bit unique identified for this key. For ML-DSA,
     /// that is the SHA256 hash of the raw public key.
-    pub fn fingerprint(&self) -> [u8; 32] {
+    pub fn fingerprint(&self) -> Fingerprint {
         let mut hasher = sha2::Sha256::new();
         hasher.update(self.inner.encode().as_slice());
-        hasher.finalize().into()
+        Fingerprint(hasher.finalize().into())
     }
 
     /// verify verifies a digital signature with an optional context string.
@@ -278,6 +281,22 @@ impl Signature {
 
     /// to_bytes converts a signature into a 3309-byte array.
     pub fn to_bytes(&self) -> [u8; SIGNATURE_SIZE] {
+        self.0
+    }
+}
+
+/// Fingerprint contains a 32-byte unique identifier for an ML-DSA-65 key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Fingerprint([u8; FINGERPRINT_SIZE]);
+
+impl Fingerprint {
+    /// from_bytes converts a 32-byte array into a fingerprint.
+    pub fn from_bytes(bytes: &[u8; FINGERPRINT_SIZE]) -> Self {
+        Self(*bytes)
+    }
+
+    /// to_bytes converts a fingerprint into a 32-byte array.
+    pub fn to_bytes(&self) -> [u8; FINGERPRINT_SIZE] {
         self.0
     }
 }

@@ -32,7 +32,7 @@ fn main() {
     let root_public = root_secret.public_key();
     println!(
         "   Root fingerprint: {}",
-        hex::encode(&root_public.fingerprint())
+        hex::encode(root_public.fingerprint().to_bytes())
     );
 
     // =========================================================================
@@ -56,7 +56,7 @@ fn main() {
         .unwrap();
     println!(
         "   Alice xDSA fingerprint: {}",
-        hex::encode(&alice_xdsa_public.fingerprint())
+        hex::encode(alice_xdsa_public.fingerprint().to_bytes())
     );
 
     // =========================================================================
@@ -80,7 +80,7 @@ fn main() {
         .unwrap();
     println!(
         "   Bob xDSA fingerprint: {}",
-        hex::encode(&bob_xdsa_public.fingerprint())
+        hex::encode(bob_xdsa_public.fingerprint().to_bytes())
     );
 
     // =========================================================================
@@ -104,7 +104,7 @@ fn main() {
         .unwrap();
     println!(
         "   Alice xHPKE fingerprint: {}",
-        hex::encode(&alice_xhpke_public.fingerprint())
+        hex::encode(alice_xhpke_public.fingerprint().to_bytes())
     );
 
     // =========================================================================
@@ -128,7 +128,7 @@ fn main() {
         .unwrap();
     println!(
         "   Bob xHPKE fingerprint: {}",
-        hex::encode(&bob_xhpke_public.fingerprint())
+        hex::encode(bob_xhpke_public.fingerprint().to_bytes())
     );
 
     // =========================================================================

@@ -32,6 +32,9 @@ pub const PUBLIC_KEY_SIZE: usize = 32;
 /// Size of a signature in bytes.
 pub const SIGNATURE_SIZE: usize = 64;
 
+/// Size of a fingerprint in bytes.
+pub const FINGERPRINT_SIZE: usize = 32;
+
 /// SecretKey contains an Ed25519 private key usable for signing.
 #[derive(Clone)]
 pub struct SecretKey {
@@ -110,7 +113,7 @@ impl SecretKey {
 
     /// fingerprint returns a 256bit unique identified for this key. For HPKE,
     /// that is the SHA256 hash of the raw public key.
-    pub fn fingerprint(&self) -> [u8; 32] {
+    pub fn fingerprint(&self) -> Fingerprint {
         self.public_key().fingerprint()
     }
 
@@ -165,10 +168,10 @@ impl PublicKey {
 
     /// fingerprint returns a 256bit unique identified for this key. For Ed25519,
     /// that is the SHA256 hash of the raw public key.
-    pub fn fingerprint(&self) -> [u8; 32] {
+    pub fn fingerprint(&self) -> Fingerprint {
         let mut hasher = sha2::Sha256::new();
         hasher.update(self.to_bytes());
-        hasher.finalize().into()
+        Fingerprint(hasher.finalize().into())
     }
 
     /// verify verifies a digital signature.
@@ -190,6 +193,22 @@ impl Signature {
 
     /// to_bytes converts a signature into a 64-byte array.
     pub fn to_bytes(&self) -> [u8; SIGNATURE_SIZE] {
+        self.0
+    }
+}
+
+/// Fingerprint contains an Ed25519 key fingerprint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Fingerprint([u8; FINGERPRINT_SIZE]);
+
+impl Fingerprint {
+    /// from_bytes converts a 32-byte array into a fingerprint.
+    pub fn from_bytes(bytes: &[u8; FINGERPRINT_SIZE]) -> Self {
+        Self(*bytes)
+    }
+
+    /// to_bytes converts a fingerprint into a 32-byte array.
+    pub fn to_bytes(&self) -> [u8; FINGERPRINT_SIZE] {
         self.0
     }
 }

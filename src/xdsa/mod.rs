@@ -40,6 +40,9 @@ pub const PUBLIC_KEY_SIZE: usize = 1984;
 /// Format: ML-DSA (3309 bytes) || Ed25519 (64 bytes)
 pub const SIGNATURE_SIZE: usize = 3373;
 
+/// Size of a key fingerprint in bytes.
+pub const FINGERPRINT_SIZE: usize = 32;
+
 /// SecretKey is an ML-DSA-65 private key paired with an Ed25519 private key for
 /// creating and verifying quantum resistant digital signatures.    
 #[derive(Clone)]
@@ -150,7 +153,7 @@ impl SecretKey {
     }
 
     /// fingerprint returns a 256bit unique identifier for this key.
-    pub fn fingerprint(&self) -> [u8; 32] {
+    pub fn fingerprint(&self) -> Fingerprint {
         self.public_key().fingerprint()
     }
 
@@ -273,11 +276,11 @@ impl PublicKey {
     }
 
     /// fingerprint returns a 256bit unique identifier for this key.
-    pub fn fingerprint(&self) -> [u8; 32] {
+    pub fn fingerprint(&self) -> Fingerprint {
         let mut hasher = sha2::Sha256::new();
         hasher.update(self.ml_key.to_bytes());
         hasher.update(self.ed_key.to_bytes());
-        hasher.finalize().into()
+        Fingerprint(hasher.finalize().into())
     }
 
     /// verify verifies a digital signature.
@@ -342,6 +345,22 @@ impl Signature {
         out[..3309].copy_from_slice(&self.ml_sig.to_bytes());
         out[3309..].copy_from_slice(&self.ed_sig.to_bytes());
         out
+    }
+}
+
+/// Fingerprint contains a 256-bit unique identifier for a composite ML-DSA-65-Ed25519-SHA512 key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Fingerprint([u8; FINGERPRINT_SIZE]);
+
+impl Fingerprint {
+    /// from_bytes creates a fingerprint from a 32-byte array.
+    pub fn from_bytes(bytes: &[u8; FINGERPRINT_SIZE]) -> Self {
+        Self(*bytes)
+    }
+
+    /// to_bytes converts a fingerprint into a 32-byte array.
+    pub fn to_bytes(&self) -> [u8; FINGERPRINT_SIZE] {
+        self.0
     }
 }
 
