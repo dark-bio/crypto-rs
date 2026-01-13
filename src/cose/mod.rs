@@ -25,17 +25,19 @@ use crate::{xdsa, xhpke};
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
     #[error("cbor: {0}")]
-    Cbor(#[from] cbor::Error),
-    #[error("signature verification failed: {0}")]
-    Signature(String),
-    #[error("decryption failed: {0}")]
-    Decryption(String),
+    CborError(#[from] cbor::Error),
     #[error("unexpected algorithm: have {0}, want {1}")]
     UnexpectedAlgorithm(i64, i64),
+    #[error("unexpected key: have {0:x?}, want {1:x?}")]
+    UnexpectedKey([u8; 32], [u8; 32]),
+    #[error("signature verification failed: {0}")]
+    InvalidSignature(String),
+    #[error("signature stale: time drift {0}s exceeds max {1}s")]
+    StaleSignature(u64, u64),
     #[error("invalid encapsulated key size: {0}, expected {1}")]
     InvalidEncapKeySize(usize, usize),
-    #[error("signature stale: time drift {0}s exceeds max {1}s")]
-    SignatureStale(u64, u64),
+    #[error("decryption failed: {0}")]
+    DecryptionFailed(String),
 }
 
 /// Private COSE algorithm identifier for composite ML-DSA-65 + Ed25519 signatures.
@@ -187,7 +189,7 @@ pub fn verify(
     let sign1: CoseSign1 = cbor::decode(msg_to_check)?;
 
     // Verify the protected header
-    let header = verify_sig_protected_header(&sign1.protected, ALGORITHM_ID_XDSA)?;
+    let header = verify_sig_protected_header(&sign1.protected, ALGORITHM_ID_XDSA, verifier)?;
 
     // Check signature timestamp drift if max_drift is specified
     if let Some(max) = max_drift {
@@ -197,7 +199,7 @@ pub fn verify(
             .as_secs() as i64;
         let drift = (now - header.timestamp).unsigned_abs();
         if drift > max {
-            return Err(Error::SignatureStale(drift, max));
+            return Err(Error::StaleSignature(drift, max));
         }
     }
 
@@ -214,7 +216,7 @@ pub fn verify(
     let signature = xdsa::Signature::from_bytes(&sign1.signature);
     verifier
         .verify(&blob, &signature)
-        .map_err(|e| Error::Signature(e.to_string()))?;
+        .map_err(|e| Error::InvalidSignature(e.to_string()))?;
 
     Ok(sign1.payload)
 }
@@ -348,7 +350,7 @@ pub fn seal_at(
             .encode_cbor(),
             domain,
         )
-        .map_err(|e| Error::Decryption(e.to_string()))?;
+        .map_err(|e| Error::DecryptionFailed(e.to_string()))?;
 
     // Build and encode COSE_Encrypt0
     Ok(cbor::encode(&CoseEncrypt0 {
@@ -411,7 +413,7 @@ pub fn open(
     let encrypt0: CoseEncrypt0 = cbor::decode(msg_to_open)?;
 
     // Verify protected header
-    let _header = verify_enc_protected_header(&encrypt0.protected, ALGORITHM_ID_XHPKE)?;
+    verify_enc_protected_header(&encrypt0.protected, ALGORITHM_ID_XHPKE, recipient)?;
 
     // Extract encapsulated key from the unprotected headers
     let encap_key: &[u8; ENCAP_KEY_SIZE] = encrypt0
@@ -436,26 +438,42 @@ pub fn open(
             .encode_cbor(),
             domain,
         )
-        .map_err(|e| Error::Decryption(e.to_string()))?;
+        .map_err(|e| Error::DecryptionFailed(e.to_string()))?;
 
     // Verify the signature and extract the payload
     verify(&msg_to_check, msg_to_auth, sender, max_drift)
 }
 
-/// Verifies the signature protected header contains exactly the expected algorithm.
-fn verify_sig_protected_header(bytes: &[u8], exp_algo: i64) -> Result<SigProtectedHeader, Error> {
+/// Verifies the signature protected header contains exactly the expected algorithm
+/// and that the key identifier matches the provided verifier.
+fn verify_sig_protected_header(
+    bytes: &[u8],
+    exp_algo: i64,
+    verifier: &xdsa::PublicKey,
+) -> Result<SigProtectedHeader, Error> {
     let header: SigProtectedHeader = cbor::decode(bytes)?;
     if header.algorithm != exp_algo {
         return Err(Error::UnexpectedAlgorithm(header.algorithm, exp_algo));
     }
+    if header.kid != verifier.fingerprint() {
+        return Err(Error::UnexpectedKey(header.kid, verifier.fingerprint()));
+    }
     Ok(header)
 }
 
-/// Verifies the encryption protected header contains exactly the expected algorithm.
-fn verify_enc_protected_header(bytes: &[u8], exp_algo: i64) -> Result<EncProtectedHeader, Error> {
+/// Verifies the encryption protected header contains exactly the expected algorithm
+/// and that the key identifier matches the provided recipient.
+fn verify_enc_protected_header(
+    bytes: &[u8],
+    exp_algo: i64,
+    recipient: &xhpke::SecretKey,
+) -> Result<EncProtectedHeader, Error> {
     let header: EncProtectedHeader = cbor::decode(bytes)?;
     if header.algorithm != exp_algo {
         return Err(Error::UnexpectedAlgorithm(header.algorithm, exp_algo));
+    }
+    if header.kid != recipient.fingerprint() {
+        return Err(Error::UnexpectedKey(header.kid, recipient.fingerprint()));
     }
     Ok(header)
 }
