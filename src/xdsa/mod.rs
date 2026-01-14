@@ -23,10 +23,31 @@ use std::error::Error;
 const SIGNATURE_PREFIX: &[u8] = b"CompositeAlgorithmSignatures2025";
 
 /// Label is the signature label for ML-DSA-65-Ed25519-SHA512.
-const SIGNATURE_DOMAIN: &[u8] = b"COMPSIG-MLDSA65-Ed25519-SHA512";
+pub const SIGNATURE_DOMAIN: &[u8] = b"COMPSIG-MLDSA65-Ed25519-SHA512";
 
 /// OID is the ASN.1 object identifier for MLDSA65-Ed25519-SHA512.
 pub const OID: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.6.48");
+
+/// split_signing_message derives the composite message M' from a raw message
+/// according to the IETF composite signature spec:
+///
+///   M' = Prefix || Label || len(ctx) || ctx || PH(M)
+///     where ctx is empty and PH is SHA512.
+///
+/// Use this when signing separately with individual ML-DSA and Ed25519 keys
+/// before composing the signatures.
+pub fn split_signing_message(message: &[u8]) -> Vec<u8> {
+    let mut hasher = sha2::Sha512::new();
+    hasher.update(message);
+    let prehash: [u8; 64] = hasher.finalize().into();
+
+    let mut m_prime = Vec::with_capacity(SIGNATURE_PREFIX.len() + SIGNATURE_DOMAIN.len() + 1 + 64);
+    m_prime.extend_from_slice(SIGNATURE_PREFIX);
+    m_prime.extend_from_slice(SIGNATURE_DOMAIN);
+    m_prime.push(0); // len(ctx) = 0, no ctx bytes follow
+    m_prime.extend_from_slice(&prehash);
+    m_prime
+}
 
 /// Size of the secret key in bytes.
 /// Format: ML-DSA seed (32 bytes) || Ed25519 seed (32 bytes)
@@ -159,18 +180,7 @@ impl SecretKey {
 
     /// sign creates a digital signature of the message.
     pub fn sign(&self, message: &[u8]) -> Signature {
-        // Construct M' = Prefix || Label || len(ctx) || ctx || PH(M)
-        // where ctx is empty and PH is SHA512
-        let mut hasher = sha2::Sha512::new();
-        hasher.update(message);
-        let prehash: [u8; 64] = hasher.finalize().into();
-
-        let mut m_prime =
-            Vec::with_capacity(SIGNATURE_PREFIX.len() + SIGNATURE_DOMAIN.len() + 1 + 64);
-        m_prime.extend_from_slice(SIGNATURE_PREFIX);
-        m_prime.extend_from_slice(SIGNATURE_DOMAIN);
-        m_prime.push(0); // len(ctx) = 0, no ctx bytes follow
-        m_prime.extend_from_slice(&prehash);
+        let m_prime = split_signing_message(message);
 
         // Sign M' with both algorithms
         let ml_sig = self.ml_key.sign(&m_prime, SIGNATURE_DOMAIN);
@@ -682,5 +692,25 @@ f6e178bcc044204110444ea2b7e80548769ae5010c22707493adb0baf55f\
         let signature = composite_sec.sign(message);
 
         composite_pub.verify(message, &signature).unwrap();
+    }
+
+    #[test]
+    fn test_separate_sign_compose_verify() {
+        let ml_sec = mldsa::SecretKey::generate();
+        let ed_sec = eddsa::SecretKey::generate();
+
+        let message = b"message to sign separately";
+        let m_prime = split_signing_message(message);
+
+        // Sign M' separately with each key
+        let ml_sig = ml_sec.sign(&m_prime, SIGNATURE_DOMAIN);
+        let ed_sig = ed_sec.sign(&m_prime);
+
+        // Compose the signatures and public keys
+        let composite_sig = Signature::compose(ml_sig, ed_sig);
+        let composite_pub = PublicKey::compose(ml_sec.public_key(), ed_sec.public_key());
+
+        // Verify the composed signature with the composed public key
+        composite_pub.verify(message, &composite_sig).unwrap();
     }
 }
