@@ -8,8 +8,10 @@
 
 use crate::x509;
 use crate::xdsa::{PublicKey, SecretKey};
+use const_oid::ObjectIdentifier;
+use der::Encode;
 use std::error::Error;
-use x509_certificate::X509Certificate;
+use x509_cert::Certificate;
 
 // Implement the needed subject trait for the public key.
 impl x509::Subject for PublicKey {
@@ -21,8 +23,8 @@ impl x509::Subject for PublicKey {
     }
 
     /// Returns the id-MLDSA65-Ed25519-SHA512 OID, 1.3.6.1.5.5.7.6.48.
-    fn algorithm_oid(&self) -> &'static [u8] {
-        &[43, 6, 1, 5, 5, 7, 6, 48]
+    fn algorithm_oid(&self) -> ObjectIdentifier {
+        ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.6.48")
     }
 }
 
@@ -79,7 +81,11 @@ impl PublicKey {
         signer: &SecretKey,
         params: &x509::Params,
     ) -> Result<String, Box<dyn Error>> {
-        Ok(self.to_cert(signer, params)?.encode_pem().unwrap())
+        let cert = self.to_cert(signer, params)?;
+        let der = cert.to_der()?;
+        let pem_str = der::pem::encode_string("CERTIFICATE", der::pem::LineEnding::LF, &der)
+            .map_err(|e| format!("PEM encoding error: {:?}", e))?;
+        Ok(pem_str)
     }
 
     /// to_cert_der generates a DER encoded X.509 certificate for this public
@@ -89,7 +95,7 @@ impl PublicKey {
         signer: &SecretKey,
         params: &x509::Params,
     ) -> Result<Vec<u8>, Box<dyn Error>> {
-        Ok(self.to_cert(signer, params)?.encode_der().unwrap())
+        Ok(self.to_cert(signer, params)?.to_der()?)
     }
 
     /// to_cert generates an X.509 certificate for this public key, signed by an
@@ -98,7 +104,7 @@ impl PublicKey {
         &self,
         signer: &SecretKey,
         params: &x509::Params,
-    ) -> Result<X509Certificate, Box<dyn Error>> {
+    ) -> Result<Certificate, Box<dyn Error>> {
         x509::new(self, signer, params)
     }
 }

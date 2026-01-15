@@ -9,19 +9,24 @@
 //! https://datatracker.ietf.org/doc/html/rfc5280
 
 use crate::xdsa;
-use bcder::Mode;
-use bcder::Oid;
-use bcder::encode::Values;
-use bytes::Bytes;
-use chrono::{TimeZone, Utc};
+use const_oid::ObjectIdentifier;
+use der::asn1::{BitString, OctetString, SetOfVec, UtcTime};
+use der::Encode;
 use sha1::{Digest, Sha1};
 use std::error::Error;
-use x509_certificate::asn1time::Time;
-use x509_certificate::rfc3280::{
-    AttributeTypeAndValue, AttributeValue, Name, RdnSequence, RelativeDistinguishedName,
+use x509_cert::attr::AttributeTypeAndValue;
+use x509_cert::certificate::{CertificateInner, TbsCertificateInner, Version};
+use x509_cert::ext::pkix::{
+    AuthorityKeyIdentifier, BasicConstraints, KeyUsage, KeyUsages, SubjectKeyIdentifier,
 };
-use x509_certificate::rfc5280::{AlgorithmIdentifier, AlgorithmParameter, Extension, Extensions};
-use x509_certificate::{X509Certificate, rfc5280};
+use x509_cert::ext::AsExtension;
+use x509_cert::name::{Name, RdnSequence, RelativeDistinguishedName};
+use x509_cert::serial_number::SerialNumber;
+use x509_cert::spki::{AlgorithmIdentifierOwned, SubjectPublicKeyInfoOwned};
+use x509_cert::time::{Time, Validity};
+
+/// OID for CommonName (2.5.4.3)
+const OID_CN: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.5.4.3");
 
 /// Subject is a trait for types that can be embedded into X.509 certificates
 /// as the subject's public key.
@@ -32,8 +37,8 @@ pub trait Subject {
     /// Returns the raw public key bytes to embed in the certificate.
     fn to_bytes(&self) -> Self::Bytes;
 
-    /// Returns the OID bytes for the subject's algorithm.
-    fn algorithm_oid(&self) -> &'static [u8];
+    /// Returns the OID for the subject's algorithm.
+    fn algorithm_oid(&self) -> ObjectIdentifier;
 }
 
 /// Parameters for creating an X.509 certificate.
@@ -54,113 +59,49 @@ pub struct Params<'a> {
 }
 
 /// Creates a common name field.
-fn make_cn_name(cn: &str) -> Name {
-    let cn_oid = Oid(Bytes::from_static(&[85, 4, 3])); // OID 2.5.4.3 (CommonName)
-    let cn_value = AttributeValue::new_utf8_string(cn).unwrap();
+fn make_cn_name(cn: &str) -> Result<Name, Box<dyn Error>> {
+    let cn_value = der::asn1::Any::new(
+        der::Tag::Utf8String,
+        cn.as_bytes(),
+    )?;
     let attr = AttributeTypeAndValue {
-        typ: cn_oid,
+        oid: OID_CN,
         value: cn_value,
     };
-    let mut rdn = RelativeDistinguishedName::default();
-    rdn.push(attr);
-    let mut seq = RdnSequence::default();
+    let mut rdn_set = SetOfVec::new();
+    rdn_set.insert(attr)?;
+    let rdn = RelativeDistinguishedName::from(rdn_set);
+    let mut seq = Vec::new();
     seq.push(rdn);
-    Name::RdnSequence(seq)
+    Ok(RdnSequence(seq))
 }
 
-/// Creates a SubjectKeyIdentifier extension.
-fn make_ski_ext(public_key: &[u8]) -> Extension {
-    // Create the SHA1 hash of the subject public key
-    let id = {
-        let mut hasher = Sha1::new();
-        hasher.update(public_key);
-        hasher.finalize()
-    };
-    // Encode the subject extension value
-    let mut buf = Vec::new();
-    buf.push(0x04); // OCTET STRING tag
-    buf.push(20); // length (SHA-1 = 20 bytes)
-    buf.extend_from_slice(id.as_ref());
+/// Creates a SubjectKeyIdentifier from public key bytes.
+fn make_ski(public_key: &[u8]) -> SubjectKeyIdentifier {
+    let mut hasher = Sha1::new();
+    hasher.update(public_key);
+    let hash = hasher.finalize();
+    SubjectKeyIdentifier(OctetString::new(&hash[..]).unwrap())
+}
 
-    Extension {
-        id: Oid(Bytes::from_static(&[85, 29, 14])), // OID 2.5.29.14
-        critical: Some(false),
-        value: bcder::OctetString::new(Bytes::copy_from_slice(&buf)),
+/// Creates an AuthorityKeyIdentifier from issuer public key bytes.
+fn make_aki(public_key: &[u8]) -> AuthorityKeyIdentifier {
+    let mut hasher = Sha1::new();
+    hasher.update(public_key);
+    let hash = hasher.finalize();
+    AuthorityKeyIdentifier {
+        key_identifier: Some(OctetString::new(&hash[..]).unwrap()),
+        authority_cert_issuer: None,
+        authority_cert_serial_number: None,
     }
 }
 
-/// Creates an AuthorityKeyIdentifier extension.
-fn make_aki_ext(public_key: &[u8]) -> Extension {
-    // Create the SHA1 hash of the issuer public key
-    let id = {
-        let mut hasher = Sha1::new();
-        hasher.update(public_key);
-        hasher.finalize()
-    };
-    // Encode the issuer extension value
-    let mut buf = vec![
-        0x30, // SEQUENCE tag
-        22,   // length (context tag + length + 20 bytes)
-        0x80, // context tag [0] implicit
-        20,   // length
-    ];
-    buf.extend_from_slice(id.as_ref());
-
-    Extension {
-        id: Oid(Bytes::from_static(&[85, 29, 35])), // OID 2.5.29.35
-        critical: Some(false),
-        value: bcder::OctetString::new(Bytes::copy_from_slice(&buf)),
-    }
-}
-
-/// Creates a BasicConstraints extension.
-///
-/// For CA certificates, set `is_ca=true`. The `path_len` constrains how many
-/// intermediate CAs can follow (e.g., 0 means can only sign end-entity certs).
-fn make_basic_constraints_ext(is_ca: bool, path_len: Option<u8>) -> Extension {
-    // BasicConstraints ::= SEQUENCE { cA BOOLEAN DEFAULT FALSE, pathLenConstraint INTEGER OPTIONAL }
-    let inner = if is_ca {
-        let mut inner = vec![0x01, 0x01, 0xFF]; // BOOLEAN TRUE
-        if let Some(len) = path_len {
-            inner.extend_from_slice(&[0x02, 0x01, len]); // INTEGER
-        }
-        inner
+/// Creates KeyUsage for CA or end-entity certificates.
+fn make_key_usage(is_ca: bool) -> KeyUsage {
+    if is_ca {
+        KeyUsage(KeyUsages::KeyCertSign | KeyUsages::CRLSign)
     } else {
-        vec![] // Empty sequence = cA defaults to FALSE
-    };
-
-    let mut buf = Vec::new();
-    buf.push(0x30); // SEQUENCE tag
-    buf.push(inner.len() as u8);
-    buf.extend(inner);
-
-    Extension {
-        id: Oid(Bytes::from_static(&[85, 29, 19])), // OID 2.5.29.19
-        critical: Some(true),                       // MUST be critical per RFC 5280
-        value: bcder::OctetString::new(Bytes::copy_from_slice(&buf)),
-    }
-}
-
-/// Creates a KeyUsage extension.
-///
-/// For CA certificates, sets keyCertSign (bit 5) and cRLSign (bit 6).
-/// For end-entity certificates, sets digitalSignature (bit 0).
-fn make_key_usage_ext(is_ca: bool) -> Extension {
-    // KeyUsage ::= BIT STRING
-    // Bit 0: digitalSignature, Bit 5: keyCertSign, Bit 6: cRLSign
-    let (usage_byte, unused_bits) = if is_ca {
-        (0b0000_0110, 1u8) // keyCertSign (bit 5) + cRLSign (bit 6), 1 unused bit
-    } else {
-        (0b1000_0000, 7u8) // digitalSignature (bit 0), 7 unused bits
-    };
-
-    // BIT STRING: tag 0x03, length, unused bits count, data
-    let buf = vec![0x03, 0x02, unused_bits, usage_byte];
-
-    Extension {
-        id: Oid(Bytes::from_static(&[85, 29, 15])), // OID 2.5.29.15
-        critical: Some(true),                       // SHOULD be critical per RFC 5280
-        value: bcder::OctetString::new(Bytes::copy_from_slice(&buf)),
+        KeyUsage(KeyUsages::DigitalSignature.into())
     }
 }
 
@@ -169,83 +110,71 @@ pub fn new<S: Subject>(
     subject: &S,
     issuer: &xdsa::SecretKey,
     params: &Params,
-) -> Result<X509Certificate, Box<dyn Error>> {
-    // Validate and convert timestamps
-    let not_before = Utc
-        .timestamp_opt(params.not_before as i64, 0)
-        .single()
-        .ok_or_else(|| format!("invalid not_before timestamp: {}", params.not_before))?;
-    let not_after = Utc
-        .timestamp_opt(params.not_after as i64, 0)
-        .single()
-        .ok_or_else(|| format!("invalid not_after timestamp: {}", params.not_after))?;
-
-    // Create a dummy parameter that doesn't encode to NULL
-    // https://github.com/indygreg/cryptography-rs/issues/26
-    let no_params = AlgorithmParameter::from_captured(bcder::Captured::empty(Mode::Der));
-
+) -> Result<CertificateInner, Box<dyn Error>> {
     // Create the composite algorithm identifier for signing (C-MLDSA)
-    let composite_oid = Oid(Bytes::copy_from_slice(xdsa::OID.as_bytes()));
-    let composite_alg = AlgorithmIdentifier {
-        algorithm: composite_oid,
-        parameters: Some(no_params.clone()),
+    let composite_alg = AlgorithmIdentifierOwned {
+        oid: xdsa::OID,
+        parameters: None,
     };
+
     // Generate a random serial number
-    let mut serial = [0u8; 16];
-    getrandom::fill(&mut serial).unwrap();
-    serial[0] &= 0x7F; // Ensure positive (MSB = 0)
+    let mut serial_bytes = [0u8; 16];
+    getrandom::fill(&mut serial_bytes).unwrap();
+    serial_bytes[0] &= 0x7F; // Ensure positive (MSB = 0)
+    let serial_number = SerialNumber::new(&serial_bytes)?;
 
-    // Build extensions for the key identities and constraints
-    let ski_ext = make_ski_ext(subject.to_bytes().as_ref());
-    let aki_ext = make_aki_ext(&issuer.public_key().to_bytes());
-    let bc_ext = make_basic_constraints_ext(params.is_ca, params.path_len);
-    let ku_ext = make_key_usage_ext(params.is_ca);
+    // Build extensions
+    let subject_name = make_cn_name(params.subject_name)?;
+    let ski = make_ski(subject.to_bytes().as_ref());
+    let aki = make_aki(&issuer.public_key().to_bytes());
+    let bc = BasicConstraints {
+        ca: params.is_ca,
+        path_len_constraint: params.path_len,
+    };
+    let ku = make_key_usage(params.is_ca);
 
-    let mut extensions = Extensions::default();
-    extensions.push(bc_ext);
-    extensions.push(ku_ext);
-    extensions.push(ski_ext);
-    extensions.push(aki_ext);
+    let extensions = vec![
+        bc.to_extension(&subject_name, &[])?,
+        ku.to_extension(&subject_name, &[])?,
+        ski.to_extension(&subject_name, &[])?,
+        aki.to_extension(&subject_name, &[])?,
+    ];
+
+    // Convert timestamps to UtcTime
+    let not_before = UtcTime::from_unix_duration(std::time::Duration::from_secs(params.not_before))?;
+    let not_after = UtcTime::from_unix_duration(std::time::Duration::from_secs(params.not_after))?;
 
     // Create the TBS certificate
-    let tbs_certificate = rfc5280::TbsCertificate {
-        version: Some(rfc5280::Version::V3),
-        serial_number: bcder::Integer::from(u128::from_be_bytes(serial)),
+    let tbs_certificate = TbsCertificateInner {
+        version: Version::V3,
+        serial_number,
         signature: composite_alg.clone(),
-        issuer: make_cn_name(params.issuer_name),
-        validity: rfc5280::Validity {
-            not_before: Time::from(not_before),
-            not_after: Time::from(not_after),
+        issuer: make_cn_name(params.issuer_name)?,
+        validity: Validity {
+            not_before: Time::UtcTime(not_before),
+            not_after: Time::UtcTime(not_after),
         },
-        subject: make_cn_name(params.subject_name),
-        subject_public_key_info: rfc5280::SubjectPublicKeyInfo {
-            algorithm: AlgorithmIdentifier {
-                algorithm: Oid(Bytes::from_static(subject.algorithm_oid())),
-                parameters: Some(no_params),
+        subject: subject_name,
+        subject_public_key_info: SubjectPublicKeyInfoOwned {
+            algorithm: AlgorithmIdentifierOwned {
+                oid: subject.algorithm_oid(),
+                parameters: None,
             },
-            subject_public_key: bcder::BitString::new(
-                0,
-                Bytes::copy_from_slice(subject.to_bytes().as_ref()),
-            ),
+            subject_public_key: BitString::from_bytes(subject.to_bytes().as_ref())?,
         },
         issuer_unique_id: None,
         subject_unique_id: None,
         extensions: Some(extensions),
-        raw_data: None,
     };
-    // Encode and sign the TBS certificate
-    let mut tbs_der = Vec::<u8>::new();
-    tbs_certificate
-        .encode_ref()
-        .write_encoded(Mode::Der, &mut tbs_der)
-        .unwrap();
 
+    // Encode and sign the TBS certificate
+    let tbs_der = tbs_certificate.to_der()?;
     let signature = issuer.sign(&tbs_der);
 
     // Create the final certificate
-    Ok(X509Certificate::from(rfc5280::Certificate {
+    Ok(CertificateInner {
         tbs_certificate,
         signature_algorithm: composite_alg,
-        signature: bcder::BitString::new(0, Bytes::copy_from_slice(&signature.to_bytes())),
-    }))
+        signature: BitString::from_bytes(&signature.to_bytes())?,
+    })
 }
