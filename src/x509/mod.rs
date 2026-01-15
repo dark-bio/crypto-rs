@@ -10,16 +10,16 @@
 
 use crate::xdsa;
 use const_oid::ObjectIdentifier;
-use der::asn1::{BitString, OctetString, SetOfVec, UtcTime};
 use der::Encode;
+use der::asn1::{BitString, OctetString, SetOfVec, UtcTime};
 use sha1::{Digest, Sha1};
 use std::error::Error;
 use x509_cert::attr::AttributeTypeAndValue;
 use x509_cert::certificate::{CertificateInner, TbsCertificateInner, Version};
+use x509_cert::ext::AsExtension;
 use x509_cert::ext::pkix::{
     AuthorityKeyIdentifier, BasicConstraints, KeyUsage, KeyUsages, SubjectKeyIdentifier,
 };
-use x509_cert::ext::AsExtension;
 use x509_cert::name::{Name, RdnSequence, RelativeDistinguishedName};
 use x509_cert::serial_number::SerialNumber;
 use x509_cert::spki::{AlgorithmIdentifierOwned, SubjectPublicKeyInfoOwned};
@@ -60,10 +60,7 @@ pub struct Params<'a> {
 
 /// Creates a common name field.
 fn make_cn_name(cn: &str) -> Result<Name, Box<dyn Error>> {
-    let cn_value = der::asn1::Any::new(
-        der::Tag::Utf8String,
-        cn.as_bytes(),
-    )?;
+    let cn_value = der::asn1::Any::new(der::Tag::Utf8String, cn.as_bytes())?;
     let attr = AttributeTypeAndValue {
         oid: OID_CN,
         value: cn_value,
@@ -141,7 +138,8 @@ pub fn new<S: Subject>(
     ];
 
     // Convert timestamps to UtcTime
-    let not_before = UtcTime::from_unix_duration(std::time::Duration::from_secs(params.not_before))?;
+    let not_before =
+        UtcTime::from_unix_duration(std::time::Duration::from_secs(params.not_before))?;
     let not_after = UtcTime::from_unix_duration(std::time::Duration::from_secs(params.not_after))?;
 
     // Create the TBS certificate
