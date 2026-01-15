@@ -44,7 +44,8 @@ ml-dsa = { version = "0.1.0-rc.3", features = ["rand_core"], optional = true }
 generic-array = { version = "0.14.7", optional = true }
 hkdf = { version = "0.12.4", optional = true }
 getrandom02 = { package = "getrandom", version = "0.2", features = ["js"] }
-getrandom = { version = "0.3.3", features = ["wasm_js"] }
+getrandom03 = { package = "getrandom", version = "0.3.4", features = ["wasm_js"] }
+getrandom = { version = "0.4.0-rc.0", features = ["wasm_js"] }
 hpke = { version = "0.13.0", features = ["std"], optional = true }
 pin-project = { version = "1.1.9", optional = true }
 pkcs8 = { version = "0.10.2", features = ["std"], optional = true }
