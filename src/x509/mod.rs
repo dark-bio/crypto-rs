@@ -68,9 +68,7 @@ fn make_cn_name(cn: &str) -> Result<Name, Box<dyn Error>> {
     let mut rdn_set = SetOfVec::new();
     rdn_set.insert(attr)?;
     let rdn = RelativeDistinguishedName::from(rdn_set);
-    let mut seq = Vec::new();
-    seq.push(rdn);
-    Ok(RdnSequence(seq))
+    Ok(RdnSequence(vec![rdn]))
 }
 
 /// Creates a SubjectKeyIdentifier from public key bytes.
