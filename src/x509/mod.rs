@@ -14,7 +14,7 @@ use bcder::Oid;
 use bcder::encode::Values;
 use bytes::Bytes;
 use chrono::{TimeZone, Utc};
-use ring::digest::{Context, SHA1_FOR_LEGACY_USE_ONLY};
+use sha1::{Digest, Sha1};
 use std::error::Error;
 use x509_certificate::asn1time::Time;
 use x509_certificate::rfc3280::{
@@ -72,9 +72,9 @@ fn make_cn_name(cn: &str) -> Name {
 fn make_ski_ext(public_key: &[u8]) -> Extension {
     // Create the SHA1 hash of the subject public key
     let id = {
-        let mut ctx = Context::new(&SHA1_FOR_LEGACY_USE_ONLY);
-        ctx.update(public_key);
-        ctx.finish()
+        let mut hasher = Sha1::new();
+        hasher.update(public_key);
+        hasher.finalize()
     };
     // Encode the subject extension value
     let mut buf = Vec::new();
@@ -93,9 +93,9 @@ fn make_ski_ext(public_key: &[u8]) -> Extension {
 fn make_aki_ext(public_key: &[u8]) -> Extension {
     // Create the SHA1 hash of the issuer public key
     let id = {
-        let mut ctx = Context::new(&SHA1_FOR_LEGACY_USE_ONLY);
-        ctx.update(public_key);
-        ctx.finish()
+        let mut hasher = Sha1::new();
+        hasher.update(public_key);
+        hasher.finalize()
     };
     // Encode the issuer extension value
     let mut buf = vec![
