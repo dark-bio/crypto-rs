@@ -101,7 +101,9 @@ impl SecretKey {
 
         // Generate key from seed and validate it matches the expanded key in DER
         let inner = ml_dsa::SigningKey::<MlDsa65>::from_seed(&seed);
-        let enc = inner.encode();
+
+        #[allow(deprecated)] // to_expanded is wasteful, but that's the DER spec
+        let enc = inner.to_expanded();
         if enc.as_slice().ct_ne(&expanded).into() {
             return Err("expanded key does not match seed".into());
         }
@@ -128,7 +130,8 @@ impl SecretKey {
 
     /// to_der serializes a private key into a DER buffer.
     pub fn to_der(&self) -> Vec<u8> {
-        let enc = self.inner.encode();
+        #[allow(deprecated)] // to_expanded is wasteful, but that's the DER spec
+        let enc = self.inner.to_expanded();
 
         let inner_key = MlDsa65PrivateKeyInner {
             seed: OctetString::new(self.seed.as_slice()).unwrap(),

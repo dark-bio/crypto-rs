@@ -93,7 +93,9 @@ impl Deserializable for PublicKey {
     fn from_bytes(encoded: &[u8]) -> Result<Self, HpkeError> {
         let bytes: [u8; x_wing::ENCAPSULATION_KEY_SIZE] =
             encoded.try_into().map_err(|_| HpkeError::DecapError)?;
-        Ok(PublicKey(x_wing::EncapsulationKey::from(&bytes)))
+        Ok(PublicKey(
+            x_wing::EncapsulationKey::try_from(&bytes).map_err(|_| HpkeError::DecapError)?,
+        ))
     }
 }
 
@@ -171,8 +173,9 @@ impl hpke::Kem for Kem {
 
     /// Generates a random keypair using the given RNG.
     fn gen_keypair<R: CryptoRng + RngCore>(csprng: &mut R) -> (Self::PrivateKey, Self::PublicKey) {
-        let (sk, pk) = x_wing::generate_key_pair(csprng);
-        (SecretKey(sk), PublicKey(pk))
+        let mut seed = [0u8; 32];
+        csprng.fill_bytes(&mut seed);
+        Self::derive_keypair(&seed)
     }
 
     /// Derives a shared secret and an ephemeral pubkey so that the owner of the
@@ -184,20 +187,24 @@ impl hpke::Kem for Kem {
     fn encap<R: CryptoRng + RngCore>(
         pk_recip: &Self::PublicKey,
         sender_id_keypair: Option<(&Self::PrivateKey, &Self::PublicKey)>,
-        csprng: &mut R,
+        _csprng: &mut R,
     ) -> Result<(SharedSecret<Self>, Self::EncappedKey), HpkeError> {
         // X-Wing does not support authenticating the sender, reject such ask
         if sender_id_keypair.is_some() {
             return Err(HpkeError::EncapError);
         }
         // Generate a shared secret and encapsulate it
-        let (ct, ss) = pk_recip
+        // Note: We use the parameterless encapsulate() which uses the system RNG
+        // because x-wing uses rand_core 0.10 which is incompatible with hpke's
+        // rand_core version.
+        // TODO(karalabe): Figure out how to fix this
+        let (ct, ss): (x_wing::Ciphertext, x_wing::SharedSecret) = pk_recip
             .0
-            .encapsulate(csprng)
+            .encapsulate()
             .map_err(|_| HpkeError::EncapError)?;
 
         let mut secret = GenericArray::<u8, U32>::default();
-        secret.copy_from_slice(ss.as_slice());
+        secret.copy_from_slice(&ss);
         Ok((SharedSecret(secret), EncappedKey(ct)))
     }
 
@@ -217,13 +224,13 @@ impl hpke::Kem for Kem {
             return Err(HpkeError::DecapError);
         }
         // Decapsulate the shared secret
-        let ss = sk_recip
+        let ss: x_wing::SharedSecret = sk_recip
             .0
             .decapsulate(&encapped_key.0)
             .map_err(|_| HpkeError::DecapError)?;
 
         let mut secret = GenericArray::<u8, U32>::default();
-        secret.copy_from_slice(ss.as_slice());
+        secret.copy_from_slice(&ss);
         Ok(SharedSecret(secret))
     }
 }
