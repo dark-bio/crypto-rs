@@ -37,14 +37,6 @@ type KEM = xwing::Kem;
 type AEAD = hpke::aead::ChaCha20Poly1305;
 type KDF = hpke::kdf::HkdfSha256;
 
-// INFO_PREFIX is the prefix of a public string known to both parties during any
-// cryptographic operation, with the purpose of binding the keys used to some
-// application context.
-//
-// The final info will be this prefix concatenated with another contextual info
-// from an app layer action.
-const INFO_PREFIX: &[u8] = b"dark-bio-v1:";
-
 /// Size of the secret key seed in bytes.
 pub const SECRET_KEY_SIZE: usize = 32;
 
@@ -157,8 +149,6 @@ impl SecretKey {
         msg_to_auth: &[u8],
         domain: &[u8],
     ) -> Result<Vec<u8>, HpkeError> {
-        let info = [INFO_PREFIX, domain].concat();
-
         // Parse the encapsulated session key
         let session = <KEM as Kem>::EncappedKey::from_bytes(session_key)?;
 
@@ -167,7 +157,7 @@ impl SecretKey {
             &hpke::OpModeR::Base,
             &self.inner,
             &session,
-            &info,
+            &domain,
         )?;
         // Verify the construct and decrypt the message if everything checks out
         ctx.open(msg_to_open, msg_to_auth)
@@ -277,8 +267,6 @@ impl PublicKey {
         msg_to_auth: &[u8],
         domain: &[u8],
     ) -> Result<([u8; ENCAP_KEY_SIZE], Vec<u8>), HpkeError> {
-        let info = [INFO_PREFIX, domain].concat();
-
         // Create a random number stream that works in WASM
         let mut seed = [0u8; 32];
         getrandom::fill(&mut seed).expect("Failed to get random seed");
@@ -288,7 +276,7 @@ impl PublicKey {
         let (key, mut ctx) = hpke::setup_sender::<AEAD, KDF, KEM, _>(
             &hpke::OpModeS::Base,
             &self.inner,
-            &info,
+            &domain,
             &mut rng,
         )?;
 

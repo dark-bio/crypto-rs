@@ -21,6 +21,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::cbor::{self, Decode, Encode};
 use crate::{xdsa, xhpke};
 
+// DOMAIN_PREFIX is the prefix of a public string known to both parties during
+// cryptographic operation, with the purpose of binding the keys used to some
+// application context.
+//
+// The final domain will be this prefix concatenated with another contextual one
+// from an app layer action.
+const DOMAIN_PREFIX: &[u8] = b"dark-bio-v1:";
+
 /// Error is the failures that can occur during COSE operations.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
@@ -54,17 +62,20 @@ pub const ALGORITHM_ID_XHPKE: i64 = -70001;
 /// - `msg_to_embed`: The message to sign (CBOR-encoded, embedded in COSE_Sign1)
 /// - `msg_to_auth`: Additional authenticated data (CBOR-encoded, not embedded, but signed)
 /// - `signer`: The xDSA secret key to sign with
+/// - `domain`: Application domain for replay protection
 ///
 /// Returns the serialized COSE_Sign1 structure.
 pub fn sign_cbor<E: Encode, A: Encode>(
     msg_to_embed: &E,
     msg_to_auth: &A,
     signer: &xdsa::SecretKey,
+    domain: &[u8],
 ) -> Vec<u8> {
     sign(
         &cbor::encode(msg_to_embed),
         &cbor::encode(msg_to_auth),
         signer,
+        domain,
     )
 }
 
@@ -76,14 +87,20 @@ pub fn sign_cbor<E: Encode, A: Encode>(
 /// - `msg_to_embed`: The message to sign (embedded in COSE_Sign1)
 /// - `msg_to_auth`: Additional authenticated data (not embedded, but signed)
 /// - `signer`: The xDSA secret key to sign with
+/// - `domain`: Application domain for replay protection
 ///
 /// Returns the serialized COSE_Sign1 structure.
-pub fn sign(msg_to_embed: &[u8], msg_to_auth: &[u8], signer: &xdsa::SecretKey) -> Vec<u8> {
+pub fn sign(
+    msg_to_embed: &[u8],
+    msg_to_auth: &[u8],
+    signer: &xdsa::SecretKey,
+    domain: &[u8],
+) -> Vec<u8> {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("system time before Unix epoch")
         .as_secs() as i64;
-    sign_at(msg_to_embed, msg_to_auth, signer, timestamp)
+    sign_at(msg_to_embed, msg_to_auth, signer, domain, timestamp)
 }
 
 /// sign_cbor_at creates a COSE_Sign1 digital signature of the msg_to_embed with
@@ -92,6 +109,7 @@ pub fn sign(msg_to_embed: &[u8], msg_to_auth: &[u8], signer: &xdsa::SecretKey) -
 /// - `msg_to_embed`: The message to sign (CBOR-encoded, embedded in COSE_Sign1)
 /// - `msg_to_auth`: Additional authenticated data (CBOR-encoded, not embedded, but signed)
 /// - `signer`: The xDSA secret key to sign with
+/// - `domain`: Application domain for replay protection
 /// - `timestamp`: Unix timestamp in seconds to embed in the protected header
 ///
 /// Returns the serialized COSE_Sign1 structure.
@@ -99,12 +117,14 @@ pub fn sign_cbor_at<E: Encode, A: Encode>(
     msg_to_embed: &E,
     msg_to_auth: &A,
     signer: &xdsa::SecretKey,
+    domain: &[u8],
     timestamp: i64,
 ) -> Vec<u8> {
     sign_at(
         &cbor::encode(msg_to_embed),
         &cbor::encode(msg_to_auth),
         signer,
+        domain,
         timestamp,
     )
 }
@@ -114,6 +134,7 @@ pub fn sign_cbor_at<E: Encode, A: Encode>(
 /// - `msg_to_embed`: The message to sign (embedded in COSE_Sign1)
 /// - `msg_to_auth`: Additional authenticated data (not embedded, but signed)
 /// - `signer`: The xDSA secret key to sign with
+/// - `domain`: Application domain for replay protection
 /// - `timestamp`: Unix timestamp in seconds to embed in the protected header
 ///
 /// Returns the serialized COSE_Sign1 structure.
@@ -121,8 +142,13 @@ pub fn sign_at(
     msg_to_embed: &[u8],
     msg_to_auth: &[u8],
     signer: &xdsa::SecretKey,
+    domain: &[u8],
     timestamp: i64,
 ) -> Vec<u8> {
+    // Restrict the user's domain to the context of this library
+    let info = [DOMAIN_PREFIX, domain].concat();
+    let aad = cbor::encode(&(info, cbor::Raw(msg_to_auth.to_vec())));
+
     let protected = cbor::encode(&SigProtectedHeader {
         algorithm: ALGORITHM_ID_XDSA,
         kid: signer.fingerprint().to_bytes(),
@@ -134,7 +160,7 @@ pub fn sign_at(
         &SigStructure {
             context: "Signature1".to_string(),
             protected: protected.clone(),
-            external_aad: msg_to_auth.to_vec(),
+            external_aad: aad,
             payload: msg_to_embed.to_vec(),
         }
         .encode_cbor(),
@@ -153,6 +179,7 @@ pub fn sign_at(
 /// - `msg_to_check`: The serialized COSE_Sign1 structure
 /// - `msg_to_auth`: The same additional authenticated data used during signing (CBOR-encoded)
 /// - `verifier`: The xDSA public key to verify against
+/// - `domain`: Application domain for replay protection
 /// - `max_drift`: Signatures more in the past or future are rejected
 ///
 /// Returns the CBOR-decoded payload if verification succeeds.
@@ -160,12 +187,14 @@ pub fn verify_cbor<E: Decode, A: Encode>(
     msg_to_check: &[u8],
     msg_to_auth: &A,
     verifier: &xdsa::PublicKey,
+    domain: &[u8],
     max_drift: Option<u64>,
 ) -> Result<E, Error> {
     let payload = verify(
         msg_to_check,
         &cbor::encode(msg_to_auth),
         verifier,
+        domain,
         max_drift,
     )?;
     Ok(cbor::decode(&payload)?)
@@ -176,6 +205,7 @@ pub fn verify_cbor<E: Decode, A: Encode>(
 /// - `msg_to_check`: The serialized COSE_Sign1 structure
 /// - `msg_to_auth`: The same additional authenticated data used during signing
 /// - `verifier`: The xDSA public key to verify against
+/// - `domain`: Application domain for replay protection
 /// - `max_drift`: Signatures more in the past or future are rejected
 ///
 /// Returns the embedded payload if verification succeeds.
@@ -183,8 +213,13 @@ pub fn verify(
     msg_to_check: &[u8],
     msg_to_auth: &[u8],
     verifier: &xdsa::PublicKey,
+    domain: &[u8],
     max_drift: Option<u64>,
 ) -> Result<Vec<u8>, Error> {
+    // Restrict the user's domain to the context of this library
+    let info = [DOMAIN_PREFIX, domain].concat();
+    let aad = cbor::encode(&(info, cbor::Raw(msg_to_auth.to_vec())));
+
     // Parse COSE_Sign1
     let sign1: CoseSign1 = cbor::decode(msg_to_check)?;
 
@@ -207,7 +242,7 @@ pub fn verify(
     let blob = SigStructure {
         context: "Signature1".to_string(),
         protected: sign1.protected.clone(),
-        external_aad: msg_to_auth.to_vec(),
+        external_aad: aad,
         payload: sign1.payload.clone(),
     }
     .encode_cbor();
@@ -329,8 +364,11 @@ pub fn seal_at(
     domain: &[u8],
     timestamp: i64,
 ) -> Result<Vec<u8>, Error> {
+    // Restrict the user's domain to the context of this library
+    let info = [DOMAIN_PREFIX, domain].concat();
+
     // Create a COSE_Sign1 with the payload, binding the AAD
-    let signed = sign_at(msg_to_seal, msg_to_auth, signer, timestamp);
+    let signed = sign_at(msg_to_seal, msg_to_auth, signer, &info, timestamp);
 
     // Build protected header with recipient's fingerprint
     let protected = cbor::encode(&EncProtectedHeader {
@@ -409,6 +447,9 @@ pub fn open(
     domain: &[u8],
     max_drift: Option<u64>,
 ) -> Result<Vec<u8>, Error> {
+    // Restrict the user's domain to the context of this library
+    let info = [DOMAIN_PREFIX, domain].concat();
+
     // Parse COSE_Encrypt0
     let encrypt0: CoseEncrypt0 = cbor::decode(msg_to_open)?;
 
@@ -441,7 +482,7 @@ pub fn open(
         .map_err(|e| Error::DecryptionFailed(e.to_string()))?;
 
     // Verify the signature and extract the payload
-    verify(&msg_to_check, msg_to_auth, sender, max_drift)
+    verify(&msg_to_check, msg_to_auth, sender, &info, max_drift)
 }
 
 /// Verifies the signature protected header contains exactly the expected algorithm
@@ -495,6 +536,8 @@ mod tests {
             msg_to_sign: &'static [u8],
             msg_to_auth: &'static [u8],
             verifier_msg_to_auth: &'static [u8],
+            domain: &'static [u8],
+            verifier_domain: &'static [u8],
             timestamp: Option<i64>,
             max_drift: Option<u64>,
             wrong_key: bool,
@@ -511,6 +554,8 @@ mod tests {
                 msg_to_sign: b"foo",
                 msg_to_auth: b"bar",
                 verifier_msg_to_auth: b"bar",
+                domain: b"baz",
+                verifier_domain: b"baz",
                 timestamp: None,
                 max_drift: None,
                 wrong_key: false,
@@ -521,6 +566,8 @@ mod tests {
                 msg_to_sign: b"foo",
                 msg_to_auth: b"",
                 verifier_msg_to_auth: b"",
+                domain: b"baz",
+                verifier_domain: b"baz",
                 timestamp: None,
                 max_drift: None,
                 wrong_key: false,
@@ -531,6 +578,8 @@ mod tests {
                 msg_to_sign: b"foo",
                 msg_to_auth: b"bar",
                 verifier_msg_to_auth: b"bar",
+                domain: b"baz",
+                verifier_domain: b"baz",
                 timestamp: Some(now),
                 max_drift: None,
                 wrong_key: false,
@@ -541,6 +590,8 @@ mod tests {
                 msg_to_sign: b"foo",
                 msg_to_auth: b"bar",
                 verifier_msg_to_auth: b"bar",
+                domain: b"baz",
+                verifier_domain: b"baz",
                 timestamp: Some(now - 30),
                 max_drift: Some(60),
                 wrong_key: false,
@@ -551,6 +602,8 @@ mod tests {
                 msg_to_sign: b"foo",
                 msg_to_auth: b"bar",
                 verifier_msg_to_auth: b"bar",
+                domain: b"baz",
+                verifier_domain: b"baz",
                 timestamp: Some(now - 120),
                 max_drift: Some(60),
                 wrong_key: false,
@@ -561,6 +614,20 @@ mod tests {
                 msg_to_sign: b"foo",
                 msg_to_auth: b"bar",
                 verifier_msg_to_auth: b"bar",
+                domain: b"baz",
+                verifier_domain: b"baz",
+                timestamp: Some(now + 120),
+                max_drift: Some(60),
+                wrong_key: false,
+                want_ok: false,
+            },
+            // Wrong domain
+            TestCase {
+                msg_to_sign: b"foo",
+                msg_to_auth: b"bar",
+                verifier_msg_to_auth: b"bar",
+                domain: b"baz",
+                verifier_domain: b"baz2",
                 timestamp: Some(now + 120),
                 max_drift: Some(60),
                 wrong_key: false,
@@ -571,6 +638,8 @@ mod tests {
                 msg_to_sign: b"foo",
                 msg_to_auth: b"bar",
                 verifier_msg_to_auth: b"bar2",
+                domain: b"baz",
+                verifier_domain: b"baz",
                 timestamp: None,
                 max_drift: None,
                 wrong_key: false,
@@ -581,6 +650,8 @@ mod tests {
                 msg_to_sign: b"foo",
                 msg_to_auth: b"",
                 verifier_msg_to_auth: b"",
+                domain: b"baz",
+                verifier_domain: b"baz",
                 timestamp: None,
                 max_drift: None,
                 wrong_key: true,
@@ -593,8 +664,8 @@ mod tests {
             let bobby = xdsa::SecretKey::generate();
 
             let signed = match test.timestamp {
-                Some(ts) => sign_at(test.msg_to_sign, test.msg_to_auth, &alice, ts),
-                None => sign(test.msg_to_sign, test.msg_to_auth, &alice),
+                Some(ts) => sign_at(test.msg_to_sign, test.msg_to_auth, &alice, test.domain, ts),
+                None => sign(test.msg_to_sign, test.msg_to_auth, &alice, test.domain),
             };
             let verifier = if test.wrong_key {
                 bobby.public_key()
@@ -605,6 +676,7 @@ mod tests {
                 &signed,
                 test.verifier_msg_to_auth,
                 &verifier,
+                test.verifier_domain,
                 test.max_drift,
             );
 
@@ -804,9 +876,9 @@ mod tests {
         let payload = (42u64, "foo".to_string());
         let aad = ("bar".to_string(),);
 
-        let signed = sign_cbor(&payload, &aad, &alice);
+        let signed = sign_cbor(&payload, &aad, &alice, b"baz");
         let recovered: (u64, String) =
-            verify_cbor(&signed, &aad, &alice.public_key(), None).unwrap();
+            verify_cbor(&signed, &aad, &alice.public_key(), b"baz", None).unwrap();
 
         assert_eq!(recovered, payload);
     }
