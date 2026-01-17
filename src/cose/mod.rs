@@ -16,7 +16,9 @@ pub use types::{
     EncapKeyHeader, HEADER_TIMESTAMP, SIGNATURE_SIZE, SigProtectedHeader, SigStructure,
 };
 
-use std::time::{SystemTime, UNIX_EPOCH};
+// Use an indirect time package that mostly defers to sts::time on most platforms,
+// except on wasm, where it uses the JS engine's time subsystem.
+use web_time::{SystemTime, UNIX_EPOCH};
 
 use crate::cbor::{self, Decode, Encode};
 use crate::{xdsa, xhpke};
