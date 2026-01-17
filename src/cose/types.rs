@@ -107,13 +107,24 @@ pub struct CoseEncrypt0 {
 ///     payload:        bstr
 /// ]
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Cbor)]
-#[cbor(array)]
-pub struct SigStructure {
-    pub context: String,
-    pub protected: Vec<u8>,
-    pub external_aad: Vec<u8>,
-    pub payload: Vec<u8>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SigStructure<'a> {
+    pub context: &'static str,
+    pub protected: &'a [u8],
+    pub external_aad: &'a [u8],
+    pub payload: &'a [u8],
+}
+
+impl crate::cbor::Encode for SigStructure<'_> {
+    fn encode_cbor(&self) -> Vec<u8> {
+        let mut encoder = crate::cbor::Encoder::new();
+        encoder.encode_array_header(4);
+        encoder.encode_text(self.context);
+        encoder.encode_bytes(self.protected);
+        encoder.encode_bytes(self.external_aad);
+        encoder.encode_bytes(self.payload);
+        encoder.finish()
+    }
 }
 
 /// Enc_structure for computing AAD per RFC 9052 Section 5.3.
@@ -125,10 +136,20 @@ pub struct SigStructure {
 ///     external_aad: bstr
 /// ]
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Cbor)]
-#[cbor(array)]
-pub struct EncStructure {
-    pub context: String,
-    pub protected: Vec<u8>,
-    pub external_aad: Vec<u8>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EncStructure<'a> {
+    pub context: &'static str,
+    pub protected: &'a [u8],
+    pub external_aad: &'a [u8],
+}
+
+impl crate::cbor::Encode for EncStructure<'_> {
+    fn encode_cbor(&self) -> Vec<u8> {
+        let mut encoder = crate::cbor::Encoder::new();
+        encoder.encode_array_header(3);
+        encoder.encode_text(self.context);
+        encoder.encode_bytes(self.protected);
+        encoder.encode_bytes(self.external_aad);
+        encoder.finish()
+    }
 }

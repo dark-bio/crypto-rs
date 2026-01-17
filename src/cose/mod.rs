@@ -66,13 +66,13 @@ pub const ALGORITHM_ID_XHPKE: i64 = -70001;
 ///
 /// Returns the serialized COSE_Sign1 structure.
 pub fn sign_cbor<E: Encode, A: Encode>(
-    msg_to_embed: &E,
+    msg_to_embed: Option<&E>,
     msg_to_auth: &A,
     signer: &xdsa::SecretKey,
     domain: &[u8],
 ) -> Vec<u8> {
     sign(
-        &cbor::encode(msg_to_embed),
+        msg_to_embed.map(|msg| cbor::encode(msg)).as_deref(),
         &cbor::encode(msg_to_auth),
         signer,
         domain,
@@ -91,7 +91,7 @@ pub fn sign_cbor<E: Encode, A: Encode>(
 ///
 /// Returns the serialized COSE_Sign1 structure.
 pub fn sign(
-    msg_to_embed: &[u8],
+    msg_to_embed: Option<&[u8]>,
     msg_to_auth: &[u8],
     signer: &xdsa::SecretKey,
     domain: &[u8],
@@ -114,14 +114,14 @@ pub fn sign(
 ///
 /// Returns the serialized COSE_Sign1 structure.
 pub fn sign_cbor_at<E: Encode, A: Encode>(
-    msg_to_embed: &E,
+    msg_to_embed: Option<&E>,
     msg_to_auth: &A,
     signer: &xdsa::SecretKey,
     domain: &[u8],
     timestamp: i64,
 ) -> Vec<u8> {
     sign_at(
-        &cbor::encode(msg_to_embed),
+        msg_to_embed.map(|msg| cbor::encode(msg)).as_deref(),
         &cbor::encode(msg_to_auth),
         signer,
         domain,
@@ -139,7 +139,7 @@ pub fn sign_cbor_at<E: Encode, A: Encode>(
 ///
 /// Returns the serialized COSE_Sign1 structure.
 pub fn sign_at(
-    msg_to_embed: &[u8],
+    msg_to_embed: Option<&[u8]>,
     msg_to_auth: &[u8],
     signer: &xdsa::SecretKey,
     domain: &[u8],
@@ -154,14 +154,15 @@ pub fn sign_at(
         kid: signer.fingerprint().to_bytes(),
         timestamp,
     });
-
     // Build and sign Sig_structure
+    let payload = msg_to_embed.unwrap_or(&[]);
+
     let signature = signer.sign(
         &SigStructure {
-            context: "Signature1".to_string(),
-            protected: protected.clone(),
-            external_aad: aad,
-            payload: msg_to_embed.to_vec(),
+            context: "Signature1",
+            protected: &protected,
+            external_aad: &aad,
+            payload,
         }
         .encode_cbor(),
     );
@@ -169,7 +170,7 @@ pub fn sign_at(
     cbor::encode(&CoseSign1 {
         protected,
         unprotected: EmptyHeader {},
-        payload: msg_to_embed.to_vec(),
+        payload: payload.to_vec(),
         signature: signature.to_bytes(),
     })
 }
@@ -240,10 +241,10 @@ pub fn verify(
 
     // Reconstruct Sig_structure to verify
     let blob = SigStructure {
-        context: "Signature1".to_string(),
-        protected: sign1.protected.clone(),
-        external_aad: aad,
-        payload: sign1.payload.clone(),
+        context: "Signature1",
+        protected: &sign1.protected,
+        external_aad: &aad,
+        payload: &sign1.payload,
     }
     .encode_cbor();
 
@@ -368,7 +369,7 @@ pub fn seal_at(
     let info = [DOMAIN_PREFIX, domain].concat();
 
     // Create a COSE_Sign1 with the payload, binding the AAD
-    let signed = sign_at(msg_to_seal, msg_to_auth, signer, &info, timestamp);
+    let signed = sign_at(Some(msg_to_seal), msg_to_auth, signer, &info, timestamp);
 
     // Build protected header with recipient's fingerprint
     let protected = cbor::encode(&EncProtectedHeader {
@@ -381,9 +382,9 @@ pub fn seal_at(
         .seal(
             &signed,
             &EncStructure {
-                context: "Encrypt0".to_string(),
-                protected: protected.clone(),
-                external_aad: msg_to_auth.to_vec(),
+                context: "Encrypt0",
+                protected: &protected,
+                external_aad: msg_to_auth,
             }
             .encode_cbor(),
             domain,
@@ -472,9 +473,9 @@ pub fn open(
             encap_key,
             &encrypt0.ciphertext,
             &EncStructure {
-                context: "Encrypt0".to_string(),
-                protected: encrypt0.protected.clone(),
-                external_aad: msg_to_auth.to_vec(),
+                context: "Encrypt0",
+                protected: &encrypt0.protected,
+                external_aad: msg_to_auth,
             }
             .encode_cbor(),
             domain,
@@ -664,8 +665,19 @@ mod tests {
             let bobby = xdsa::SecretKey::generate();
 
             let signed = match test.timestamp {
-                Some(ts) => sign_at(test.msg_to_sign, test.msg_to_auth, &alice, test.domain, ts),
-                None => sign(test.msg_to_sign, test.msg_to_auth, &alice, test.domain),
+                Some(ts) => sign_at(
+                    Some(test.msg_to_sign),
+                    test.msg_to_auth,
+                    &alice,
+                    test.domain,
+                    ts,
+                ),
+                None => sign(
+                    Some(test.msg_to_sign),
+                    test.msg_to_auth,
+                    &alice,
+                    test.domain,
+                ),
             };
             let verifier = if test.wrong_key {
                 bobby.public_key()
@@ -873,14 +885,14 @@ mod tests {
     fn test_sign_verify_cbor() {
         let alice = xdsa::SecretKey::generate();
 
-        let payload = (42u64, "foo".to_string());
+        let payload = &(42u64, "foo".to_string());
         let aad = ("bar".to_string(),);
 
-        let signed = sign_cbor(&payload, &aad, &alice, b"baz");
+        let signed = sign_cbor(Some(payload), &aad, &alice, b"baz");
         let recovered: (u64, String) =
             verify_cbor(&signed, &aad, &alice.public_key(), b"baz", None).unwrap();
 
-        assert_eq!(recovered, payload);
+        assert_eq!(recovered, *payload);
     }
 
     // Tests CBOR encoding/decoding for seal/open.
