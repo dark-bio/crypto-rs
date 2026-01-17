@@ -157,7 +157,7 @@ impl SecretKey {
             &hpke::OpModeR::Base,
             &self.inner,
             &session,
-            &domain,
+            domain,
         )?;
         // Verify the construct and decrypt the message if everything checks out
         ctx.open(msg_to_open, msg_to_auth)
@@ -276,7 +276,7 @@ impl PublicKey {
         let (key, mut ctx) = hpke::setup_sender::<AEAD, KDF, KEM, _>(
             &hpke::OpModeS::Base,
             &self.inner,
-            &domain,
+            domain,
             &mut rng,
         )?;
 
