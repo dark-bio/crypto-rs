@@ -8,10 +8,13 @@
 //!
 //! https://datatracker.ietf.org/doc/html/draft-ietf-lamps-dilithium-certificates
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use der::asn1::OctetString;
 use der::{Decode, Encode, Sequence};
 use ml_dsa::{EncodedVerifyingKey, MlDsa65};
 use pkcs8::PrivateKeyInfo;
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use sha2::Digest;
 use spki::der::AnyRef;
 use spki::der::asn1::BitStringRef;
@@ -272,6 +275,23 @@ impl PublicKey {
     }
 }
 
+impl Serialize for PublicKey {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&BASE64.encode(self.to_bytes()))
+    }
+}
+
+impl<'de> Deserialize<'de> for PublicKey {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        let bytes = BASE64.decode(&s).map_err(de::Error::custom)?;
+        let arr: [u8; PUBLIC_KEY_SIZE] = bytes
+            .try_into()
+            .map_err(|_| de::Error::custom("invalid public key length"))?;
+        Ok(PublicKey::from_bytes(&arr))
+    }
+}
+
 /// Signature contains an ML-DSA-65 signature.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Signature([u8; SIGNATURE_SIZE]);
@@ -288,6 +308,23 @@ impl Signature {
     }
 }
 
+impl Serialize for Signature {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&BASE64.encode(self.to_bytes()))
+    }
+}
+
+impl<'de> Deserialize<'de> for Signature {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        let bytes = BASE64.decode(&s).map_err(de::Error::custom)?;
+        let arr: [u8; SIGNATURE_SIZE] = bytes
+            .try_into()
+            .map_err(|_| de::Error::custom("invalid signature length"))?;
+        Ok(Signature::from_bytes(&arr))
+    }
+}
+
 /// Fingerprint contains a 32-byte unique identifier for an ML-DSA-65 key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Fingerprint([u8; FINGERPRINT_SIZE]);
@@ -301,6 +338,23 @@ impl Fingerprint {
     /// to_bytes converts a fingerprint into a 32-byte array.
     pub fn to_bytes(&self) -> [u8; FINGERPRINT_SIZE] {
         self.0
+    }
+}
+
+impl Serialize for Fingerprint {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&BASE64.encode(self.to_bytes()))
+    }
+}
+
+impl<'de> Deserialize<'de> for Fingerprint {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        let bytes = BASE64.decode(&s).map_err(de::Error::custom)?;
+        let arr: [u8; FINGERPRINT_SIZE] = bytes
+            .try_into()
+            .map_err(|_| de::Error::custom("invalid fingerprint length"))?;
+        Ok(Fingerprint::from_bytes(&arr))
     }
 }
 

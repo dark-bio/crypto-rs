@@ -15,10 +15,13 @@
 pub mod cert;
 pub mod xwing;
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use crate::pem;
 use hpke::rand_core::SeedableRng;
 use hpke::{Deserializable, HpkeError, Kem, Serializable};
 use pkcs8::PrivateKeyInfo;
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use sha2::Digest;
 use spki::der::asn1::BitStringRef;
 use spki::der::{AnyRef, Decode, Encode};
@@ -289,6 +292,23 @@ impl PublicKey {
     }
 }
 
+impl Serialize for PublicKey {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&BASE64.encode(self.to_bytes()))
+    }
+}
+
+impl<'de> Deserialize<'de> for PublicKey {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        let bytes = BASE64.decode(&s).map_err(de::Error::custom)?;
+        let arr: [u8; PUBLIC_KEY_SIZE] = bytes
+            .try_into()
+            .map_err(|_| de::Error::custom("invalid public key length"))?;
+        PublicKey::from_bytes(&arr).map_err(de::Error::custom)
+    }
+}
+
 /// Fingerprint contains a 256-bit unique identifier for an HPKE key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Fingerprint([u8; FINGERPRINT_SIZE]);
@@ -302,6 +322,23 @@ impl Fingerprint {
     /// to_bytes converts a fingerprint into a 32-byte array.
     pub fn to_bytes(&self) -> [u8; FINGERPRINT_SIZE] {
         self.0
+    }
+}
+
+impl Serialize for Fingerprint {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&BASE64.encode(self.to_bytes()))
+    }
+}
+
+impl<'de> Deserialize<'de> for Fingerprint {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        let bytes = BASE64.decode(&s).map_err(de::Error::custom)?;
+        let arr: [u8; FINGERPRINT_SIZE] = bytes
+            .try_into()
+            .map_err(|_| de::Error::custom("invalid fingerprint length"))?;
+        Ok(Fingerprint::from_bytes(&arr))
     }
 }
 

@@ -10,10 +10,13 @@
 
 mod cert;
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use crate::pem;
 use crate::{eddsa, mldsa};
 use der::asn1::BitStringRef;
 use der::{AnyRef, Decode, Encode};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use sha2::Digest;
 use spki::{AlgorithmIdentifier, ObjectIdentifier, SubjectPublicKeyInfo};
 use std::error::Error;
@@ -297,6 +300,23 @@ impl PublicKey {
     }
 }
 
+impl Serialize for PublicKey {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&BASE64.encode(self.to_bytes()))
+    }
+}
+
+impl<'de> Deserialize<'de> for PublicKey {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        let bytes = BASE64.decode(&s).map_err(de::Error::custom)?;
+        let arr: [u8; PUBLIC_KEY_SIZE] = bytes
+            .try_into()
+            .map_err(|_| de::Error::custom("invalid public key length"))?;
+        PublicKey::from_bytes(&arr).map_err(de::Error::custom)
+    }
+}
+
 /// split_signing_message derives the composite message M' from a raw message
 /// according to the IETF composite signature spec:
 ///
@@ -358,6 +378,23 @@ impl Signature {
     }
 }
 
+impl Serialize for Signature {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&BASE64.encode(self.to_bytes()))
+    }
+}
+
+impl<'de> Deserialize<'de> for Signature {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        let bytes = BASE64.decode(&s).map_err(de::Error::custom)?;
+        let arr: [u8; SIGNATURE_SIZE] = bytes
+            .try_into()
+            .map_err(|_| de::Error::custom("invalid signature length"))?;
+        Ok(Signature::from_bytes(&arr))
+    }
+}
+
 /// Fingerprint contains a 256-bit unique identifier for a composite ML-DSA-65-Ed25519-SHA512 key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Fingerprint([u8; FINGERPRINT_SIZE]);
@@ -371,6 +408,23 @@ impl Fingerprint {
     /// to_bytes converts a fingerprint into a 32-byte array.
     pub fn to_bytes(&self) -> [u8; FINGERPRINT_SIZE] {
         self.0
+    }
+}
+
+impl Serialize for Fingerprint {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&BASE64.encode(self.to_bytes()))
+    }
+}
+
+impl<'de> Deserialize<'de> for Fingerprint {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        let bytes = BASE64.decode(&s).map_err(de::Error::custom)?;
+        let arr: [u8; FINGERPRINT_SIZE] = bytes
+            .try_into()
+            .map_err(|_| de::Error::custom("invalid fingerprint length"))?;
+        Ok(Fingerprint::from_bytes(&arr))
     }
 }
 

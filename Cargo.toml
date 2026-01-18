@@ -19,16 +19,16 @@ default = []
 argon2 = ["dep:argon2"]
 cbor = ["dep:thiserror", "dep:darkbio-crypto-cbor-derive"]
 cose = ["cbor", "xhpke"]
-eddsa = ["pem", "dep:der", "dep:ed25519-dalek", "dep:pkcs8", "dep:sha2", "dep:signature", "dep:spki", ]
+eddsa = ["pem", "dep:der", "dep:ed25519-dalek", "dep:pkcs8", "dep:serde", "dep:sha2", "dep:signature", "dep:spki"]
 hkdf = ["dep:hkdf", "dep:sha2"]
-mldsa = ["pem", "dep:der", "dep:ml-dsa", "dep:pkcs8", "dep:sha2", "dep:spki", "dep:subtle", "dep:zeroize"]
+mldsa = ["pem", "dep:der", "dep:ml-dsa", "dep:pkcs8", "dep:serde", "dep:sha2", "dep:spki", "dep:subtle", "dep:zeroize"]
 pem = ["dep:base64"]
 rand = []
-rsa = ["pem", "dep:rsa", "dep:signature"]
+rsa = ["pem", "dep:rsa", "dep:serde", "dep:signature"]
 stream = ["dep:age-core", "dep:chacha20poly1305", "dep:pin-project", "dep:zeroize"]
 x509 = ["xdsa", "dep:chrono", "dep:const-oid", "dep:sha1", "dep:x509-cert"]
 xdsa = ["pem", "eddsa", "mldsa", "x509", "dep:x509-parser"]
-xhpke = ["pem", "xdsa", "dep:generic-array", "dep:hpke", "dep:rand", "dep:rand_chacha", "dep:x-wing"]
+xhpke = ["pem", "xdsa", "dep:generic-array", "dep:hpke", "dep:rand", "dep:rand_chacha", "dep:serde", "dep:x-wing"]
 
 [dependencies]
 darkbio-crypto-cbor-derive = { version = "0.11.0", path = "src/cbor/derive", optional = true }
@@ -49,6 +49,7 @@ getrandom = { version = "0.4.0-rc.0", features = ["wasm_js"] }
 hpke = { version = "0.13.0", features = ["std"], optional = true }
 pin-project = { version = "1.1.9", optional = true }
 pkcs8 = { version = "0.10.2", features = ["std"], optional = true }
+serde = { version = "1.0", optional = true }
 rand = { version = "0.9.2", optional = true }
 rand_chacha = { version = "0.9.0", optional = true }
 sha1 = { version = "0.10.6", optional = true }
