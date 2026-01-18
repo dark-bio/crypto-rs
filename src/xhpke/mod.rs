@@ -15,9 +15,9 @@
 pub mod cert;
 pub mod xwing;
 
+use crate::pem;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use crate::pem;
 use hpke::rand_core::SeedableRng;
 use hpke::{Deserializable, HpkeError, Kem, Serializable};
 use pkcs8::PrivateKeyInfo;

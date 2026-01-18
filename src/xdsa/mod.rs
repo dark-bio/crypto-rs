@@ -10,10 +10,10 @@
 
 mod cert;
 
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as BASE64;
 use crate::pem;
 use crate::{eddsa, mldsa};
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use der::asn1::BitStringRef;
 use der::{AnyRef, Decode, Encode};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
