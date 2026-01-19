@@ -206,19 +206,44 @@ pub fn sign_at<E: Encode, A: Encode>(
 
 /// verify_detached validates a COSE_Sign1 digital signature with a detached payload.
 ///
+/// Uses the current system time for drift checking. For testing or custom
+/// timestamps, use [`verify_detached_at`].
+///
 /// - `msg_to_check`: The serialized COSE_Sign1 structure (with null payload)
 /// - `msg_to_auth`: The same message used during signing (verified but not embedded)
 /// - `verifier`: The xDSA public key to verify against
 /// - `domain`: Application domain for replay protection
 /// - `max_drift`: Signatures more in the past or future are rejected
-///
-/// Returns `()` if verification succeeds.
 pub fn verify_detached<A: Encode>(
     msg_to_check: &[u8],
     msg_to_auth: A,
     verifier: &xdsa::PublicKey,
     domain: &[u8],
     max_drift: Option<u64>,
+) -> Result<(), Error> {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time before Unix epoch")
+        .as_secs() as i64;
+    verify_detached_at(msg_to_check, msg_to_auth, verifier, domain, max_drift, now)
+}
+
+/// verify_detached_at validates a COSE_Sign1 digital signature with a detached payload
+/// and an explicit current time for drift checking.
+///
+/// - `msg_to_check`: The serialized COSE_Sign1 structure (with null payload)
+/// - `msg_to_auth`: The same message used during signing (verified but not embedded)
+/// - `verifier`: The xDSA public key to verify against
+/// - `domain`: Application domain for replay protection
+/// - `max_drift`: Signatures more in the past or future are rejected
+/// - `now`: Unix timestamp in seconds to use for drift checking
+pub fn verify_detached_at<A: Encode>(
+    msg_to_check: &[u8],
+    msg_to_auth: A,
+    verifier: &xdsa::PublicKey,
+    domain: &[u8],
+    max_drift: Option<u64>,
+    now: i64,
 ) -> Result<(), Error> {
     // Restrict the user's domain to the context of this library
     let info = [DOMAIN_PREFIX, domain].concat();
@@ -236,10 +261,6 @@ pub fn verify_detached<A: Encode>(
 
     // Check signature timestamp drift if max_drift is specified
     if let Some(max) = max_drift {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system time before Unix epoch")
-            .as_secs() as i64;
         let drift = (now - header.timestamp).unsigned_abs();
         if drift > max {
             return Err(Error::StaleSignature(drift, max));
@@ -265,6 +286,9 @@ pub fn verify_detached<A: Encode>(
 
 /// verify validates a COSE_Sign1 digital signature and returns the embedded payload.
 ///
+/// Uses the current system time for drift checking. For testing or custom
+/// timestamps, use [`verify_at`].
+///
 /// - `msg_to_check`: The serialized COSE_Sign1 structure
 /// - `msg_to_auth`: The same additional authenticated data used during signing
 /// - `verifier`: The xDSA public key to verify against
@@ -278,6 +302,32 @@ pub fn verify<E: Decode, A: Encode>(
     verifier: &xdsa::PublicKey,
     domain: &[u8],
     max_drift: Option<u64>,
+) -> Result<E, Error> {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time before Unix epoch")
+        .as_secs() as i64;
+    verify_at(msg_to_check, msg_to_auth, verifier, domain, max_drift, now)
+}
+
+/// verify_at validates a COSE_Sign1 digital signature and returns the embedded payload,
+/// using an explicit current time for drift checking.
+///
+/// - `msg_to_check`: The serialized COSE_Sign1 structure
+/// - `msg_to_auth`: The same additional authenticated data used during signing
+/// - `verifier`: The xDSA public key to verify against
+/// - `domain`: Application domain for replay protection
+/// - `max_drift`: Signatures more in the past or future are rejected
+/// - `now`: Unix timestamp in seconds to use for drift checking
+///
+/// Returns the CBOR-decoded embedded payload if verification succeeds.
+pub fn verify_at<E: Decode, A: Encode>(
+    msg_to_check: &[u8],
+    msg_to_auth: A,
+    verifier: &xdsa::PublicKey,
+    domain: &[u8],
+    max_drift: Option<u64>,
+    now: i64,
 ) -> Result<E, Error> {
     // Restrict the user's domain to the context of this library
     let info = [DOMAIN_PREFIX, domain].concat();
@@ -294,10 +344,6 @@ pub fn verify<E: Decode, A: Encode>(
 
     // Check signature timestamp drift if max_drift is specified
     if let Some(max) = max_drift {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system time before Unix epoch")
-            .as_secs() as i64;
         let drift = (now - header.timestamp).unsigned_abs();
         if drift > max {
             return Err(Error::StaleSignature(drift, max));
@@ -420,6 +466,9 @@ pub fn seal_at<E: Encode, A: Encode>(
 
 /// open decrypts and verifies a sealed message.
 ///
+/// Uses the current system time for drift checking. For testing or custom
+/// timestamps, use [`open_at`].
+///
 /// - `msg_to_open`: The serialized COSE_Encrypt0 structure
 /// - `msg_to_auth`: The same additional authenticated data used during sealing
 /// - `recipient`: The xHPKE secret key to decrypt with
@@ -435,6 +484,42 @@ pub fn open<E: Decode, A: Encode>(
     sender: &xdsa::PublicKey,
     domain: &[u8],
     max_drift: Option<u64>,
+) -> Result<E, Error> {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time before Unix epoch")
+        .as_secs() as i64;
+    open_at(
+        msg_to_open,
+        msg_to_auth,
+        recipient,
+        sender,
+        domain,
+        max_drift,
+        now,
+    )
+}
+
+/// open_at decrypts and verifies a sealed message with an explicit current time
+/// for drift checking.
+///
+/// - `msg_to_open`: The serialized COSE_Encrypt0 structure
+/// - `msg_to_auth`: The same additional authenticated data used during sealing
+/// - `recipient`: The xHPKE secret key to decrypt with
+/// - `sender`: The xDSA public key to verify the signature against
+/// - `domain`: Application domain for HPKE key derivation
+/// - `max_drift`: Signatures more in the past or future are rejected
+/// - `now`: Unix timestamp in seconds to use for drift checking
+///
+/// Returns the CBOR-decoded payload if decryption and verification succeed.
+pub fn open_at<E: Decode, A: Encode>(
+    msg_to_open: &[u8],
+    msg_to_auth: A,
+    recipient: &xhpke::SecretKey,
+    sender: &xdsa::PublicKey,
+    domain: &[u8],
+    max_drift: Option<u64>,
+    now: i64,
 ) -> Result<E, Error> {
     // Pre-encode for EncStructure (which needs raw bytes for external_aad)
     let msg_to_auth = cbor::encode(msg_to_auth);
@@ -474,7 +559,14 @@ pub fn open<E: Decode, A: Encode>(
         .map_err(|e| Error::DecryptionFailed(e.to_string()))?;
 
     // Verify the signature and extract the payload
-    let raw: Raw = verify::<Raw, _>(&msg_to_check, &Raw(msg_to_auth), sender, domain, max_drift)?;
+    let raw: Raw = verify_at::<Raw, _>(
+        &msg_to_check,
+        &Raw(msg_to_auth),
+        sender,
+        domain,
+        max_drift,
+        now,
+    )?;
     Ok(cbor::decode(&raw.0)?)
 }
 
