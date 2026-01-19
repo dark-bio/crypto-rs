@@ -304,15 +304,12 @@ pub fn seal_at<E: Encode, A: Encode>(
     let msg_to_seal = cbor::encode(msg_to_seal);
     let msg_to_auth = cbor::encode(msg_to_auth);
 
-    // Restrict the user's domain to the context of this library
-    let info = [DOMAIN_PREFIX, domain].concat();
-
     // Create a COSE_Sign1 with the payload, binding the AAD (use Raw to avoid re-encoding)
     let signed = sign_at(
         &Raw(msg_to_seal),
         &Raw(msg_to_auth.clone()),
         signer,
-        &info,
+        domain,
         timestamp,
     );
 
@@ -321,6 +318,8 @@ pub fn seal_at<E: Encode, A: Encode>(
         algorithm: ALGORITHM_ID_XHPKE,
         kid: recipient.fingerprint().to_bytes(),
     });
+    // Restrict the user's domain to the context of this library
+    let info = [DOMAIN_PREFIX, domain].concat();
 
     // Build and seal Enc_structure
     let (encap_key, ciphertext) = recipient
@@ -332,7 +331,7 @@ pub fn seal_at<E: Encode, A: Encode>(
                 external_aad: &msg_to_auth,
             }
             .encode_cbor(),
-            domain,
+            &info,
         )
         .map_err(|e| Error::DecryptionFailed(e.to_string()))?;
 
@@ -397,12 +396,12 @@ pub fn open<E: Decode, A: Encode>(
                 external_aad: &msg_to_auth,
             }
             .encode_cbor(),
-            domain,
+            &info,
         )
         .map_err(|e| Error::DecryptionFailed(e.to_string()))?;
 
     // Verify the signature and extract the payload
-    let raw: Raw = verify::<Raw, _>(&msg_to_check, &Raw(msg_to_auth), sender, &info, max_drift)?;
+    let raw: Raw = verify::<Raw, _>(&msg_to_check, &Raw(msg_to_auth), sender, domain, max_drift)?;
     Ok(cbor::decode(&raw.0)?)
 }
 
