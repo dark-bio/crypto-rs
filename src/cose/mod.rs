@@ -367,6 +367,21 @@ pub fn verify_at<E: Decode, A: Encode>(
     Ok(cbor::decode(&payload)?)
 }
 
+/// signer extracts the signer's fingerprint from a COSE_Sign1 signature without
+/// verifying it.
+///
+/// This allows looking up the appropriate verification key before attempting
+/// full signature verification.
+///
+/// - `signature`: The serialized COSE_Sign1 structure
+///
+/// Returns the signer's fingerprint from the protected header's `kid` field.
+pub fn signer(signature: &[u8]) -> Result<xdsa::Fingerprint, Error> {
+    let sign1: CoseSign1 = cbor::decode(signature)?;
+    let header: SigProtectedHeader = cbor::decode(&sign1.protected)?;
+    Ok(xdsa::Fingerprint::from_bytes(&header.kid))
+}
+
 /// seal signs a message then encrypts it to a recipient.
 ///
 /// Uses the current system time as the signature timestamp. For testing or custom
