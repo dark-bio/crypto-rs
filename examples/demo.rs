@@ -170,16 +170,13 @@ fn main() {
     // =========================================================================
     println!("\n8. Alice sends a signed & encrypted message to Bob...");
 
-    let message = b"Hello Bob! This is a secret message from Alice.";
-    println!(
-        "   Original message: {:?}",
-        String::from_utf8_lossy(message)
-    );
+    let message = "Hello Bob! This is a secret message from Alice.";
+    println!("   Original message: {:?}", message);
 
     // Alice signs and encrypts the message to Bob using cose
     let ciphertext = cose::seal(
-        message,
-        &[],
+        &message,
+        &(),
         &alice_xdsa_secret,
         &verified_bob_xhpke,
         b"demo-crypto-domain",
@@ -196,9 +193,9 @@ fn main() {
     println!("\n9. Bob receives and verifies the message...");
 
     // Bob decrypts and verifies the message using cose
-    let decrypted = cose::open(
+    let decrypted: String = cose::open(
         &ciphertext,
-        &[],
+        &(),
         &bob_xhpke_secret,
         &verified_alice_xdsa,
         b"demo-crypto-domain",
@@ -207,8 +204,5 @@ fn main() {
     .expect("Failed to decrypt and verify message");
     println!("   ✓ Message decrypted & verified");
 
-    println!(
-        "   Decrypted message: {:?}",
-        String::from_utf8_lossy(&decrypted)
-    );
+    println!("   Decrypted message: {:?}", decrypted);
 }

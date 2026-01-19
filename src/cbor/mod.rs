@@ -433,14 +433,6 @@ impl Encode for Vec<u8> {
     }
 }
 
-impl Encode for &Vec<u8> {
-    fn encode_cbor(&self) -> Vec<u8> {
-        let mut encoder = Encoder::new();
-        encoder.encode_bytes(self);
-        encoder.finish()
-    }
-}
-
 impl Encode for &[u8] {
     fn encode_cbor(&self) -> Vec<u8> {
         let mut encoder = Encoder::new();
@@ -471,14 +463,6 @@ impl<const N: usize> Encode for [u8; N] {
     }
 }
 
-impl<const N: usize> Encode for &[u8; N] {
-    fn encode_cbor(&self) -> Vec<u8> {
-        let mut encoder = Encoder::new();
-        encoder.encode_bytes(*self);
-        encoder.finish()
-    }
-}
-
 impl<const N: usize> Decode for [u8; N] {
     fn decode_cbor(data: &[u8]) -> Result<Self, Error> {
         let mut decoder = Decoder::new(data);
@@ -494,14 +478,6 @@ impl<const N: usize> Decode for [u8; N] {
 
 // Encoder and decoder implementation for UTF-8 strings.
 impl Encode for String {
-    fn encode_cbor(&self) -> Vec<u8> {
-        let mut encoder = Encoder::new();
-        encoder.encode_text(self);
-        encoder.finish()
-    }
-}
-
-impl Encode for &String {
     fn encode_cbor(&self) -> Vec<u8> {
         let mut encoder = Encoder::new();
         encoder.encode_text(self);
@@ -630,6 +606,13 @@ mod tuple_impls {
     impl_tuple!(T1, T2, T3, T4, T5, T6);
     impl_tuple!(T1, T2, T3, T4, T5, T6, T7);
     impl_tuple!(T1, T2, T3, T4, T5, T6, T7, T8);
+}
+
+// Blanket encoder for references.
+impl<T: Encode> Encode for &T {
+    fn encode_cbor(&self) -> Vec<u8> {
+        (*self).encode_cbor()
+    }
 }
 
 /// Raw is a placeholder type to allow only partially parsing CBOR objects when
