@@ -6,7 +6,7 @@
 
 #![no_main]
 
-use darkbio_crypto::cbor::{decode, encode, Cbor, Raw};
+use darkbio_crypto::cbor::{decode, encode, Cbor, Null, Raw};
 use libfuzzer_sys::fuzz_target;
 
 #[derive(Debug, PartialEq, Cbor)]
@@ -55,30 +55,46 @@ macro_rules! roundtrip {
 fuzz_target!(|data: &[u8]| {
     roundtrip!(
         data,
+        bool,
         String,
         u64,
         i64,
         Vec<u8>,
+        Null,
+        Option<u64>,
+        Option<i64>,
+        Option<String>,
+        Option<Vec<u8>>,
+        Option<bool>,
         (),
         (String,),
         (u64,),
         (i64,),
+        (bool,),
         (String, u64),
         (String, i64),
+        (String, bool),
         (u64, String),
         (i64, String),
+        (bool, String),
         (String, String),
         (u64, i64),
         (i64, u64),
+        (bool, u64),
+        (u64, bool),
         [u8; 1],
         [u8; 2],
         [u8; 4],
         [u8; 8],
         ((u64, [u8; 4]), (String, u64)),
         ((i64, [u8; 4]), (String, i64)),
+        ((bool, [u8; 4]), (String, bool)),
         Raw,
         (String, Raw),
         (Raw, u64),
+        (Raw, bool),
+        (Option<String>, u64),
+        (u64, Option<String>),
         MapSimple,
         MapNested,
         ArraySimple,

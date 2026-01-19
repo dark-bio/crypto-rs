@@ -60,7 +60,7 @@ pub struct EncapKeyHeader {
 /// COSE_Sign1 = [
 ///     protected:   bstr,
 ///     unprotected: header_map,
-///     payload:     bstr,
+///     payload:     bstr / null,
 ///     signature:   bstr
 /// ]
 /// ```
@@ -71,8 +71,8 @@ pub struct CoseSign1 {
     pub protected: Vec<u8>,
     /// Unprotected header map (empty for signatures)
     pub unprotected: EmptyHeader,
-    /// Payload bytes
-    pub payload: Vec<u8>,
+    /// Payload bytes (null for detached payload)
+    pub payload: Option<Vec<u8>>,
     /// Signature (fixed size for xDSA)
     pub signature: [u8; SIGNATURE_SIZE],
 }

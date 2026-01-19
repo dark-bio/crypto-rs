@@ -11,6 +11,8 @@
 //! This is an implementation of the CBOR spec with an extremely reduced type
 //! system, focusing on security rather than flexibility or completeness. The
 //! following types are supported:
+//! - Booleans:                bool
+//! - Null:                    Option<T>::None, cbor::Null
 //! - 64bit positive integers: u64
 //! - 64bit signed integers:   i64
 //! - UTF-8 text strings:      String, &str
@@ -29,12 +31,18 @@ const MAJOR_BYTES: u8 = 2;
 const MAJOR_TEXT: u8 = 3;
 const MAJOR_ARRAY: u8 = 4;
 const MAJOR_MAP: u8 = 5;
+const MAJOR_SIMPLE: u8 = 7;
 
 // Additional info values
 const INFO_UINT8: u8 = 24;
 const INFO_UINT16: u8 = 25;
 const INFO_UINT32: u8 = 26;
 const INFO_UINT64: u8 = 27;
+
+// Simple values (major type 7)
+const SIMPLE_FALSE: u8 = 20;
+const SIMPLE_TRUE: u8 = 21;
+const SIMPLE_NULL: u8 = 22;
 
 /// Error is the failures that can occur while encoding or decoding CBOR data.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -147,6 +155,17 @@ impl Encoder {
     // encode_map_header encodes a map size.
     pub fn encode_map_header(&mut self, len: usize) {
         self.encode_length(MAJOR_MAP, len as u64);
+    }
+
+    // encode_bool encodes a CBOR boolean value.
+    pub fn encode_bool(&mut self, value: bool) {
+        self.buf
+            .push(MAJOR_SIMPLE << 5 | if value { SIMPLE_TRUE } else { SIMPLE_FALSE });
+    }
+
+    // encode_null encodes a CBOR null value.
+    pub fn encode_null(&mut self) {
+        self.buf.push(MAJOR_SIMPLE << 5 | SIMPLE_NULL);
     }
 
     // encodeLength encodes a major type with an unsigned integer, which defines
@@ -289,6 +308,43 @@ impl<'a> Decoder<'a> {
         Ok(len)
     }
 
+    // decode_bool decodes a CBOR boolean value.
+    pub fn decode_bool(&mut self) -> Result<bool, Error> {
+        if self.pos >= self.data.len() {
+            return Err(Error::UnexpectedEof);
+        }
+        let byte = self.data[self.pos];
+        match byte {
+            b if b == (MAJOR_SIMPLE << 5 | SIMPLE_FALSE) => {
+                self.pos += 1;
+                Ok(false)
+            }
+            b if b == (MAJOR_SIMPLE << 5 | SIMPLE_TRUE) => {
+                self.pos += 1;
+                Ok(true)
+            }
+            _ => Err(Error::InvalidMajorType(byte >> 5, MAJOR_SIMPLE)),
+        }
+    }
+
+    // decode_null decodes a CBOR null value.
+    pub fn decode_null(&mut self) -> Result<(), Error> {
+        if self.pos >= self.data.len() {
+            return Err(Error::UnexpectedEof);
+        }
+        let byte = self.data[self.pos];
+        if byte != (MAJOR_SIMPLE << 5 | SIMPLE_NULL) {
+            return Err(Error::InvalidMajorType(byte >> 5, MAJOR_SIMPLE));
+        }
+        self.pos += 1;
+        Ok(())
+    }
+
+    // peek_null checks if the next value is null without consuming it.
+    pub fn peek_null(&self) -> bool {
+        self.pos < self.data.len() && self.data[self.pos] == (MAJOR_SIMPLE << 5 | SIMPLE_NULL)
+    }
+
     // decode_header extracts the major type for the next field and the integer
     // value embedded as the additional info.
     fn decode_header(&mut self) -> Result<(u8, u64), Error> {
@@ -378,6 +434,28 @@ pub trait Decode: Sized {
 
     // decode_cbor_notrail converts CBOR to the type, ignoring any trailing data.
     fn decode_cbor_notrail(decoder: &mut Decoder<'_>) -> Result<Self, Error>;
+}
+
+// Encoder and decoder implementation for booleans.
+impl Encode for bool {
+    fn encode_cbor(&self) -> Vec<u8> {
+        let mut encoder = Encoder::new();
+        encoder.encode_bool(*self);
+        encoder.finish()
+    }
+}
+
+impl Decode for bool {
+    fn decode_cbor(data: &[u8]) -> Result<Self, Error> {
+        let mut decoder = Decoder::new(data);
+        let value = decoder.decode_bool()?;
+        decoder.finish()?;
+        Ok(value)
+    }
+
+    fn decode_cbor_notrail(decoder: &mut Decoder<'_>) -> Result<Self, Error> {
+        decoder.decode_bool()
+    }
 }
 
 // Encoder and decoder implementation for positive integers.
@@ -615,6 +693,64 @@ impl<T: Encode> Encode for &T {
     }
 }
 
+/// Null is a unit type that encodes/decodes as CBOR null (0xf6).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Null;
+
+impl Encode for Null {
+    fn encode_cbor(&self) -> Vec<u8> {
+        let mut encoder = Encoder::new();
+        encoder.encode_null();
+        encoder.finish()
+    }
+}
+
+impl Decode for Null {
+    fn decode_cbor(data: &[u8]) -> Result<Self, Error> {
+        let mut decoder = Decoder::new(data);
+        let result = Self::decode_cbor_notrail(&mut decoder)?;
+        decoder.finish()?;
+        Ok(result)
+    }
+
+    fn decode_cbor_notrail(decoder: &mut Decoder<'_>) -> Result<Self, Error> {
+        decoder.decode_null()?;
+        Ok(Null)
+    }
+}
+
+// Encoder and decoder implementation for Option<T> (None encodes as null).
+impl<T: Encode> Encode for Option<T> {
+    fn encode_cbor(&self) -> Vec<u8> {
+        match self {
+            Some(value) => value.encode_cbor(),
+            None => {
+                let mut encoder = Encoder::new();
+                encoder.encode_null();
+                encoder.finish()
+            }
+        }
+    }
+}
+
+impl<T: Decode> Decode for Option<T> {
+    fn decode_cbor(data: &[u8]) -> Result<Self, Error> {
+        let mut decoder = Decoder::new(data);
+        let result = Self::decode_cbor_notrail(&mut decoder)?;
+        decoder.finish()?;
+        Ok(result)
+    }
+
+    fn decode_cbor_notrail(decoder: &mut Decoder<'_>) -> Result<Self, Error> {
+        if decoder.peek_null() {
+            decoder.decode_null()?;
+            Ok(None)
+        } else {
+            Ok(Some(T::decode_cbor_notrail(decoder)?))
+        }
+    }
+}
+
 /// Raw is a placeholder type to allow only partially parsing CBOR objects when
 /// some part might depend on another (e.g. version tag, method in an RPC, etc).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -678,6 +814,13 @@ fn skip_object(decoder: &mut Decoder<'_>) -> Result<(), Error> {
                 skip_object(decoder)?;
                 skip_object(decoder)?;
             }
+            Ok(())
+        }
+        MAJOR_SIMPLE
+            if value == SIMPLE_FALSE as u64
+                || value == SIMPLE_TRUE as u64
+                || value == SIMPLE_NULL as u64 =>
+        {
             Ok(())
         }
         _ => Err(Error::UnsupportedType(major)),
@@ -752,6 +895,14 @@ fn verify_object(decoder: &mut Decoder) -> Result<(), Error> {
             }
             Ok(())
         }
+        MAJOR_SIMPLE
+            if value == SIMPLE_FALSE as u64
+                || value == SIMPLE_TRUE as u64
+                || value == SIMPLE_NULL as u64 =>
+        {
+            // Booleans and null are valid simple values
+            Ok(())
+        }
         _ => {
             // Any other major type is disallowed
             Err(Error::UnsupportedType(major))
@@ -762,6 +913,48 @@ fn verify_object(decoder: &mut Decoder) -> Result<(), Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Tests that booleans encode correctly.
+    #[test]
+    fn test_bool_encoding() {
+        assert_eq!(encode(&false), vec![0xf4]);
+        assert_eq!(encode(&true), vec![0xf5]);
+    }
+
+    // Tests that booleans decode correctly.
+    #[test]
+    fn test_bool_decoding() {
+        assert_eq!(decode::<bool>(&[0xf4]).unwrap(), false);
+        assert_eq!(decode::<bool>(&[0xf5]).unwrap(), true);
+
+        // Invalid values should fail
+        assert!(decode::<bool>(&[0xf6]).is_err()); // null
+        assert!(decode::<bool>(&[0x00]).is_err()); // integer
+    }
+
+    // Tests that null encodes correctly.
+    #[test]
+    fn test_null_encoding() {
+        assert_eq!(encode(&None::<u64>), vec![0xf6]);
+        assert_eq!(encode(&Some(42u64)), encode(&42u64));
+    }
+
+    // Tests that null decodes correctly.
+    #[test]
+    fn test_null_decoding() {
+        assert_eq!(decode::<Option<u64>>(&[0xf6]).unwrap(), None);
+        assert_eq!(decode::<Option<u64>>(&encode(&42u64)).unwrap(), Some(42));
+
+        // Nested options
+        assert_eq!(decode::<Option<bool>>(&[0xf4]).unwrap(), Some(false));
+        assert_eq!(decode::<Option<bool>>(&[0xf5]).unwrap(), Some(true));
+        assert_eq!(decode::<Option<bool>>(&[0xf6]).unwrap(), None);
+
+        // Null type
+        assert_eq!(decode::<Null>(&[0xf6]).unwrap(), Null);
+        assert!(decode::<Null>(&[0xf4]).is_err()); // false is not null
+        assert!(decode::<Null>(&[0x00]).is_err()); // integer is not null
+    }
 
     // Tests that positive integers encode correctly across the various ranges
     // that CBOR special cases.
@@ -1460,8 +1653,12 @@ mod tests {
             Err(Error::UnsupportedType(6))
         ));
 
-        // Major type 7 (floats/bools) - unsupported
-        let data = vec![0xf5]; // true
+        // Major type 7 (floats) - unsupported, but bools/null are now supported
+        let data = vec![0xf5]; // true - now valid
+        assert!(decode::<Raw>(&data).is_ok());
+
+        // Float16 is still unsupported
+        let data = vec![0xf9, 0x3c, 0x00]; // 1.0 as float16
         assert!(matches!(
             decode::<Raw>(&data),
             Err(Error::UnsupportedType(7))
@@ -1532,32 +1729,12 @@ mod tests {
             other => panic!("Expected UnsupportedType(6) error, got {:?}", other),
         }
 
-        // Major type 7 (floats/booleans/null/undefined) - unsupported
-        // Boolean false
-        let bool_false = vec![0xf4];
-        assert!(verify(&bool_false).is_err());
-        match verify(&bool_false).unwrap_err() {
-            Error::UnsupportedType(7) => {}
-            other => panic!("Expected UnsupportedType(7) error, got {:?}", other),
-        }
+        // Booleans and null are now supported
+        assert!(verify(&encode(&false)).is_ok());
+        assert!(verify(&encode(&true)).is_ok());
+        assert!(verify(&encode(&None::<u64>)).is_ok());
 
-        // Boolean true
-        let bool_true = vec![0xf5];
-        assert!(verify(&bool_true).is_err());
-        match verify(&bool_true).unwrap_err() {
-            Error::UnsupportedType(7) => {}
-            other => panic!("Expected UnsupportedType(7) error, got {:?}", other),
-        }
-
-        // null
-        let null_val = vec![0xf6];
-        assert!(verify(&null_val).is_err());
-        match verify(&null_val).unwrap_err() {
-            Error::UnsupportedType(7) => {}
-            other => panic!("Expected UnsupportedType(7) error, got {:?}", other),
-        }
-
-        // undefined
+        // undefined (0xf7) is still unsupported
         let undefined_val = vec![0xf7];
         assert!(verify(&undefined_val).is_err());
         match verify(&undefined_val).unwrap_err() {
@@ -1605,10 +1782,14 @@ mod tests {
             other => panic!("Expected NonCanonical error, got {:?}", other),
         }
 
-        // Nested arrays with invalid content
-        let nested_invalid = vec![0x81, 0xf4]; // [false]
-        assert!(verify(&nested_invalid).is_err());
-        match verify(&nested_invalid).unwrap_err() {
+        // Nested arrays with booleans are now valid
+        let nested_bool = vec![0x81, 0xf4]; // [false]
+        assert!(verify(&nested_bool).is_ok());
+
+        // Nested arrays with floats are still invalid
+        let nested_float = vec![0x81, 0xf9, 0x3c, 0x00]; // [1.0 as float16]
+        assert!(verify(&nested_float).is_err());
+        match verify(&nested_float).unwrap_err() {
             Error::UnsupportedType(7) => {}
             other => panic!("Expected UnsupportedType(7) error, got {:?}", other),
         }

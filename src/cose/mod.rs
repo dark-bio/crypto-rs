@@ -46,6 +46,8 @@ pub enum Error {
     StaleSignature(u64, u64),
     #[error("unexpected payload in detached signature")]
     UnexpectedPayload,
+    #[error("missing payload in embedded signature")]
+    MissingPayload,
     #[error("invalid encapsulated key size: {0}, expected {1}")]
     InvalidEncapKeySize(usize, usize),
     #[error("decryption failed: {0}")]
@@ -120,7 +122,32 @@ pub fn sign_detached_at<A: Encode>(
     domain: &[u8],
     timestamp: i64,
 ) -> Vec<u8> {
-    sign_at(&(), msg_to_auth, signer, domain, timestamp)
+    // Restrict the user's domain to the context of this library
+    let info = [DOMAIN_PREFIX, domain].concat();
+    let aad = cbor::encode(&(&info, msg_to_auth));
+
+    let protected = cbor::encode(&SigProtectedHeader {
+        algorithm: ALGORITHM_ID_XDSA,
+        kid: signer.fingerprint().to_bytes(),
+        timestamp,
+    });
+    // Build and sign Sig_structure with empty payload for detached mode
+    let signature = signer.sign(
+        &SigStructure {
+            context: "Signature1",
+            protected: &protected,
+            external_aad: &aad,
+            payload: &[],
+        }
+        .encode_cbor(),
+    );
+    // Build and encode COSE_Sign1 with null payload
+    cbor::encode(&CoseSign1 {
+        protected,
+        unprotected: EmptyHeader {},
+        payload: None,
+        signature: signature.to_bytes(),
+    })
 }
 
 /// sign_at creates a COSE_Sign1 digital signature with an embedded payload
@@ -165,14 +192,14 @@ pub fn sign_at<E: Encode, A: Encode>(
     cbor::encode(&CoseSign1 {
         protected,
         unprotected: EmptyHeader {},
-        payload: msg_to_embed,
+        payload: Some(msg_to_embed),
         signature: signature.to_bytes(),
     })
 }
 
 /// verify_detached validates a COSE_Sign1 digital signature with a detached payload.
 ///
-/// - `msg_to_check`: The serialized COSE_Sign1 structure (with empty payload)
+/// - `msg_to_check`: The serialized COSE_Sign1 structure (with null payload)
 /// - `msg_to_auth`: The same message used during signing (verified but not embedded)
 /// - `verifier`: The xDSA public key to verify against
 /// - `domain`: Application domain for replay protection
@@ -186,10 +213,46 @@ pub fn verify_detached<A: Encode>(
     domain: &[u8],
     max_drift: Option<u64>,
 ) -> Result<(), Error> {
-    let payload: () = verify(msg_to_check, msg_to_auth, verifier, domain, max_drift)?;
-    if payload != () {
+    // Restrict the user's domain to the context of this library
+    let info = [DOMAIN_PREFIX, domain].concat();
+    let aad = cbor::encode(&(&info, msg_to_auth));
+
+    // Parse COSE_Sign1
+    let sign1: CoseSign1 = cbor::decode(msg_to_check)?;
+
+    // Verify payload is null (detached)
+    if sign1.payload.is_some() {
         return Err(Error::UnexpectedPayload);
     }
+    // Verify the protected header
+    let header = verify_sig_protected_header(&sign1.protected, ALGORITHM_ID_XDSA, verifier)?;
+
+    // Check signature timestamp drift if max_drift is specified
+    if let Some(max) = max_drift {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before Unix epoch")
+            .as_secs() as i64;
+        let drift = (now - header.timestamp).unsigned_abs();
+        if drift > max {
+            return Err(Error::StaleSignature(drift, max));
+        }
+    }
+    // Reconstruct Sig_structure to verify (empty payload for detached mode)
+    let blob = SigStructure {
+        context: "Signature1",
+        protected: &sign1.protected,
+        external_aad: &aad,
+        payload: &[],
+    }
+    .encode_cbor();
+
+    // Verify signature
+    let signature = xdsa::Signature::from_bytes(&sign1.signature);
+    verifier
+        .verify(&blob, &signature)
+        .map_err(|e| Error::InvalidSignature(e.to_string()))?;
+
     Ok(())
 }
 
@@ -216,6 +279,9 @@ pub fn verify<E: Decode, A: Encode>(
     // Parse COSE_Sign1
     let sign1: CoseSign1 = cbor::decode(msg_to_check)?;
 
+    // Verify payload is present (embedded)
+    let payload = sign1.payload.ok_or(Error::MissingPayload)?;
+
     // Verify the protected header
     let header = verify_sig_protected_header(&sign1.protected, ALGORITHM_ID_XDSA, verifier)?;
 
@@ -235,7 +301,7 @@ pub fn verify<E: Decode, A: Encode>(
         context: "Signature1",
         protected: &sign1.protected,
         external_aad: &aad,
-        payload: &sign1.payload,
+        payload: &payload,
     }
     .encode_cbor();
 
@@ -245,7 +311,7 @@ pub fn verify<E: Decode, A: Encode>(
         .verify(&blob, &signature)
         .map_err(|e| Error::InvalidSignature(e.to_string()))?;
 
-    Ok(cbor::decode(&sign1.payload)?)
+    Ok(cbor::decode(&payload)?)
 }
 
 /// seal signs a message then encrypts it to a recipient.
