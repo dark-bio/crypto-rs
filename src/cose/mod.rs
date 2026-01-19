@@ -12,8 +12,9 @@
 mod types;
 
 pub use types::{
-    CoseEncrypt0, CoseSign1, ENCAP_KEY_SIZE, EmptyHeader, EncProtectedHeader, EncStructure,
-    EncapKeyHeader, HEADER_TIMESTAMP, SIGNATURE_SIZE, SigProtectedHeader, SigStructure,
+    CoseEncrypt0, CoseSign1, CritHeader, ENCAP_KEY_SIZE, EmptyHeader, EncProtectedHeader,
+    EncStructure, EncapKeyHeader, HEADER_TIMESTAMP, SIGNATURE_SIZE, SigProtectedHeader,
+    SigStructure,
 };
 
 // Use an indirect time package that mostly defers to sts::time on most platforms,
@@ -128,6 +129,9 @@ pub fn sign_detached_at<A: Encode>(
 
     let protected = cbor::encode(&SigProtectedHeader {
         algorithm: ALGORITHM_ID_XDSA,
+        crit: CritHeader {
+            timestamp: HEADER_TIMESTAMP,
+        },
         kid: signer.fingerprint().to_bytes(),
         timestamp,
     });
@@ -175,6 +179,9 @@ pub fn sign_at<E: Encode, A: Encode>(
 
     let protected = cbor::encode(&SigProtectedHeader {
         algorithm: ALGORITHM_ID_XDSA,
+        crit: CritHeader {
+            timestamp: HEADER_TIMESTAMP,
+        },
         kid: signer.fingerprint().to_bytes(),
         timestamp,
     });
@@ -481,6 +488,12 @@ fn verify_sig_protected_header(
     let header: SigProtectedHeader = cbor::decode(bytes)?;
     if header.algorithm != exp_algo {
         return Err(Error::UnexpectedAlgorithm(header.algorithm, exp_algo));
+    }
+    if header.crit.timestamp != HEADER_TIMESTAMP {
+        return Err(Error::UnexpectedAlgorithm(
+            header.crit.timestamp,
+            HEADER_TIMESTAMP,
+        ));
     }
     if header.kid != verifier.fingerprint().to_bytes() {
         return Err(Error::UnexpectedKey(

@@ -23,11 +23,23 @@ pub struct SigProtectedHeader {
     /// Algorithm identifier (COSE header label 1)
     #[cbor(key = 1)]
     pub algorithm: i64,
+    /// Critical headers that must be understood (COSE header label 2)
+    #[cbor(key = 2)]
+    pub crit: CritHeader,
     /// Key identifier - signer's fingerprint (COSE header label 4)
     #[cbor(key = 4)]
     pub kid: [u8; 32],
     /// Unix timestamp in seconds (private header label)
     #[cbor(key = -70002)]
+    pub timestamp: i64,
+}
+
+/// Critical headers list per RFC 9052.
+/// Implementations must reject messages with unknown crit labels.
+#[derive(Debug, Clone, PartialEq, Eq, Cbor)]
+#[cbor(array)]
+pub struct CritHeader {
+    /// HeaderTimestamp label - must be understood
     pub timestamp: i64,
 }
 
