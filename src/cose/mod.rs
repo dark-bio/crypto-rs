@@ -379,8 +379,8 @@ pub fn seal_at<E: Encode, A: Encode>(
 
     // Create a COSE_Sign1 with the payload, binding the AAD (use Raw to avoid re-encoding)
     let signed = sign_at(
-        &Raw(msg_to_seal),
-        &Raw(msg_to_auth.clone()),
+        Raw(msg_to_seal),
+        Raw(msg_to_auth.clone()),
         signer,
         domain,
         timestamp,
