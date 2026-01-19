@@ -73,7 +73,7 @@ pub const ALGORITHM_ID_XHPKE: i64 = -70001;
 ///
 /// Returns the serialized COSE_Sign1 structure.
 pub fn sign_detached<A: Encode>(
-    msg_to_auth: &A,
+    msg_to_auth: A,
     signer: &xdsa::SecretKey,
     domain: &[u8],
 ) -> Vec<u8> {
@@ -96,8 +96,8 @@ pub fn sign_detached<A: Encode>(
 ///
 /// Returns the serialized COSE_Sign1 structure.
 pub fn sign<E: Encode, A: Encode>(
-    msg_to_embed: &E,
-    msg_to_auth: &A,
+    msg_to_embed: E,
+    msg_to_auth: A,
     signer: &xdsa::SecretKey,
     domain: &[u8],
 ) -> Vec<u8> {
@@ -118,7 +118,7 @@ pub fn sign<E: Encode, A: Encode>(
 ///
 /// Returns the serialized COSE_Sign1 structure.
 pub fn sign_detached_at<A: Encode>(
-    msg_to_auth: &A,
+    msg_to_auth: A,
     signer: &xdsa::SecretKey,
     domain: &[u8],
     timestamp: i64,
@@ -165,8 +165,8 @@ pub fn sign_detached_at<A: Encode>(
 ///
 /// Returns the serialized COSE_Sign1 structure.
 pub fn sign_at<E: Encode, A: Encode>(
-    msg_to_embed: &E,
-    msg_to_auth: &A,
+    msg_to_embed: E,
+    msg_to_auth: A,
     signer: &xdsa::SecretKey,
     domain: &[u8],
     timestamp: i64,
@@ -215,7 +215,7 @@ pub fn sign_at<E: Encode, A: Encode>(
 /// Returns `()` if verification succeeds.
 pub fn verify_detached<A: Encode>(
     msg_to_check: &[u8],
-    msg_to_auth: &A,
+    msg_to_auth: A,
     verifier: &xdsa::PublicKey,
     domain: &[u8],
     max_drift: Option<u64>,
@@ -274,7 +274,7 @@ pub fn verify_detached<A: Encode>(
 /// Returns the CBOR-decoded embedded payload if verification succeeds.
 pub fn verify<E: Decode, A: Encode>(
     msg_to_check: &[u8],
-    msg_to_auth: &A,
+    msg_to_auth: A,
     verifier: &xdsa::PublicKey,
     domain: &[u8],
     max_drift: Option<u64>,
@@ -334,8 +334,8 @@ pub fn verify<E: Decode, A: Encode>(
 ///
 /// Returns the serialized COSE_Encrypt0 structure containing the encrypted COSE_Sign1.
 pub fn seal<E: Encode, A: Encode>(
-    msg_to_seal: &E,
-    msg_to_auth: &A,
+    msg_to_seal: E,
+    msg_to_auth: A,
     signer: &xdsa::SecretKey,
     recipient: &xhpke::PublicKey,
     domain: &[u8],
@@ -366,8 +366,8 @@ pub fn seal<E: Encode, A: Encode>(
 ///
 /// Returns the serialized COSE_Encrypt0 structure containing the encrypted COSE_Sign1.
 pub fn seal_at<E: Encode, A: Encode>(
-    msg_to_seal: &E,
-    msg_to_auth: &A,
+    msg_to_seal: E,
+    msg_to_auth: A,
     signer: &xdsa::SecretKey,
     recipient: &xhpke::PublicKey,
     domain: &[u8],
@@ -430,7 +430,7 @@ pub fn seal_at<E: Encode, A: Encode>(
 /// Returns the CBOR-decoded payload if decryption and verification succeed.
 pub fn open<E: Decode, A: Encode>(
     msg_to_open: &[u8],
-    msg_to_auth: &A,
+    msg_to_auth: A,
     recipient: &xhpke::SecretKey,
     sender: &xdsa::PublicKey,
     domain: &[u8],

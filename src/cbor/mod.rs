@@ -73,7 +73,7 @@ pub enum Error {
 
 /// encode attempts to encode a generic Rust value to CBOR using the tiny, strict
 /// subset of types permitted by this package.
-pub fn encode<T: Encode>(value: &T) -> Vec<u8> {
+pub fn encode<T: Encode>(value: T) -> Vec<u8> {
     value.encode_cbor()
 }
 
@@ -692,6 +692,9 @@ impl<T: Encode> Encode for &T {
         (*self).encode_cbor()
     }
 }
+
+/// Constant for convenient CBOR null encoding (use `cbor::NULL`).
+pub const NULL: Null = Null;
 
 /// Null is a unit type that encodes/decodes as CBOR null (0xf6).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
