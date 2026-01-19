@@ -585,6 +585,21 @@ pub fn open_at<E: Decode, A: Encode>(
     Ok(cbor::decode(&raw.0)?)
 }
 
+/// recipient extracts the recipient's fingerprint from a COSE_Encrypt0 message
+/// without decrypting it.
+///
+/// This allows looking up the appropriate decryption key before attempting
+/// full decryption.
+///
+/// - `ciphertext`: The serialized COSE_Encrypt0 structure
+///
+/// Returns the recipient's fingerprint from the protected header's `kid` field.
+pub fn recipient(ciphertext: &[u8]) -> Result<xhpke::Fingerprint, Error> {
+    let encrypt0: CoseEncrypt0 = cbor::decode(ciphertext)?;
+    let header: EncProtectedHeader = cbor::decode(&encrypt0.protected)?;
+    Ok(xhpke::Fingerprint::from_bytes(&header.kid))
+}
+
 /// Verifies the signature protected header contains exactly the expected algorithm
 /// and that the key identifier matches the provided verifier.
 fn verify_sig_protected_header(
