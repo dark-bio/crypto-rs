@@ -45,7 +45,7 @@ const SIMPLE_TRUE: u8 = 21;
 const SIMPLE_NULL: u8 = 22;
 
 /// Error is the failures that can occur while encoding or decoding CBOR data.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
     #[error("invalid major type: {0}, want {1}")]
     InvalidMajorType(u8, u8),
@@ -69,6 +69,8 @@ pub enum Error {
     DuplicateMapKey(i64),
     #[error("invalid map key order: {0} must come before {1}")]
     InvalidMapKeyOrder(i64, i64),
+    #[error("decode failed: {0}")]
+    DecodeFailed(String),
 }
 
 /// encode attempts to encode a generic Rust value to CBOR using the tiny, strict

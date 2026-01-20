@@ -317,6 +317,28 @@ impl<'de> Deserialize<'de> for PublicKey {
     }
 }
 
+#[cfg(feature = "cbor")]
+impl crate::cbor::Encode for PublicKey {
+    fn encode_cbor(&self) -> Vec<u8> {
+        self.to_bytes().encode_cbor()
+    }
+}
+
+#[cfg(feature = "cbor")]
+impl crate::cbor::Decode for PublicKey {
+    fn decode_cbor(data: &[u8]) -> Result<Self, crate::cbor::Error> {
+        let bytes = <[u8; PUBLIC_KEY_SIZE]>::decode_cbor(data)?;
+        Self::from_bytes(&bytes).map_err(|e| crate::cbor::Error::DecodeFailed(e.to_string()))
+    }
+
+    fn decode_cbor_notrail(
+        decoder: &mut crate::cbor::Decoder<'_>,
+    ) -> Result<Self, crate::cbor::Error> {
+        let bytes = decoder.decode_bytes_fixed::<PUBLIC_KEY_SIZE>()?;
+        Self::from_bytes(&bytes).map_err(|e| crate::cbor::Error::DecodeFailed(e.to_string()))
+    }
+}
+
 /// split_signing_message derives the composite message M' from a raw message
 /// according to the IETF composite signature spec:
 ///
@@ -395,6 +417,28 @@ impl<'de> Deserialize<'de> for Signature {
     }
 }
 
+#[cfg(feature = "cbor")]
+impl crate::cbor::Encode for Signature {
+    fn encode_cbor(&self) -> Vec<u8> {
+        self.to_bytes().encode_cbor()
+    }
+}
+
+#[cfg(feature = "cbor")]
+impl crate::cbor::Decode for Signature {
+    fn decode_cbor(data: &[u8]) -> Result<Self, crate::cbor::Error> {
+        let bytes = <[u8; SIGNATURE_SIZE]>::decode_cbor(data)?;
+        Ok(Self::from_bytes(&bytes))
+    }
+
+    fn decode_cbor_notrail(
+        decoder: &mut crate::cbor::Decoder<'_>,
+    ) -> Result<Self, crate::cbor::Error> {
+        let bytes = decoder.decode_bytes_fixed::<SIGNATURE_SIZE>()?;
+        Ok(Self::from_bytes(&bytes))
+    }
+}
+
 /// Fingerprint contains a 256-bit unique identifier for a composite ML-DSA-65-Ed25519-SHA512 key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Fingerprint([u8; FINGERPRINT_SIZE]);
@@ -425,6 +469,28 @@ impl<'de> Deserialize<'de> for Fingerprint {
             .try_into()
             .map_err(|_| de::Error::custom("invalid fingerprint length"))?;
         Ok(Fingerprint::from_bytes(&arr))
+    }
+}
+
+#[cfg(feature = "cbor")]
+impl crate::cbor::Encode for Fingerprint {
+    fn encode_cbor(&self) -> Vec<u8> {
+        self.to_bytes().encode_cbor()
+    }
+}
+
+#[cfg(feature = "cbor")]
+impl crate::cbor::Decode for Fingerprint {
+    fn decode_cbor(data: &[u8]) -> Result<Self, crate::cbor::Error> {
+        let bytes = <[u8; FINGERPRINT_SIZE]>::decode_cbor(data)?;
+        Ok(Self::from_bytes(&bytes))
+    }
+
+    fn decode_cbor_notrail(
+        decoder: &mut crate::cbor::Decoder<'_>,
+    ) -> Result<Self, crate::cbor::Error> {
+        let bytes = decoder.decode_bytes_fixed::<FINGERPRINT_SIZE>()?;
+        Ok(Self::from_bytes(&bytes))
     }
 }
 

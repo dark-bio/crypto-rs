@@ -12,9 +12,8 @@
 mod types;
 
 pub use types::{
-    CoseEncrypt0, CoseSign1, CritHeader, ENCAP_KEY_SIZE, EmptyHeader, EncProtectedHeader,
-    EncStructure, EncapKeyHeader, HEADER_TIMESTAMP, SIGNATURE_SIZE, SigProtectedHeader,
-    SigStructure,
+    CoseEncrypt0, CoseSign1, CritHeader, EmptyHeader, EncProtectedHeader, EncStructure,
+    EncapKeyHeader, HEADER_TIMESTAMP, SigProtectedHeader, SigStructure,
 };
 
 // Use an indirect time package that mostly defers to sts::time on most platforms,
@@ -39,8 +38,8 @@ pub enum Error {
     CborError(#[from] cbor::Error),
     #[error("unexpected algorithm: have {0}, want {1}")]
     UnexpectedAlgorithm(i64, i64),
-    #[error("unexpected key: have {0:x?}, want {1:x?}")]
-    UnexpectedKey([u8; 32], [u8; 32]),
+    #[error("unexpected signing key: have {0:x?}, want {1:x?}")]
+    UnexpectedSigningKey(xdsa::Fingerprint, xdsa::Fingerprint),
     #[error("signature verification failed: {0}")]
     InvalidSignature(String),
     #[error("signature stale: time drift {0}s exceeds max {1}s")]
@@ -49,6 +48,8 @@ pub enum Error {
     UnexpectedPayload,
     #[error("missing payload in embedded signature")]
     MissingPayload,
+    #[error("unexpected encryption key: have {0:x?}, want {1:x?}")]
+    UnexpectedEncryptionKey(xhpke::Fingerprint, xhpke::Fingerprint),
     #[error("invalid encapsulated key size: {0}, expected {1}")]
     InvalidEncapKeySize(usize, usize),
     #[error("decryption failed: {0}")]
@@ -132,7 +133,7 @@ pub fn sign_detached_at<A: Encode>(
         crit: CritHeader {
             timestamp: HEADER_TIMESTAMP,
         },
-        kid: signer.fingerprint().to_bytes(),
+        kid: signer.fingerprint(),
         timestamp,
     });
     // Build and sign Sig_structure with empty payload for detached mode
@@ -150,7 +151,7 @@ pub fn sign_detached_at<A: Encode>(
         protected,
         unprotected: EmptyHeader {},
         payload: None,
-        signature: signature.to_bytes(),
+        signature,
     })
 }
 
@@ -182,7 +183,7 @@ pub fn sign_at<E: Encode, A: Encode>(
         crit: CritHeader {
             timestamp: HEADER_TIMESTAMP,
         },
-        kid: signer.fingerprint().to_bytes(),
+        kid: signer.fingerprint(),
         timestamp,
     });
     // Build and sign Sig_structure
@@ -200,7 +201,7 @@ pub fn sign_at<E: Encode, A: Encode>(
         protected,
         unprotected: EmptyHeader {},
         payload: Some(msg_to_embed),
-        signature: signature.to_bytes(),
+        signature,
     })
 }
 
@@ -276,9 +277,8 @@ pub fn verify_detached_at<A: Encode>(
     .encode_cbor();
 
     // Verify signature
-    let signature = xdsa::Signature::from_bytes(&sign1.signature);
     verifier
-        .verify(&blob, &signature)
+        .verify(&blob, &sign1.signature)
         .map_err(|e| Error::InvalidSignature(e.to_string()))?;
 
     Ok(())
@@ -359,9 +359,8 @@ pub fn verify_at<E: Decode, A: Encode>(
     .encode_cbor();
 
     // Verify signature
-    let signature = xdsa::Signature::from_bytes(&sign1.signature);
     verifier
-        .verify(&blob, &signature)
+        .verify(&blob, &sign1.signature)
         .map_err(|e| Error::InvalidSignature(e.to_string()))?;
 
     Ok(cbor::decode(&payload)?)
@@ -379,7 +378,7 @@ pub fn verify_at<E: Decode, A: Encode>(
 pub fn signer(signature: &[u8]) -> Result<xdsa::Fingerprint, Error> {
     let sign1: CoseSign1 = cbor::decode(signature)?;
     let header: SigProtectedHeader = cbor::decode(&sign1.protected)?;
-    Ok(xdsa::Fingerprint::from_bytes(&header.kid))
+    Ok(header.kid)
 }
 
 /// seal signs a message then encrypts it to a recipient.
@@ -450,7 +449,7 @@ pub fn seal_at<E: Encode, A: Encode>(
     // Build protected header with recipient's fingerprint
     let protected = cbor::encode(&EncProtectedHeader {
         algorithm: ALGORITHM_ID_XHPKE,
-        kid: recipient.fingerprint().to_bytes(),
+        kid: recipient.fingerprint(),
     });
     // Restrict the user's domain to the context of this library
     let info = [DOMAIN_PREFIX, domain].concat();
@@ -479,6 +478,63 @@ pub fn seal_at<E: Encode, A: Encode>(
     }))
 }
 
+/// decrypt decrypts a sealed message without verifying the signature.
+///
+/// This allows inspecting the signer before verification. Use [`signer`] to
+/// extract the signer's fingerprint, then [`verify`] or [`verify_at`] to verify.
+///
+/// - `msg_to_open`: The serialized COSE_Encrypt0 structure
+/// - `msg_to_auth`: The same additional authenticated data used during sealing
+/// - `recipient`: The xHPKE secret key to decrypt with
+/// - `domain`: Application domain for HPKE key derivation
+///
+/// Returns the decrypted COSE_Sign1 structure (not yet verified).
+pub fn decrypt<A: Encode>(
+    msg_to_open: &[u8],
+    msg_to_auth: A,
+    recipient: &xhpke::SecretKey,
+    domain: &[u8],
+) -> Result<Vec<u8>, Error> {
+    // Pre-encode for EncStructure (which needs raw bytes for external_aad)
+    let msg_to_auth = cbor::encode(msg_to_auth);
+
+    // Restrict the user's domain to the context of this library
+    let info = [DOMAIN_PREFIX, domain].concat();
+
+    // Parse COSE_Encrypt0
+    let encrypt0: CoseEncrypt0 = cbor::decode(msg_to_open)?;
+
+    // Verify protected header
+    verify_enc_protected_header(&encrypt0.protected, ALGORITHM_ID_XHPKE, recipient)?;
+
+    // Extract encapsulated key from the unprotected headers
+    let encap_key: &[u8; xhpke::ENCAP_KEY_SIZE] = encrypt0
+        .unprotected
+        .encap_key
+        .as_slice()
+        .try_into()
+        .map_err(|_| {
+            Error::InvalidEncapKeySize(encrypt0.unprotected.encap_key.len(), xhpke::ENCAP_KEY_SIZE)
+        })?;
+
+    // Rebuild and open Enc_structure
+    let decrypted = recipient
+        .open(
+            encap_key,
+            &encrypt0.ciphertext,
+            &EncStructure {
+                context: "Encrypt0",
+                protected: &encrypt0.protected,
+                external_aad: &msg_to_auth,
+            }
+            .encode_cbor(),
+            &info,
+        )
+        .map_err(|e| Error::DecryptionFailed(e.to_string()))?;
+
+    Ok(decrypted)
+}
+
 /// open decrypts and verifies a sealed message.
 ///
 /// Uses the current system time for drift checking. For testing or custom
@@ -492,7 +548,7 @@ pub fn seal_at<E: Encode, A: Encode>(
 /// - `max_drift`: Signatures more in the past or future are rejected
 ///
 /// Returns the CBOR-decoded payload if decryption and verification succeed.
-pub fn open<E: Decode, A: Encode>(
+pub fn open<E: Decode, A: Encode + Clone>(
     msg_to_open: &[u8],
     msg_to_auth: A,
     recipient: &xhpke::SecretKey,
@@ -527,7 +583,7 @@ pub fn open<E: Decode, A: Encode>(
 /// - `now`: Unix timestamp in seconds to use for drift checking
 ///
 /// Returns the CBOR-decoded payload if decryption and verification succeed.
-pub fn open_at<E: Decode, A: Encode>(
+pub fn open_at<E: Decode, A: Encode + Clone>(
     msg_to_open: &[u8],
     msg_to_auth: A,
     recipient: &xhpke::SecretKey,
@@ -536,52 +592,11 @@ pub fn open_at<E: Decode, A: Encode>(
     max_drift: Option<u64>,
     now: i64,
 ) -> Result<E, Error> {
-    // Pre-encode for EncStructure (which needs raw bytes for external_aad)
-    let msg_to_auth = cbor::encode(msg_to_auth);
-
-    // Restrict the user's domain to the context of this library
-    let info = [DOMAIN_PREFIX, domain].concat();
-
-    // Parse COSE_Encrypt0
-    let encrypt0: CoseEncrypt0 = cbor::decode(msg_to_open)?;
-
-    // Verify protected header
-    verify_enc_protected_header(&encrypt0.protected, ALGORITHM_ID_XHPKE, recipient)?;
-
-    // Extract encapsulated key from the unprotected headers
-    let encap_key: &[u8; ENCAP_KEY_SIZE] = encrypt0
-        .unprotected
-        .encap_key
-        .as_slice()
-        .try_into()
-        .map_err(|_| {
-            Error::InvalidEncapKeySize(encrypt0.unprotected.encap_key.len(), ENCAP_KEY_SIZE)
-        })?;
-
-    // Rebuild and open Enc_structure
-    let msg_to_check = recipient
-        .open(
-            encap_key,
-            &encrypt0.ciphertext,
-            &EncStructure {
-                context: "Encrypt0",
-                protected: &encrypt0.protected,
-                external_aad: &msg_to_auth,
-            }
-            .encode_cbor(),
-            &info,
-        )
-        .map_err(|e| Error::DecryptionFailed(e.to_string()))?;
+    // Decrypt the COSE_Encrypt0 to get the COSE_Sign1
+    let sign1 = decrypt(msg_to_open, msg_to_auth.clone(), recipient, domain)?;
 
     // Verify the signature and extract the payload
-    let raw: Raw = verify_at::<Raw, _>(
-        &msg_to_check,
-        &Raw(msg_to_auth),
-        sender,
-        domain,
-        max_drift,
-        now,
-    )?;
+    let raw: Raw = verify_at::<Raw, _>(&sign1, &msg_to_auth, sender, domain, max_drift, now)?;
     Ok(cbor::decode(&raw.0)?)
 }
 
@@ -597,7 +612,7 @@ pub fn open_at<E: Decode, A: Encode>(
 pub fn recipient(ciphertext: &[u8]) -> Result<xhpke::Fingerprint, Error> {
     let encrypt0: CoseEncrypt0 = cbor::decode(ciphertext)?;
     let header: EncProtectedHeader = cbor::decode(&encrypt0.protected)?;
-    Ok(xhpke::Fingerprint::from_bytes(&header.kid))
+    Ok(header.kid)
 }
 
 /// Verifies the signature protected header contains exactly the expected algorithm
@@ -617,10 +632,10 @@ fn verify_sig_protected_header(
             HEADER_TIMESTAMP,
         ));
     }
-    if header.kid != verifier.fingerprint().to_bytes() {
-        return Err(Error::UnexpectedKey(
+    if header.kid != verifier.fingerprint() {
+        return Err(Error::UnexpectedSigningKey(
             header.kid,
-            verifier.fingerprint().to_bytes(),
+            verifier.fingerprint(),
         ));
     }
     Ok(header)
@@ -637,10 +652,10 @@ fn verify_enc_protected_header(
     if header.algorithm != exp_algo {
         return Err(Error::UnexpectedAlgorithm(header.algorithm, exp_algo));
     }
-    if header.kid != recipient.fingerprint().to_bytes() {
-        return Err(Error::UnexpectedKey(
+    if header.kid != recipient.fingerprint() {
+        return Err(Error::UnexpectedEncryptionKey(
             header.kid,
-            recipient.fingerprint().to_bytes(),
+            recipient.fingerprint(),
         ));
     }
     Ok(header)
