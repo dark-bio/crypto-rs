@@ -461,6 +461,30 @@ pub fn seal_at<E: Encode, A: Encode>(
         domain,
         timestamp,
     );
+    // Encrypt the signed message to the recipient
+    encrypt(&signed, Raw(msg_to_auth), recipient, domain)
+}
+
+/// encrypt encrypts an already-signed COSE_Sign1 to a recipient.
+///
+/// For most use cases, prefer [`seal`] which signs and encrypts in one step.
+/// Use this only when re-encrypting a message (from [`decrypt`]) to a different
+/// recipient without access to the original signer's key.
+///
+/// - `sign1`: The COSE_Sign1 structure (e.g., from [`decrypt`])
+/// - `msg_to_auth`: The same additional authenticated data used during sealing
+/// - `recipient`: The xHPKE public key to encrypt to
+/// - `domain`: Application domain for HPKE key derivation
+///
+/// Returns the serialized COSE_Encrypt0 structure.
+pub fn encrypt<A: Encode>(
+    sign1: &[u8],
+    msg_to_auth: A,
+    recipient: &xhpke::PublicKey,
+    domain: &[u8],
+) -> Result<Vec<u8>, Error> {
+    // Pre-encode for EncStructure (which needs raw bytes for external_aad)
+    let msg_to_auth = cbor::encode(msg_to_auth);
 
     // Build protected header with recipient's fingerprint
     let protected = cbor::encode(&EncProtectedHeader {
@@ -473,7 +497,7 @@ pub fn seal_at<E: Encode, A: Encode>(
     // Build and seal Enc_structure
     let (encap_key, ciphertext) = recipient
         .seal(
-            &signed,
+            sign1,
             &EncStructure {
                 context: "Encrypt0",
                 protected: &protected,
@@ -492,63 +516,6 @@ pub fn seal_at<E: Encode, A: Encode>(
         },
         ciphertext,
     }))
-}
-
-/// decrypt decrypts a sealed message without verifying the signature.
-///
-/// This allows inspecting the signer before verification. Use [`signer`] to
-/// extract the signer's fingerprint, then [`verify`] or [`verify_at`] to verify.
-///
-/// - `msg_to_open`: The serialized COSE_Encrypt0 structure
-/// - `msg_to_auth`: The same additional authenticated data used during sealing
-/// - `recipient`: The xHPKE secret key to decrypt with
-/// - `domain`: Application domain for HPKE key derivation
-///
-/// Returns the decrypted COSE_Sign1 structure (not yet verified).
-pub fn decrypt<A: Encode>(
-    msg_to_open: &[u8],
-    msg_to_auth: A,
-    recipient: &xhpke::SecretKey,
-    domain: &[u8],
-) -> Result<Vec<u8>, Error> {
-    // Pre-encode for EncStructure (which needs raw bytes for external_aad)
-    let msg_to_auth = cbor::encode(msg_to_auth);
-
-    // Restrict the user's domain to the context of this library
-    let info = [DOMAIN_PREFIX, domain].concat();
-
-    // Parse COSE_Encrypt0
-    let encrypt0: CoseEncrypt0 = cbor::decode(msg_to_open)?;
-
-    // Verify protected header
-    verify_enc_protected_header(&encrypt0.protected, ALGORITHM_ID_XHPKE, recipient)?;
-
-    // Extract encapsulated key from the unprotected headers
-    let encap_key: &[u8; xhpke::ENCAP_KEY_SIZE] = encrypt0
-        .unprotected
-        .encap_key
-        .as_slice()
-        .try_into()
-        .map_err(|_| {
-            Error::InvalidEncapKeySize(encrypt0.unprotected.encap_key.len(), xhpke::ENCAP_KEY_SIZE)
-        })?;
-
-    // Rebuild and open Enc_structure
-    let decrypted = recipient
-        .open(
-            encap_key,
-            &encrypt0.ciphertext,
-            &EncStructure {
-                context: "Encrypt0",
-                protected: &encrypt0.protected,
-                external_aad: &msg_to_auth,
-            }
-            .encode_cbor(),
-            &info,
-        )
-        .map_err(|e| Error::DecryptionFailed(e.to_string()))?;
-
-    Ok(decrypted)
 }
 
 /// open decrypts and verifies a sealed message.
@@ -614,6 +581,63 @@ pub fn open_at<E: Decode, A: Encode + Clone>(
     // Verify the signature and extract the payload
     let raw: Raw = verify_at::<Raw, _>(&sign1, &msg_to_auth, sender, domain, max_drift, now)?;
     Ok(cbor::decode(&raw.0)?)
+}
+
+/// decrypt decrypts a sealed message without verifying the signature.
+///
+/// This allows inspecting the signer before verification. Use [`signer`] to
+/// extract the signer's fingerprint, then [`verify`] or [`verify_at`] to verify.
+///
+/// - `msg_to_open`: The serialized COSE_Encrypt0 structure
+/// - `msg_to_auth`: The same additional authenticated data used during sealing
+/// - `recipient`: The xHPKE secret key to decrypt with
+/// - `domain`: Application domain for HPKE key derivation
+///
+/// Returns the decrypted COSE_Sign1 structure (not yet verified).
+pub fn decrypt<A: Encode>(
+    msg_to_open: &[u8],
+    msg_to_auth: A,
+    recipient: &xhpke::SecretKey,
+    domain: &[u8],
+) -> Result<Vec<u8>, Error> {
+    // Pre-encode for EncStructure (which needs raw bytes for external_aad)
+    let msg_to_auth = cbor::encode(msg_to_auth);
+
+    // Restrict the user's domain to the context of this library
+    let info = [DOMAIN_PREFIX, domain].concat();
+
+    // Parse COSE_Encrypt0
+    let encrypt0: CoseEncrypt0 = cbor::decode(msg_to_open)?;
+
+    // Verify protected header
+    verify_enc_protected_header(&encrypt0.protected, ALGORITHM_ID_XHPKE, recipient)?;
+
+    // Extract encapsulated key from the unprotected headers
+    let encap_key: &[u8; xhpke::ENCAP_KEY_SIZE] = encrypt0
+        .unprotected
+        .encap_key
+        .as_slice()
+        .try_into()
+        .map_err(|_| {
+            Error::InvalidEncapKeySize(encrypt0.unprotected.encap_key.len(), xhpke::ENCAP_KEY_SIZE)
+        })?;
+
+    // Rebuild and open Enc_structure
+    let decrypted = recipient
+        .open(
+            encap_key,
+            &encrypt0.ciphertext,
+            &EncStructure {
+                context: "Encrypt0",
+                protected: &encrypt0.protected,
+                external_aad: &msg_to_auth,
+            }
+            .encode_cbor(),
+            &info,
+        )
+        .map_err(|e| Error::DecryptionFailed(e.to_string()))?;
+
+    Ok(decrypted)
 }
 
 /// recipient extracts the recipient's fingerprint from a COSE_Encrypt0 message
