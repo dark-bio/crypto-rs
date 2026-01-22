@@ -332,13 +332,12 @@ fn parse_key(expr: &Expr) -> syn::Result<i64> {
         },
         // Parse negative integers
         Expr::Unary(unary) => {
-            if let syn::UnOp::Neg(_) = unary.op {
-                if let Expr::Lit(lit) = &*unary.expr {
-                    if let Lit::Int(i) = &lit.lit {
-                        let val: i64 = i.base10_parse()?;
-                        return Ok(-val);
-                    }
-                }
+            if let syn::UnOp::Neg(_) = unary.op
+                && let Expr::Lit(lit) = &*unary.expr
+                && let Lit::Int(i) = &lit.lit
+            {
+                let val: i64 = i.base10_parse()?;
+                return Ok(-val);
             }
             Err(syn::Error::new_spanned(expr, "expected integer literal"))
         }
