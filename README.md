@@ -36,7 +36,7 @@ All functionality is WASM ready.
 
 ## Feature gates
 
-As a starting point, you will most probably want `xdsa` for digital signatures, `xhpke` for asymmetric encryption and `cose` for proper enveloping.
+As a starting point, you will most probably want `xdsa` for digital signatures, `xhpke` for asymmetric encryption and `cose` for proper enveloping. For the remainder for the features, please consult the list below:
 
 | Feature  | Description                                                                                                                                                                 | Dependencies             |
 |----------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------------|
@@ -58,7 +58,7 @@ As a starting point, you will most probably want `xdsa` for digital signatures, 
 
 The `cbor` feature provides a `#[derive(Cbor)]` macro that generates encoders and decoders for structs. By default, structs are represented as maps, with the possibility of requesting array encoding.
 
-In map encoding mode, all keys are integers. This is a deliberate restriction to support maps but still force non-wasteful encoding. Each field requires a `#[cbor(key = N)]` tag. To encode a struct as an array, use `#[cbor(array)]`.
+In map encoding mode, all keys are integers. This is a deliberate restriction to support maps but still force non-wasteful encoding. Each field requires `#[cbor(key = N)]`. To encode a struct as an array, use `#[cbor(array)]`.
 
 ## Siblings
 
