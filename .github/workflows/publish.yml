@@ -17,8 +17,7 @@ jobs:
       - uses: rust-lang/crates-io-auth-action@v1
         id: auth
 
-      - run: cargo publish
-        working-directory: src/cbor/derive
+      - run: cargo publish -p darkbio-crypto-cbor-derive
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
