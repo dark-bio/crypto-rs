@@ -1,6 +1,6 @@
 [package]
 name = "darkbio-crypto"
-version = "0.11.5"
+version = "0.11.6"
 authors = ["Péter Szilágyi <peter@dark.bio>"]
 description = "Cryptography primitives and wrappers"
 repository = "https://github.com/dark-bio/crypto-rs"
@@ -69,7 +69,7 @@ base64 = { version = "0.22.1", optional = true }
 chacha20poly1305 = { version = "0.10.1", optional = true }
 chrono = { version = "0.4.41", optional = true }
 const-oid = { version = "0.9.6", optional = true }
-darkbio-crypto-cbor-derive = { version = "0.11.5", path = "src/cbor/derive", optional = true }
+darkbio-crypto-cbor-derive = { version = "0.11.6", path = "src/cbor/derive", optional = true }
 der = { version = "0.7.10", features = ["derive"], optional = true }
 ed25519-dalek = { version = "2.2.0", features = ["pem", "rand_core"], optional = true }
 generic-array = { version = "0.14.7", optional = true }

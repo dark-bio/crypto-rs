@@ -82,6 +82,10 @@ impl SecretKey {
         // Parse the DER encoded container
         let info = PrivateKeyInfo::from_der(der)?;
 
+        // Reject trailing data by verifying re-encoded length matches input
+        if info.encoded_len()?.try_into() != Ok(der.len()) {
+            return Err("trailing data in private key".into());
+        }
         // Ensure the algorithm OID matches ML_DSA_65 (OID: 2.16.840.1.101.3.4.3.18)
         if info.algorithm.oid != OID {
             return Err("not an ML-DSA-65 private key".into());
@@ -200,6 +204,10 @@ impl PublicKey {
         let info: SubjectPublicKeyInfo<AlgorithmIdentifier<AnyRef>, BitStringRef> =
             SubjectPublicKeyInfo::from_der(der)?;
 
+        // Reject trailing data by verifying re-encoded length matches input
+        if info.encoded_len()?.try_into() != Ok(der.len()) {
+            return Err("trailing data in public key".into());
+        }
         if info.algorithm.oid != OID {
             return Err("not an ML-DSA-65 public key".into());
         }

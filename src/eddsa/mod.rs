@@ -11,7 +11,7 @@
 use crate::pem;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use der::Encode;
+use der::{Decode, Encode};
 use der::asn1::OctetString;
 use ed25519_dalek::ed25519::signature::rand_core::OsRng;
 use ed25519_dalek::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePublicKey};
@@ -19,8 +19,9 @@ use ed25519_dalek::{SignatureError, Signer, Verifier};
 use pkcs8::PrivateKeyInfo;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use sha2::Digest;
-use spki::ObjectIdentifier;
 use spki::der::AnyRef;
+use spki::der::asn1::BitStringRef;
+use spki::{AlgorithmIdentifier, ObjectIdentifier, SubjectPublicKeyInfo};
 use std::error::Error;
 
 /// OID is the ASN.1 object identifier for Ed25519.
@@ -63,6 +64,11 @@ impl SecretKey {
     /// from_der parses a DER buffer into a private key.
     pub fn from_der(der: &[u8]) -> Result<Self, Box<dyn Error>> {
         let info = PrivateKeyInfo::try_from(der)?;
+
+        // Reject trailing data by verifying re-encoded length matches input
+        if info.encoded_len()?.try_into() != Ok(der.len()) {
+            return Err("trailing data in private key".into());
+        }
         if info.public_key.is_some() {
             return Err("embedded public key not supported".into());
         }
@@ -141,6 +147,12 @@ impl PublicKey {
 
     /// from_der parses a DER buffer into a public key.
     pub fn from_der(der: &[u8]) -> Result<Self, Box<dyn Error>> {
+        // Parse with SPKI to check for trailing data
+        let info: SubjectPublicKeyInfo<AlgorithmIdentifier<AnyRef>, BitStringRef> =
+            SubjectPublicKeyInfo::from_der(der)?;
+        if info.encoded_len()?.try_into() != Ok(der.len()) {
+            return Err("trailing data in public key".into());
+        }
         let inner = ed25519_dalek::VerifyingKey::from_public_key_der(der)?;
         Ok(Self { inner })
     }

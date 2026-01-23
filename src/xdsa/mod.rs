@@ -91,6 +91,10 @@ impl SecretKey {
         // Parse the DER encoded container
         let info = pkcs8::PrivateKeyInfo::from_der(der)?;
 
+        // Reject trailing data by verifying re-encoded length matches input
+        if info.encoded_len()?.try_into() != Ok(der.len()) {
+            return Err("trailing data in private key".into());
+        }
         // Ensure the algorithm OID matches MLDSA65-Ed25519-SHA512
         if info.algorithm.oid != OID {
             return Err("not a composite ML-DSA-65-Ed25519-SHA512 private key".into());
@@ -210,6 +214,10 @@ impl PublicKey {
         let info: SubjectPublicKeyInfo<AlgorithmIdentifier<AnyRef>, BitStringRef> =
             SubjectPublicKeyInfo::from_der(der)?;
 
+        // Reject trailing data by verifying re-encoded length matches input
+        if info.encoded_len()?.try_into() != Ok(der.len()) {
+            return Err("trailing data in public key".into());
+        }
         // Ensure the algorithm OID matches MLDSA65-Ed25519-SHA512
         if info.algorithm.oid != OID {
             return Err("not a composite ML-DSA-65-Ed25519-SHA512 public key".into());

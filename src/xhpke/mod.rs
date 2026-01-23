@@ -78,6 +78,10 @@ impl SecretKey {
         // Parse the DER encoded container
         let info = PrivateKeyInfo::from_der(der)?;
 
+        // Reject trailing data by verifying re-encoded length matches input
+        if info.encoded_len()?.try_into() != Ok(der.len()) {
+            return Err("trailing data in private key".into());
+        }
         // Ensure the algorithm OID matches X-Wing and extract the actual private key
         if info.algorithm.oid.to_string() != "1.3.6.1.4.1.62253.25722" {
             return Err("not an X-Wing private key".into());
@@ -194,6 +198,10 @@ impl PublicKey {
         let info: SubjectPublicKeyInfo<AlgorithmIdentifier<AnyRef>, BitStringRef> =
             SubjectPublicKeyInfo::from_der(der)?;
 
+        // Reject trailing data by verifying re-encoded length matches input
+        if info.encoded_len()?.try_into() != Ok(der.len()) {
+            return Err("trailing data in public key".into());
+        }
         // Ensure the algorithm OID matches X-Wing and extract the actual public key
         if info.algorithm.oid.to_string() != "1.3.6.1.4.1.62253.25722" {
             return Err("not an X-Wing public key".into());
