@@ -11,8 +11,8 @@
 use crate::pem;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use der::{Decode, Encode};
 use der::asn1::OctetString;
+use der::{Decode, Encode};
 use ed25519_dalek::ed25519::signature::rand_core::OsRng;
 use ed25519_dalek::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePublicKey};
 use ed25519_dalek::{SignatureError, Signer, Verifier};
