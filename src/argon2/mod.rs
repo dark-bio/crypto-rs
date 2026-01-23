@@ -38,13 +38,57 @@ pub fn key<const N: usize>(
     memory: u32,
     threads: u32,
 ) -> [u8; N] {
-    let params = Params::new(memory, time, threads, Some(N)).expect("invalid Argon2 params");
+    let params = Params::new(memory, time, threads, Some(N)).unwrap();
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
 
     let mut output = [0u8; N];
     argon2
         .hash_password_into(password, salt, &mut output)
-        .expect("Argon2 hashing failed");
+        .unwrap();
+    output
+}
+
+/// Key derives a key from the password, salt, and cost parameters using
+/// Argon2id returning a fixed-size byte array that can be used as a
+/// cryptographic key. The CPU cost and parallelism degree must be greater
+/// than zero.
+///
+/// For example, you can get a derived key for e.g. AES-256 (which needs a
+/// 32-byte key) by doing:
+///
+///   let key = argon2::key_with_len(b"password", b"salt", 1, 64*1024, 4, 32);
+///
+/// [RFC 9106 Section 7.4] recommends time=1, and memory=2048*1024 as a sensible
+/// number. If using that amount of memory (2GB) is not possible in some contexts
+/// then the time parameter can be increased to compensate.
+///
+/// The time parameter specifies the number of passes over the memory and the
+/// memory parameter specifies the size of the memory in KiB. The number of threads
+/// can be adjusted to the numbers of available CPUs. The cost parameters should be
+/// increased as memory latency and CPU parallelism increases. Remember to get a
+/// good random salt.
+///
+/// [RFC 9106 Section 7.4]: https://www.rfc-editor.org/rfc/rfc9106.html#section-7.4
+///
+/// This method is analogous to `key` but takes the output size as a parameter
+/// and returns a vector instead of a fixed-sized array. Its purpose is to be
+/// used on FFI interfaces where generics break composability. Do not use it in
+/// Rust code.
+pub fn key_with_len(
+    password: &[u8],
+    salt: &[u8],
+    time: u32,
+    memory: u32,
+    threads: u32,
+    out: usize,
+) -> Vec<u8> {
+    let params = Params::new(memory, time, threads, Some(out)).unwrap();
+    let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+
+    let mut output = vec![0u8; out];
+    argon2
+        .hash_password_into(password, salt, &mut output)
+        .unwrap();
     output
 }
 
@@ -119,6 +163,9 @@ mod tests {
         for v in tests {
             let want = hex::decode(v.hash).unwrap();
             let have: [u8; 24] = key(password, salt, v.time, v.memory, v.threads);
+            assert_eq!(have.as_slice(), want.as_slice());
+
+            let have = key_with_len(password, salt, v.time, v.memory, v.threads, 24);
             assert_eq!(have.as_slice(), want.as_slice());
         }
     }

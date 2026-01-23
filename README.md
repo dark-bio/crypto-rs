@@ -1,4 +1,4 @@
-# Rust Cryptography Wrappers
+# Post-Quantum Cryptography in Rust
 
 [![](https://img.shields.io/crates/v/darkbio-crypto.svg)](https://crates.io/crates/darkbio-crypto)
 [![](https://docs.rs/darkbio-crypto/badge.svg)](https://docs.rs/darkbio-crypto)
