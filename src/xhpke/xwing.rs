@@ -15,7 +15,7 @@ use hpke::kem::SharedSecret;
 use hpke::rand_core::{CryptoRng, RngCore};
 use hpke::{Deserializable, HpkeError, Serializable};
 use subtle::ConstantTimeEq;
-use x_wing::{Decapsulate, Encapsulate};
+use x_wing::{Decapsulate, Decapsulator, Encapsulate, KeyExport};
 
 // X-Wing KEM ID as per draft-connolly-cfrg-xwing-kem-09 Section 7.
 const XWING_KEM_ID: u16 = 0x647A;
@@ -91,10 +91,8 @@ impl Serializable for PublicKey {
 impl Deserializable for PublicKey {
     /// Deserializes self from a byte array.
     fn from_bytes(encoded: &[u8]) -> Result<Self, HpkeError> {
-        let bytes: [u8; x_wing::ENCAPSULATION_KEY_SIZE] =
-            encoded.try_into().map_err(|_| HpkeError::DecapError)?;
         Ok(PublicKey(
-            x_wing::EncapsulationKey::try_from(&bytes).map_err(|_| HpkeError::DecapError)?,
+            x_wing::EncapsulationKey::try_from(encoded).map_err(|_| HpkeError::DecapError)?,
         ))
     }
 }
@@ -116,16 +114,16 @@ impl Serializable for EncappedKey {
     /// Serializes `self` to the given slice. `buf` MUST have length equal to
     /// `Self::size()`.
     fn write_exact(&self, buf: &mut [u8]) {
-        buf.copy_from_slice(&self.0.to_bytes());
+        buf.copy_from_slice(self.0.as_ref());
     }
 }
 
 impl Deserializable for EncappedKey {
     /// Deserializes self from a byte array.
     fn from_bytes(encoded: &[u8]) -> Result<Self, HpkeError> {
-        let bytes: [u8; x_wing::CIPHERTEXT_SIZE] =
-            encoded.try_into().map_err(|_| HpkeError::DecapError)?;
-        Ok(EncappedKey(x_wing::Ciphertext::from(&bytes)))
+        Ok(EncappedKey(
+            *<&x_wing::Ciphertext>::try_from(encoded).map_err(|_| HpkeError::DecapError)?,
+        ))
     }
 }
 
@@ -153,7 +151,7 @@ impl hpke::Kem for Kem {
 
     /// Computes the public key of a given private key.
     fn sk_to_pk(sk: &Self::PrivateKey) -> Self::PublicKey {
-        PublicKey(sk.0.encapsulation_key())
+        PublicKey(sk.0.encapsulator().clone())
     }
 
     /// Deterministically derives a keypair from the given input keying material.
@@ -167,7 +165,7 @@ impl hpke::Kem for Kem {
         let seed: [u8; 32] = ikm.try_into().unwrap();
 
         let sk = x_wing::DecapsulationKey::from(seed);
-        let pk = sk.encapsulation_key();
+        let pk = sk.encapsulator().clone();
         (SecretKey(sk), PublicKey(pk))
     }
 
@@ -198,13 +196,10 @@ impl hpke::Kem for Kem {
         // because x-wing uses rand_core 0.10 which is incompatible with hpke's
         // rand_core version.
         // TODO(karalabe): Figure out how to fix this
-        let (ct, ss): (x_wing::Ciphertext, x_wing::SharedSecret) = pk_recip
-            .0
-            .encapsulate()
-            .map_err(|_| HpkeError::EncapError)?;
+        let (ct, ss): (x_wing::Ciphertext, x_wing::SharedSecret) = pk_recip.0.encapsulate();
 
         let mut secret = GenericArray::<u8, U32>::default();
-        secret.copy_from_slice(&ss);
+        secret.copy_from_slice(ss.as_ref());
         Ok((SharedSecret(secret), EncappedKey(ct)))
     }
 
@@ -224,13 +219,10 @@ impl hpke::Kem for Kem {
             return Err(HpkeError::DecapError);
         }
         // Decapsulate the shared secret
-        let ss: x_wing::SharedSecret = sk_recip
-            .0
-            .decapsulate(&encapped_key.0)
-            .map_err(|_| HpkeError::DecapError)?;
+        let ss: x_wing::SharedSecret = sk_recip.0.decapsulate(&encapped_key.0);
 
         let mut secret = GenericArray::<u8, U32>::default();
-        secret.copy_from_slice(&ss);
+        secret.copy_from_slice(ss.as_ref());
         Ok(SharedSecret(secret))
     }
 }
