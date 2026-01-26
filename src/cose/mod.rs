@@ -29,7 +29,7 @@ use crate::{xdsa, xhpke};
 //
 // The final domain will be this prefix concatenated with another contextual one
 // from an app layer action.
-const DOMAIN_PREFIX: &[u8] = b"dark-bio-v1:";
+pub const DOMAIN_PREFIX: &[u8] = b"dark-bio-v1:";
 
 /// Error is the failures that can occur during COSE operations.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
