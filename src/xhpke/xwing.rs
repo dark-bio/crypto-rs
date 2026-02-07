@@ -151,7 +151,7 @@ impl hpke::Kem for Kem {
 
     /// Computes the public key of a given private key.
     fn sk_to_pk(sk: &Self::PrivateKey) -> Self::PublicKey {
-        PublicKey(sk.0.encapsulator().clone())
+        PublicKey(sk.0.encapsulation_key().clone())
     }
 
     /// Deterministically derives a keypair from the given input keying material.
@@ -165,7 +165,7 @@ impl hpke::Kem for Kem {
         let seed: [u8; 32] = ikm.try_into().unwrap();
 
         let sk = x_wing::DecapsulationKey::from(seed);
-        let pk = sk.encapsulator().clone();
+        let pk = sk.encapsulation_key().clone();
         (SecretKey(sk), PublicKey(pk))
     }
 
@@ -196,7 +196,7 @@ impl hpke::Kem for Kem {
         // because x-wing uses rand_core 0.10 which is incompatible with hpke's
         // rand_core version.
         // TODO(karalabe): Figure out how to fix this
-        let (ct, ss): (x_wing::Ciphertext, x_wing::SharedSecret) = pk_recip.0.encapsulate();
+        let (ct, ss): (x_wing::Ciphertext, x_wing::SharedKey) = pk_recip.0.encapsulate();
 
         let mut secret = GenericArray::<u8, U32>::default();
         secret.copy_from_slice(ss.as_ref());
@@ -219,7 +219,7 @@ impl hpke::Kem for Kem {
             return Err(HpkeError::DecapError);
         }
         // Decapsulate the shared secret
-        let ss: x_wing::SharedSecret = sk_recip.0.decapsulate(&encapped_key.0);
+        let ss: x_wing::SharedKey = sk_recip.0.decapsulate(&encapped_key.0);
 
         let mut secret = GenericArray::<u8, U32>::default();
         secret.copy_from_slice(ss.as_ref());

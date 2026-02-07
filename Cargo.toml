@@ -78,7 +78,7 @@ getrandom02 = { package = "getrandom", version = "0.2", features = ["js"] }
 getrandom03 = { package = "getrandom", version = "0.3.4", features = ["wasm_js"] }
 hkdf = { version = "0.12.4", optional = true }
 hpke = { version = "0.13.0", features = ["std"], optional = true }
-ml-dsa = { version = "0.1.0-rc.3", features = ["rand_core"], optional = true }
+ml-dsa = { version = "0.1.0-rc.7", features = ["rand_core"], optional = true }
 pin-project = { version = "1.1.9", optional = true }
 pkcs8 = { version = "0.10.2", features = ["std"], optional = true }
 rand = { version = "0.9.2", optional = true }
@@ -92,7 +92,7 @@ spki = { version = "0.7.3", features = ["alloc"], optional = true }
 subtle = { version = "2.6", optional = true }
 thiserror = { version = "2.0.17", optional = true }
 web-time = "1.1.0"
-x-wing = { version = "0.1.0-pre.5", features = ["getrandom", "zeroize"], optional = true }
+x-wing = { version = "0.1.0-rc.0", features = ["getrandom", "zeroize"], optional = true }
 x509-cert = { version = "0.2.5", optional = true }
 x509-parser = { version = "0.18.0", optional = true }
 zeroize = { version = "1.8.1", optional = true }
