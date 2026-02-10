@@ -44,6 +44,10 @@ const SIMPLE_FALSE: u8 = 20;
 const SIMPLE_TRUE: u8 = 21;
 const SIMPLE_NULL: u8 = 22;
 
+/// Maximum nesting depth for CBOR arrays and maps. Inputs nested deeper than
+/// this are rejected to prevent stack overflow from recursive parsing.
+const MAX_DEPTH: usize = 32;
+
 /// Error is the failures that can occur while encoding or decoding CBOR data.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
@@ -69,6 +73,8 @@ pub enum Error {
     DuplicateMapKey(i64),
     #[error("invalid map key order: {0} must come before {1}")]
     InvalidMapKeyOrder(i64, i64),
+    #[error("nesting depth exceeds maximum of {0}")]
+    MaxDepthExceeded(usize),
     #[error("decode failed: {0}")]
     DecodeFailed(String),
 }
@@ -89,7 +95,7 @@ pub fn decode<T: Decode>(data: &[u8]) -> Result<T, Error> {
 /// types permitted by this package were used.
 pub fn verify(data: &[u8]) -> Result<(), Error> {
     let mut decoder = Decoder::new(data);
-    verify_object(&mut decoder)?;
+    verify_object(&mut decoder, MAX_DEPTH)?;
     decoder.finish()
 }
 
@@ -791,7 +797,7 @@ impl Decode for Raw {
 
     fn decode_cbor_notrail(decoder: &mut Decoder<'_>) -> Result<Self, Error> {
         let start = decoder.pos;
-        skip_object(decoder)?;
+        skip_object(decoder, MAX_DEPTH)?;
         let end = decoder.pos;
         Ok(Raw(decoder.data[start..end].to_vec()))
     }
@@ -799,8 +805,12 @@ impl Decode for Raw {
 
 // skip_object advances the decoder past one CBOR item without validation. It
 // does do some minimal type checks as walking the CBOR does require walking
-// all the inner fields too.
-fn skip_object(decoder: &mut Decoder<'_>) -> Result<(), Error> {
+// all the inner fields too. The depth parameter limits nesting to prevent
+// stack overflow from malicious inputs.
+fn skip_object(decoder: &mut Decoder<'_>, depth: usize) -> Result<(), Error> {
+    if depth == 0 {
+        return Err(Error::MaxDepthExceeded(MAX_DEPTH));
+    }
     let (major, value) = decoder.decode_header()?;
     match major {
         MAJOR_UINT | MAJOR_NINT => Ok(()),
@@ -810,14 +820,14 @@ fn skip_object(decoder: &mut Decoder<'_>) -> Result<(), Error> {
         }
         MAJOR_ARRAY => {
             for _ in 0..value {
-                skip_object(decoder)?;
+                skip_object(decoder, depth - 1)?;
             }
             Ok(())
         }
         MAJOR_MAP => {
             for _ in 0..value {
-                skip_object(decoder)?;
-                skip_object(decoder)?;
+                skip_object(decoder, depth - 1)?;
+                skip_object(decoder, depth - 1)?;
             }
             Ok(())
         }
@@ -848,8 +858,12 @@ fn map_key_cmp(a: i64, b: i64) -> Ordering {
 }
 
 // verify_object is an internal function to verify a single CBOR item without
-// full deserialization.
-fn verify_object(decoder: &mut Decoder) -> Result<(), Error> {
+// full deserialization. The depth parameter limits nesting to prevent stack
+// overflow from malicious inputs.
+fn verify_object(decoder: &mut Decoder, depth: usize) -> Result<(), Error> {
+    if depth == 0 {
+        return Err(Error::MaxDepthExceeded(MAX_DEPTH));
+    }
     let (major, value) = decoder.decode_header()?;
 
     match major {
@@ -874,7 +888,7 @@ fn verify_object(decoder: &mut Decoder) -> Result<(), Error> {
             // Recursively verify each array element
             let len = value as usize;
             for _ in 0..len {
-                verify_object(decoder)?;
+                verify_object(decoder, depth - 1)?;
             }
             Ok(())
         }
@@ -896,7 +910,7 @@ fn verify_object(decoder: &mut Decoder) -> Result<(), Error> {
                 prev_key = Some(key);
 
                 // Recursively verify the value
-                verify_object(decoder)?;
+                verify_object(decoder, depth - 1)?;
             }
             Ok(())
         }
@@ -1823,5 +1837,19 @@ mod tests {
         let encoded = vec![123, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255];
         let result = decode::<String>(&encoded);
         assert!(result.is_err());
+    }
+
+    // Tests that deeply nested CBOR structures are rejected with an error
+    // instead of causing a stack overflow, but nesting up to the maximum
+    // depth is still accepted.
+    #[test]
+    fn test_max_nesting_depth() {
+        let mut at_limit = vec![0x81u8; MAX_DEPTH - 1];
+        at_limit.push(0x00);
+        assert!(verify(&at_limit).is_ok());
+
+        let mut over_limit = vec![0x81u8; MAX_DEPTH + 1];
+        over_limit.push(0x00);
+        assert_eq!(verify(&over_limit), Err(Error::MaxDepthExceeded(MAX_DEPTH)));
     }
 }
