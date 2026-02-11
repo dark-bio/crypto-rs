@@ -1,6 +1,6 @@
 [package]
 name = "darkbio-crypto-cbor-derive"
-version = "0.11.10"
+version = "0.11.11"
 authors = ["Péter Szilágyi <peter@dark.bio>"]
 description = "CBOR derive macros for darkbio-crypto"
 repository = "https://github.com/dark-bio/crypto-rs"
