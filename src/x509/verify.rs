@@ -196,6 +196,11 @@ fn validate_subject_public_key_algorithm(
 fn subject_public_key_bytes<const N: usize>(
     cert: &x509_parser::certificate::X509Certificate<'_>,
 ) -> Result<[u8; N]> {
+    if cert.tbs_certificate.subject_pki.subject_public_key.unused_bits != 0 {
+        return Err(Error::NonCanonicalBitString {
+            details: "subjectPublicKey must have zero unused bits",
+        });
+    }
     cert.tbs_certificate
         .subject_pki
         .subject_public_key
@@ -253,6 +258,11 @@ fn verify_signature_and_validity(
 
     // x509-parser exposes a borrowed TBSCertificate byte view suitable for verify().
     let tbs = cert.tbs_certificate.as_ref();
+    if cert.signature_value.unused_bits != 0 {
+        return Err(Error::NonCanonicalBitString {
+            details: "signatureValue must have zero unused bits",
+        });
+    }
     let sig_bytes: [u8; xdsa::SIGNATURE_SIZE] = cert
         .signature_value
         .data
@@ -311,7 +321,9 @@ fn extract_meta(cert: &x509_parser::certificate::X509Certificate) -> Result<Cert
     let mut key_usage_critical = None;
     for ext in cert.tbs_certificate.extensions() {
         let oid = ext.oid.to_id_string();
-        extension_oids.insert(oid);
+        if !extension_oids.insert(oid.clone()) {
+            return Err(Error::DuplicateCertificateExtension { oid });
+        }
 
         match ext.parsed_extension() {
             ParsedExtension::SubjectKeyIdentifier(keyid) => {
@@ -2041,9 +2053,9 @@ mod test {
         assert!(result.is_err());
     }
 
-    /// Verifies that a certificate with duplicate extension OIDs is rejected.
+    /// Verifies that a certificate with a duplicated standard extension OID is rejected.
     #[test]
-    fn test_verify_rejects_duplicate_extension_oid() {
+    fn test_verify_rejects_duplicate_standard_extension_oid() {
         let subject = xdsa::SecretKey::generate();
         let issuer = xdsa::SecretKey::generate();
         let now = SystemTime::now()
@@ -2069,6 +2081,120 @@ mod test {
             .as_mut()
             .unwrap()
             .push(duplicate);
+
+        let tbs_der = cert.tbs_certificate.to_der().unwrap();
+        cert.signature = BitString::from_bytes(&issuer.sign(&tbs_der).to_bytes()).unwrap();
+
+        let der = cert.to_der().unwrap();
+        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Now);
+        assert!(result.is_err());
+    }
+
+    /// Verifies that a certificate with duplicated custom (non-critical, unknown)
+    /// extension OIDs is rejected by our own check, not by x509-parser.
+    #[test]
+    fn test_verify_rejects_duplicate_custom_extension_oid() {
+        let subject = xdsa::SecretKey::generate();
+        let issuer = xdsa::SecretKey::generate();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let custom_oid = private_enterprise_oid(62253, &[7, 7]).unwrap();
+        let template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Alice Identity"),
+            issuer: DistinguishedName::new().cn("Root"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
+            extensions: vec![CustomExtension {
+                oid: custom_oid,
+                critical: false,
+                value: vec![0x05, 0x00],
+            }],
+            ..Default::default()
+        };
+
+        let mut cert = build_xdsa_cert(&subject.public_key(), &issuer, &template).unwrap();
+        // Append a second extension with the same custom OID.
+        let duplicate = cert.tbs_certificate.extensions.as_ref().unwrap().last().unwrap().clone();
+        cert.tbs_certificate
+            .extensions
+            .as_mut()
+            .unwrap()
+            .push(duplicate);
+
+        let tbs_der = cert.tbs_certificate.to_der().unwrap();
+        cert.signature = BitString::from_bytes(&issuer.sign(&tbs_der).to_bytes()).unwrap();
+
+        let der = cert.to_der().unwrap();
+        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Now);
+        assert!(result.is_err());
+    }
+
+    /// Verifies that a signature BIT STRING with non-zero unused bits is rejected.
+    #[test]
+    fn test_verify_rejects_signature_nonzero_unused_bits() {
+        let subject = xdsa::SecretKey::generate();
+        let issuer = xdsa::SecretKey::generate();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Alice Identity"),
+            issuer: DistinguishedName::new().cn("Root"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
+            ..Default::default()
+        };
+
+        let mut der = issue_xdsa_cert_der(&subject.public_key(), &issuer, &template).unwrap();
+        // The signature BIT STRING is the last TLV in the certificate.
+        // Its content starts with the unused-bits byte (0x00). Patch it to 0x01.
+        // Walk backwards: the signature is SIGNATURE_SIZE bytes of data preceded
+        // by 0x00 (unused bits), preceded by the BIT STRING length/tag.
+        let sig_unused_bits_pos = der.len() - xdsa::SIGNATURE_SIZE - 1;
+        assert_eq!(der[sig_unused_bits_pos], 0x00);
+        der[sig_unused_bits_pos] = 0x01;
+
+        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Now);
+        assert!(result.is_err());
+    }
+
+    /// Verifies that a subjectPublicKey BIT STRING with non-zero unused bits is rejected.
+    #[test]
+    fn test_verify_rejects_spki_nonzero_unused_bits() {
+        let subject = xdsa::SecretKey::generate();
+        let issuer = xdsa::SecretKey::generate();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Alice Identity"),
+            issuer: DistinguishedName::new().cn("Root"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
+            ..Default::default()
+        };
+
+        let mut cert = build_xdsa_cert(&subject.public_key(), &issuer, &template).unwrap();
+        // Rebuild with a non-zero unused-bits byte in the SPKI public key BIT STRING.
+        let pk_bytes = subject.public_key().to_bytes();
+        cert.tbs_certificate.subject_public_key_info.subject_public_key =
+            BitString::new(1, &pk_bytes).unwrap();
 
         let tbs_der = cert.tbs_certificate.to_der().unwrap();
         cert.signature = BitString::from_bytes(&issuer.sign(&tbs_der).to_bytes()).unwrap();

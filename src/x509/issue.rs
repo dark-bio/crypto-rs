@@ -219,6 +219,11 @@ pub(super) fn issue_cert(
 /// Builds the serial number either from input or random.
 fn make_serial(serial: Option<&[u8]>) -> Result<SerialNumber> {
     if let Some(serial) = serial {
+        if serial.is_empty() || serial.iter().all(|b| *b == 0) {
+            return Err(Error::InvalidSerial {
+                details: "serial number must be non-zero",
+            });
+        }
         if serial.first().is_some_and(|b| b & 0x80 != 0) {
             return Err(Error::InvalidSerial {
                 details: "serial number must be positive (MSB must be clear)",
@@ -230,8 +235,9 @@ fn make_serial(serial: Option<&[u8]>) -> Result<SerialNumber> {
     getrandom::fill(&mut serial_bytes).map_err(|e| Error::SerialGenerationFailed {
         details: e.to_string(),
     })?;
-    // Force positive INTEGER encoding (MSB clear).
+    // Force positive INTEGER encoding (MSB clear) and ensure non-zero.
     serial_bytes[0] &= 0x7F;
+    serial_bytes[0] |= 0x01;
     Ok(SerialNumber::new(&serial_bytes)?)
 }
 
@@ -615,6 +621,58 @@ mod test {
                 not_after: now,
             },
             role: CertificateRole::Leaf,
+            ..Default::default()
+        };
+
+        let result = issue_xdsa_cert_der(&subject.public_key(), &issuer, &template);
+        assert!(result.is_err());
+    }
+
+    /// Verifies that a zero serial number is rejected.
+    #[test]
+    fn test_issue_rejects_zero_serial() {
+        let subject = xdsa::SecretKey::generate();
+        let issuer = xdsa::SecretKey::generate();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Alice Identity"),
+            issuer: DistinguishedName::new().cn("Root"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
+            serial: Some(vec![0x00]),
+            ..Default::default()
+        };
+
+        let result = issue_xdsa_cert_der(&subject.public_key(), &issuer, &template);
+        assert!(result.is_err());
+    }
+
+    /// Verifies that an empty serial number is rejected.
+    #[test]
+    fn test_issue_rejects_empty_serial() {
+        let subject = xdsa::SecretKey::generate();
+        let issuer = xdsa::SecretKey::generate();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Alice Identity"),
+            issuer: DistinguishedName::new().cn("Root"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
+            serial: Some(vec![]),
             ..Default::default()
         };
 

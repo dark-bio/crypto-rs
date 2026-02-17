@@ -47,9 +47,9 @@ mldsa = [
 ]
 pem = ["dep:base64"]
 rand = []
-rsa = ["pem", "dep:rsa", "dep:serde", "dep:signature"]
+rsa = ["pem", "dep:rsa", "dep:serde"]
 stream = ["dep:age-core", "dep:chacha20poly1305", "dep:pin-project", "dep:zeroize"]
-x509 = ["xdsa", "pem", "dep:chrono", "dep:const-oid", "dep:sha1", "dep:thiserror", "dep:x509-cert", "dep:x509-parser"]
+x509 = ["xdsa", "pem", "dep:const-oid", "dep:sha1", "dep:thiserror", "dep:x509-cert", "dep:x509-parser"]
 xdsa = ["pem", "eddsa", "mldsa"]
 xhpke = [
     "pem",

@@ -45,6 +45,8 @@ pub enum Error {
     UniqueIdsNotAllowed,
     #[error("invalid signature length")]
     InvalidSignatureLength,
+    #[error("non-canonical BIT STRING encoding: {details}")]
+    NonCanonicalBitString { details: &'static str },
     #[error("certificate is not valid at the requested time")]
     InvalidAtRequestedTime,
     #[error("failed to parse extension: {details}")]
