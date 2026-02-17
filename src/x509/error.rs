@@ -57,6 +57,8 @@ pub enum Error {
     UnknownCriticalExtension { oid: String },
     #[error("{extension} extension must be marked critical")]
     ExtensionMustBeCritical { extension: &'static str },
+    #[error("extendedKeyUsage extension is not allowed")]
+    ExtendedKeyUsageNotAllowed,
     #[error("certificate validity contains pre-UNIX timestamp")]
     PreUnixTimestamp,
     #[error("invalid certificate serial: {details}")]

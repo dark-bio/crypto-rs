@@ -51,10 +51,6 @@ pub struct CertificateTemplate {
     pub role: CertificateRole,
     /// Optional serial, ff omitted, a random one is generated.
     pub serial: Option<Vec<u8>>,
-    /// Optional key usage, ff omitted, defaults depend on key/role.
-    pub key_usage: Option<KeyUsage>,
-    /// Extended key usage OIDs.
-    pub ext_key_usage: Vec<ObjectIdentifier>,
     /// Non-standard extensions to append.
     pub extensions: Vec<CustomExtension>,
 }
@@ -70,8 +66,6 @@ impl Default for CertificateTemplate {
             },
             role: CertificateRole::Leaf,
             serial: None,
-            key_usage: None,
-            ext_key_usage: Vec::new(),
             extensions: Vec::new(),
         }
     }
@@ -118,8 +112,6 @@ pub struct CertificateMetadata {
     pub role: CertificateRole,
     /// Parsed keyUsage extension.
     pub key_usage: KeyUsage,
-    /// Parsed EKU OID list.
-    pub ext_key_usage: Vec<ObjectIdentifier>,
     /// Parsed SKI bytes.
     pub subject_key_id: Vec<u8>,
     /// Parsed AKI bytes.

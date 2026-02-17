@@ -4,9 +4,10 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use super::utils::key_identifier;
 use super::{
     CertificateMetadata, CertificateRole, CustomExtension, DistinguishedName, Error, NameAttribute,
-    Result, ValidityCheck, ValidityWindow, VerifiedCertificate, key_identifier,
+    Result, ValidityCheck, ValidityWindow, VerifiedCertificate,
 };
 #[cfg(feature = "xhpke")]
 use crate::xhpke;
@@ -302,40 +303,6 @@ fn extract_meta(cert: &x509_parser::certificate::X509Certificate) -> Result<Cert
         .map(|ku| parse_key_usage_flags(ku.value.flags))
         .transpose()?;
 
-    let mut ext_key_usage = Vec::new();
-    if let Some(eku) =
-        cert.tbs_certificate
-            .extended_key_usage()
-            .map_err(|e| Error::ExtensionParseFailed {
-                details: format!("extendedKeyUsage: {e}"),
-            })?
-    {
-        if eku.value.any {
-            ext_key_usage.push(ObjectIdentifier::new_unwrap("2.5.29.37.0"));
-        }
-        if eku.value.server_auth {
-            ext_key_usage.push(ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.3.1"));
-        }
-        if eku.value.client_auth {
-            ext_key_usage.push(ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.3.2"));
-        }
-        if eku.value.code_signing {
-            ext_key_usage.push(ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.3.3"));
-        }
-        if eku.value.email_protection {
-            ext_key_usage.push(ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.3.4"));
-        }
-        if eku.value.time_stamping {
-            ext_key_usage.push(ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.3.8"));
-        }
-        if eku.value.ocsp_signing {
-            ext_key_usage.push(ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.3.9"));
-        }
-        for oid in &eku.value.other {
-            ext_key_usage.push(ObjectIdentifier::new(oid.to_id_string().as_str())?);
-        }
-    }
-
     let mut subject_key_id = None;
     let mut authority_key_id = None;
     let mut extensions = Vec::new();
@@ -344,9 +311,7 @@ fn extract_meta(cert: &x509_parser::certificate::X509Certificate) -> Result<Cert
     let mut key_usage_critical = None;
     for ext in cert.tbs_certificate.extensions() {
         let oid = ext.oid.to_id_string();
-        if !extension_oids.insert(oid.clone()) {
-            return Err(Error::DuplicateCertificateExtension { oid });
-        }
+        extension_oids.insert(oid);
 
         match ext.parsed_extension() {
             ParsedExtension::SubjectKeyIdentifier(keyid) => {
@@ -361,7 +326,9 @@ fn extract_meta(cert: &x509_parser::certificate::X509Certificate) -> Result<Cert
             ParsedExtension::KeyUsage(_) => {
                 key_usage_critical = Some(ext.critical);
             }
-            ParsedExtension::ExtendedKeyUsage(_) => {}
+            ParsedExtension::ExtendedKeyUsage(_) => {
+                return Err(Error::ExtendedKeyUsageNotAllowed);
+            }
             _ => {
                 // Unknown critical extensions must hard-fail per RFC 5280.
                 if ext.critical {
@@ -402,7 +369,6 @@ fn extract_meta(cert: &x509_parser::certificate::X509Certificate) -> Result<Cert
         key_usage: key_usage.ok_or(Error::ExtensionParseFailed {
             details: "keyUsage extension is required".to_string(),
         })?,
-        ext_key_usage,
         subject_key_id: subject_key_id.ok_or(Error::InvalidKeyIdentifier {
             details: "missing subjectKeyIdentifier",
         })?,
@@ -605,4 +571,1510 @@ fn parse_name(name: &x509_parser::x509::X509Name<'_>) -> Result<DistinguishedNam
         });
     }
     Ok(DistinguishedName { attrs })
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::x509::issue::issue_cert;
+    #[cfg(feature = "xhpke")]
+    use crate::x509::{issue_xhpke_cert_der, issue_xhpke_cert_pem};
+    use crate::x509::{
+        CertificateTemplate, issue_xdsa_cert_der, issue_xdsa_cert_pem, name, private_enterprise_oid,
+    };
+    use crate::xdsa;
+    #[cfg(feature = "xhpke")]
+    use crate::xhpke;
+    use der::asn1::{Any, BitString, OctetString, SetOfVec};
+    use der::{Encode, Tag};
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use x509_cert::attr::AttributeTypeAndValue;
+    use x509_cert::certificate::{CertificateInner, Version};
+    use x509_cert::ext::pkix::BasicConstraints;
+    use x509_cert::ext::pkix::{KeyUsage, KeyUsages};
+    use x509_cert::name::{RdnSequence, RelativeDistinguishedName};
+
+    fn build_xdsa_cert(
+        subject: &xdsa::PublicKey,
+        issuer: &xdsa::SecretKey,
+        template: &CertificateTemplate,
+    ) -> Result<CertificateInner> {
+        let default_ku = match template.role {
+            CertificateRole::Authority { .. } => {
+                KeyUsage(KeyUsages::KeyCertSign | KeyUsages::CRLSign)
+            }
+            CertificateRole::Leaf => KeyUsage(KeyUsages::DigitalSignature.into()),
+        };
+        issue_cert(&subject.to_bytes(), xdsa::OID, default_ku, issuer, template)
+    }
+
+    #[cfg(feature = "xhpke")]
+    fn build_xhpke_cert(
+        subject: &xhpke::PublicKey,
+        issuer: &xdsa::SecretKey,
+        template: &CertificateTemplate,
+    ) -> Result<CertificateInner> {
+        issue_cert(
+            &subject.to_bytes(),
+            xhpke::OID,
+            KeyUsage(KeyUsages::KeyAgreement.into()),
+            issuer,
+            template,
+        )
+    }
+
+    /// Verifies that an xDSA certificate is rejected when verified against the wrong issuer key.
+    #[test]
+    fn test_verify_xdsa_rejects_wrong_signer() {
+        let subject = xdsa::SecretKey::generate();
+        let issuer = xdsa::SecretKey::generate();
+        let wrong = xdsa::SecretKey::generate();
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Alice Identity"),
+            issuer: DistinguishedName::new().cn("Root"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
+            ..Default::default()
+        };
+
+        let pem = issue_xdsa_cert_pem(&subject.public_key(), &issuer, &template).unwrap();
+        let result = verify_xdsa_cert_pem(&pem, &wrong.public_key(), ValidityCheck::Now);
+        assert!(result.is_err());
+    }
+
+    /// Verifies that an xHPKE certificate is rejected when verified against the wrong issuer key.
+    #[test]
+    #[cfg(feature = "xhpke")]
+    fn test_verify_xhpke_rejects_wrong_signer() {
+        let subject = xhpke::SecretKey::generate();
+        let issuer = xdsa::SecretKey::generate();
+        let wrong = xdsa::SecretKey::generate();
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Alice Encryption"),
+            issuer: DistinguishedName::new().cn("Alice Identity"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
+            ..Default::default()
+        };
+
+        let pem = issue_xhpke_cert_pem(&subject.public_key(), &issuer, &template).unwrap();
+        let result = verify_xhpke_cert_pem(&pem, &wrong.public_key(), ValidityCheck::Now);
+        assert!(result.is_err());
+    }
+
+    /// Verifies that an xHPKE certificate with CA role is rejected (xHPKE must be end-entity).
+    #[test]
+    #[cfg(feature = "xhpke")]
+    fn test_verify_xhpke_rejects_ca_certificate() {
+        let subject = xhpke::SecretKey::generate();
+        let issuer = xdsa::SecretKey::generate();
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Alice Encryption"),
+            issuer: DistinguishedName::new().cn("Alice Identity"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Authority { path_len: Some(0) },
+            ..Default::default()
+        };
+
+        // Build a malformed xHPKE CA certificate via internal helper to ensure
+        // verification enforces the end-entity invariant.
+        let der = build_xhpke_cert(&subject.public_key(), &issuer, &template)
+            .unwrap()
+            .to_der()
+            .unwrap();
+        let result = verify_xhpke_cert_der(&der, &issuer.public_key(), ValidityCheck::Now);
+        assert!(result.is_err());
+    }
+
+    /// Verifies that a certificate with an unrecognized critical extension is rejected.
+    #[test]
+    fn test_verify_rejects_unrecognized_critical_extension() {
+        let subject = xdsa::SecretKey::generate();
+        let issuer = xdsa::SecretKey::generate();
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Alice Identity"),
+            issuer: DistinguishedName::new().cn("Root"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
+            extensions: vec![CustomExtension {
+                oid: private_enterprise_oid(62253, &[9, 9]).unwrap(),
+                critical: true,
+                value: vec![0x05, 0x00],
+            }],
+            ..Default::default()
+        };
+
+        let pem = issue_xdsa_cert_pem(&subject.public_key(), &issuer, &template).unwrap();
+        let result = verify_xdsa_cert_pem(&pem, &issuer.public_key(), ValidityCheck::Now);
+        assert!(result.is_err());
+    }
+
+    /// Verifies that a non-v3 certificate is rejected.
+    #[test]
+    fn test_verify_rejects_non_v3_certificate() {
+        let subject = xdsa::SecretKey::generate();
+        let issuer = xdsa::SecretKey::generate();
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Alice Identity"),
+            issuer: DistinguishedName::new().cn("Root"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
+            ..Default::default()
+        };
+
+        let mut cert = build_xdsa_cert(&subject.public_key(), &issuer, &template).unwrap();
+        cert.tbs_certificate.version = Version::V1;
+        cert.tbs_certificate.extensions = None;
+
+        let tbs_der = cert.tbs_certificate.to_der().unwrap();
+        let signature = issuer.sign(&tbs_der);
+        cert.signature = BitString::from_bytes(&signature.to_bytes()).unwrap();
+
+        let der = cert.to_der().unwrap();
+        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Now);
+        assert!(result.is_err());
+    }
+
+    /// Verifies that a PEM block with a non-CERTIFICATE label is rejected.
+    #[test]
+    fn test_verify_rejects_non_certificate_pem_label() {
+        let subject = xdsa::SecretKey::generate();
+        let issuer = xdsa::SecretKey::generate();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Alice Identity"),
+            issuer: DistinguishedName::new().cn("Root"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
+            ..Default::default()
+        };
+
+        let pem = issue_xdsa_cert_pem(&subject.public_key(), &issuer, &template).unwrap();
+        let pem = pem.replace("CERTIFICATE", "PRIVATE KEY");
+
+        let result = verify_xdsa_cert_pem(&pem, &issuer.public_key(), ValidityCheck::Now);
+        assert!(result.is_err());
+    }
+
+    /// Verifies that trailing bytes after DER-encoded certificate data are rejected.
+    #[test]
+    fn test_verify_rejects_trailing_der_data() {
+        let subject = xdsa::SecretKey::generate();
+        let issuer = xdsa::SecretKey::generate();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Alice Identity"),
+            issuer: DistinguishedName::new().cn("Root"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
+            ..Default::default()
+        };
+
+        let mut der = issue_xdsa_cert_der(&subject.public_key(), &issuer, &template).unwrap();
+        der.extend_from_slice(&[0xde, 0xad]);
+        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Now);
+        assert!(result.is_err());
+    }
+
+    /// Verifies that trailing data after a PEM certificate block is rejected.
+    #[test]
+    fn test_verify_rejects_trailing_pem_data() {
+        let subject = xdsa::SecretKey::generate();
+        let issuer = xdsa::SecretKey::generate();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Alice Identity"),
+            issuer: DistinguishedName::new().cn("Root"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
+            ..Default::default()
+        };
+
+        let mut pem = issue_xdsa_cert_pem(&subject.public_key(), &issuer, &template).unwrap();
+        pem.push_str("TRAILING");
+        let result = verify_xdsa_cert_pem(&pem, &issuer.public_key(), ValidityCheck::Now);
+        assert!(result.is_err());
+    }
+
+    /// Verifies that a certificate with signature algorithm parameters is rejected.
+    #[test]
+    fn test_verify_rejects_signature_algorithm_parameters() {
+        let subject = xdsa::SecretKey::generate();
+        let issuer = xdsa::SecretKey::generate();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Alice Identity"),
+            issuer: DistinguishedName::new().cn("Root"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
+            ..Default::default()
+        };
+
+        let mut cert = build_xdsa_cert(&subject.public_key(), &issuer, &template).unwrap();
+        cert.tbs_certificate.signature.parameters =
+            Some(Any::new(Tag::Null, Vec::<u8>::new()).unwrap());
+        cert.signature_algorithm.parameters = Some(Any::new(Tag::Null, Vec::<u8>::new()).unwrap());
+
+        let tbs_der = cert.tbs_certificate.to_der().unwrap();
+        let signature = issuer.sign(&tbs_der);
+        cert.signature = BitString::from_bytes(&signature.to_bytes()).unwrap();
+
+        let der = cert.to_der().unwrap();
+        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Now);
+        assert!(result.is_err());
+    }
+
+    /// Verifies that a certificate with equal not_before and not_after is rejected even with time validation disabled.
+    #[test]
+    fn test_verify_rejects_malformed_validity_without_time_policy() {
+        let subject = xdsa::SecretKey::generate();
+        let issuer = xdsa::SecretKey::generate();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Alice Identity"),
+            issuer: DistinguishedName::new().cn("Root"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
+            ..Default::default()
+        };
+
+        let mut cert = build_xdsa_cert(&subject.public_key(), &issuer, &template).unwrap();
+        cert.tbs_certificate.validity.not_after = cert.tbs_certificate.validity.not_before;
+
+        let tbs_der = cert.tbs_certificate.to_der().unwrap();
+        let signature = issuer.sign(&tbs_der);
+        cert.signature = BitString::from_bytes(&signature.to_bytes()).unwrap();
+
+        let der = cert.to_der().unwrap();
+        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Disabled);
+        assert!(result.is_err());
+    }
+
+    /// Verifies that a certificate with a tampered SubjectKeyIdentifier is rejected.
+    #[test]
+    fn test_verify_rejects_ski_mismatch() {
+        let subject = xdsa::SecretKey::generate();
+        let issuer = xdsa::SecretKey::generate();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Alice Identity"),
+            issuer: DistinguishedName::new().cn("Root"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
+            ..Default::default()
+        };
+
+        let mut cert = build_xdsa_cert(&subject.public_key(), &issuer, &template).unwrap();
+        let mut patched = false;
+        for ext in cert.tbs_certificate.extensions.as_mut().unwrap() {
+            if ext.extn_id == ObjectIdentifier::new_unwrap("2.5.29.14") {
+                ext.extn_value = OctetString::new(vec![0x04, 0x01, 0x00]).unwrap();
+                patched = true;
+                break;
+            }
+        }
+        assert!(patched);
+
+        let tbs_der = cert.tbs_certificate.to_der().unwrap();
+        let signature = issuer.sign(&tbs_der);
+        cert.signature = BitString::from_bytes(&signature.to_bytes()).unwrap();
+
+        let der = cert.to_der().unwrap();
+        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Now);
+        assert!(result.is_err());
+    }
+
+    /// Verifies that pathLenConstraint values exceeding u8::MAX are rejected.
+    #[test]
+    fn test_convert_path_len_rejects_large_values() {
+        assert!(convert_path_len(Some(256)).is_err());
+        assert_eq!(convert_path_len(Some(255)).unwrap(), Some(255));
+        assert_eq!(convert_path_len(None).unwrap(), None);
+    }
+
+    /// Verifies that negative timestamps are rejected.
+    #[test]
+    fn test_unix_ts_to_u64_rejects_negative_values() {
+        assert!(unix_ts_to_u64(-1).is_err());
+        assert_eq!(unix_ts_to_u64(0).unwrap(), 0);
+    }
+
+    /// Verifies that non-canonical DER INTEGER serial encodings are rejected.
+    #[test]
+    fn test_validate_serial_encoding_rejects_noncanonical_values() {
+        assert!(validate_serial_encoding(&[]).is_err());
+        assert!(validate_serial_encoding(&[0x80]).is_err());
+        assert!(validate_serial_encoding(&[0x00, 0x01]).is_err());
+        assert!(validate_serial_encoding(&[0x00]).is_err());
+        assert!(validate_serial_encoding(&[0x01]).is_ok());
+        assert!(validate_serial_encoding(&[0x7f]).is_ok());
+    }
+
+    /// Verifies that an xDSA certificate with a wrong SPKI algorithm OID is rejected.
+    #[test]
+    fn test_verify_rejects_xdsa_subject_algorithm_mismatch() {
+        let subject = xdsa::SecretKey::generate();
+        let issuer = xdsa::SecretKey::generate();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Alice Identity"),
+            issuer: DistinguishedName::new().cn("Root"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
+            ..Default::default()
+        };
+        let mut cert = build_xdsa_cert(&subject.public_key(), &issuer, &template).unwrap();
+        cert.tbs_certificate.subject_public_key_info.algorithm.oid =
+            ObjectIdentifier::new_unwrap("1.2.3.4");
+
+        let tbs_der = cert.tbs_certificate.to_der().unwrap();
+        cert.signature = BitString::from_bytes(&issuer.sign(&tbs_der).to_bytes()).unwrap();
+
+        let der = cert.to_der().unwrap();
+        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Now);
+        assert!(result.is_err());
+    }
+
+    /// Verifies that an xDSA certificate with SPKI algorithm parameters is rejected.
+    #[test]
+    fn test_verify_rejects_xdsa_spki_parameters() {
+        let subject = xdsa::SecretKey::generate();
+        let issuer = xdsa::SecretKey::generate();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Alice Identity"),
+            issuer: DistinguishedName::new().cn("Root"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
+            ..Default::default()
+        };
+        let mut cert = build_xdsa_cert(&subject.public_key(), &issuer, &template).unwrap();
+        cert.tbs_certificate
+            .subject_public_key_info
+            .algorithm
+            .parameters = Some(Any::new(Tag::Null, Vec::<u8>::new()).unwrap());
+
+        let tbs_der = cert.tbs_certificate.to_der().unwrap();
+        cert.signature = BitString::from_bytes(&issuer.sign(&tbs_der).to_bytes()).unwrap();
+
+        let der = cert.to_der().unwrap();
+        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Now);
+        assert!(result.is_err());
+    }
+
+    /// Verifies that a certificate with a non-xDSA signature algorithm OID is rejected.
+    #[test]
+    fn test_verify_rejects_signature_algorithm_oid_mismatch() {
+        let subject = xdsa::SecretKey::generate();
+        let issuer = xdsa::SecretKey::generate();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Alice Identity"),
+            issuer: DistinguishedName::new().cn("Root"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
+            ..Default::default()
+        };
+        let mut cert = build_xdsa_cert(&subject.public_key(), &issuer, &template).unwrap();
+        let wrong = ObjectIdentifier::new_unwrap("1.2.3.4");
+        cert.tbs_certificate.signature.oid = wrong;
+        cert.signature_algorithm.oid = wrong;
+
+        let tbs_der = cert.tbs_certificate.to_der().unwrap();
+        cert.signature = BitString::from_bytes(&issuer.sign(&tbs_der).to_bytes()).unwrap();
+
+        let der = cert.to_der().unwrap();
+        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Now);
+        assert!(result.is_err());
+    }
+
+    /// Verifies that a not-yet-valid certificate is rejected by time policy.
+    #[test]
+    fn test_verify_rejects_future_cert_by_time_policy() {
+        let subject = xdsa::SecretKey::generate();
+        let issuer = xdsa::SecretKey::generate();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Alice Identity"),
+            issuer: DistinguishedName::new().cn("Root"),
+            validity: ValidityWindow {
+                not_before: now + 3600,
+                not_after: now + 7200,
+            },
+            role: CertificateRole::Leaf,
+            ..Default::default()
+        };
+
+        let der = issue_xdsa_cert_der(&subject.public_key(), &issuer, &template).unwrap();
+        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::At(now));
+        assert!(result.is_err());
+    }
+
+    /// Verifies that a valid certificate passes with time validation disabled.
+    #[test]
+    fn test_verify_allows_valid_cert_without_time_policy() {
+        let subject = xdsa::SecretKey::generate();
+        let issuer = xdsa::SecretKey::generate();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Alice Identity"),
+            issuer: DistinguishedName::new().cn("Root"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
+            ..Default::default()
+        };
+
+        let der = issue_xdsa_cert_der(&subject.public_key(), &issuer, &template).unwrap();
+        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Disabled);
+        assert!(result.is_ok());
+    }
+
+    /// Verifies that an xDSA end-entity certificate with keyAgreement usage is rejected.
+    #[test]
+    fn test_verify_xdsa_ee_rejects_key_agreement_usage() {
+        let subject = xdsa::SecretKey::generate();
+        let issuer = xdsa::SecretKey::generate();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Alice Identity"),
+            issuer: DistinguishedName::new().cn("Root"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
+            ..Default::default()
+        };
+
+        let mut cert = build_xdsa_cert(&subject.public_key(), &issuer, &template).unwrap();
+        let wrong_ku = KeyUsage(KeyUsages::KeyAgreement.into());
+        for ext in cert.tbs_certificate.extensions.as_mut().unwrap() {
+            if ext.extn_id == ObjectIdentifier::new_unwrap("2.5.29.15") {
+                ext.extn_value = OctetString::new(wrong_ku.to_der().unwrap()).unwrap();
+                break;
+            }
+        }
+        let tbs_der = cert.tbs_certificate.to_der().unwrap();
+        cert.signature = BitString::from_bytes(&issuer.sign(&tbs_der).to_bytes()).unwrap();
+
+        let der = cert.to_der().unwrap();
+        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Now);
+        assert!(result.is_err());
+    }
+
+    /// Verifies that an xHPKE certificate with digitalSignature usage is rejected.
+    #[test]
+    #[cfg(feature = "xhpke")]
+    fn test_verify_xhpke_rejects_digital_signature_usage() {
+        let subject = xhpke::SecretKey::generate();
+        let issuer = xdsa::SecretKey::generate();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Alice Encryption"),
+            issuer: DistinguishedName::new().cn("Alice Identity"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
+            ..Default::default()
+        };
+
+        let mut cert = build_xhpke_cert(&subject.public_key(), &issuer, &template).unwrap();
+        let wrong_ku = KeyUsage(KeyUsages::DigitalSignature.into());
+        for ext in cert.tbs_certificate.extensions.as_mut().unwrap() {
+            if ext.extn_id == ObjectIdentifier::new_unwrap("2.5.29.15") {
+                ext.extn_value = OctetString::new(wrong_ku.to_der().unwrap()).unwrap();
+                break;
+            }
+        }
+        let tbs_der = cert.tbs_certificate.to_der().unwrap();
+        cert.signature = BitString::from_bytes(&issuer.sign(&tbs_der).to_bytes()).unwrap();
+
+        let der = cert.to_der().unwrap();
+        let result = verify_xhpke_cert_der(&der, &issuer.public_key(), ValidityCheck::Now);
+        assert!(result.is_err());
+    }
+
+    /// Verifies that an xDSA end-entity certificate with mixed key usage flags is rejected.
+    #[test]
+    fn test_verify_xdsa_ee_rejects_mixed_key_usage_flags() {
+        let subject = xdsa::SecretKey::generate();
+        let issuer = xdsa::SecretKey::generate();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Alice Identity"),
+            issuer: DistinguishedName::new().cn("Root"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
+            ..Default::default()
+        };
+
+        let mut cert = build_xdsa_cert(&subject.public_key(), &issuer, &template).unwrap();
+        let wrong_ku = KeyUsage(KeyUsages::DigitalSignature | KeyUsages::KeyCertSign);
+        for ext in cert.tbs_certificate.extensions.as_mut().unwrap() {
+            if ext.extn_id == ObjectIdentifier::new_unwrap("2.5.29.15") {
+                ext.extn_value = OctetString::new(wrong_ku.to_der().unwrap()).unwrap();
+                break;
+            }
+        }
+        let tbs_der = cert.tbs_certificate.to_der().unwrap();
+        cert.signature = BitString::from_bytes(&issuer.sign(&tbs_der).to_bytes()).unwrap();
+
+        let der = cert.to_der().unwrap();
+        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Now);
+        assert!(result.is_err());
+    }
+
+    /// Verifies that a certificate without basicConstraints is parsed as end-entity.
+    #[test]
+    fn test_verify_parses_missing_basic_constraints_as_end_entity() {
+        let subject = xdsa::SecretKey::generate();
+        let issuer = xdsa::SecretKey::generate();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Alice Identity"),
+            issuer: DistinguishedName::new().cn("Root"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
+            ..Default::default()
+        };
+
+        let mut cert = build_xdsa_cert(&subject.public_key(), &issuer, &template).unwrap();
+        cert.tbs_certificate
+            .extensions
+            .as_mut()
+            .unwrap()
+            .retain(|ext| ext.extn_id != ObjectIdentifier::new_unwrap("2.5.29.19"));
+
+        let tbs_der = cert.tbs_certificate.to_der().unwrap();
+        cert.signature = BitString::from_bytes(&issuer.sign(&tbs_der).to_bytes()).unwrap();
+
+        let der = cert.to_der().unwrap();
+        let parsed = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Now).unwrap();
+        assert!(matches!(parsed.meta.role, CertificateRole::Leaf));
+    }
+
+    /// Verifies that a certificate with a tampered AuthorityKeyIdentifier is rejected.
+    #[test]
+    fn test_verify_rejects_aki_mismatch() {
+        let subject = xdsa::SecretKey::generate();
+        let issuer = xdsa::SecretKey::generate();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Alice Identity"),
+            issuer: DistinguishedName::new().cn("Root"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
+            ..Default::default()
+        };
+
+        let mut cert = build_xdsa_cert(&subject.public_key(), &issuer, &template).unwrap();
+        let mut patched = false;
+        for ext in cert.tbs_certificate.extensions.as_mut().unwrap() {
+            if ext.extn_id == ObjectIdentifier::new_unwrap("2.5.29.35") {
+                ext.extn_value = OctetString::new(vec![0x30, 0x03, 0x80, 0x01, 0x00]).unwrap();
+                patched = true;
+                break;
+            }
+        }
+        assert!(patched);
+
+        let tbs_der = cert.tbs_certificate.to_der().unwrap();
+        cert.signature = BitString::from_bytes(&issuer.sign(&tbs_der).to_bytes()).unwrap();
+
+        let der = cert.to_der().unwrap();
+        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Now);
+        assert!(result.is_err());
+    }
+
+    /// Verifies that an xDSA CA certificate with wrong key usage is rejected.
+    #[test]
+    fn test_verify_rejects_xdsa_ca_wrong_key_usage() {
+        let subject = xdsa::SecretKey::generate();
+        let issuer = xdsa::SecretKey::generate();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Alice Identity"),
+            issuer: DistinguishedName::new().cn("Root"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Authority { path_len: Some(0) },
+            ..Default::default()
+        };
+
+        let mut cert = build_xdsa_cert(&subject.public_key(), &issuer, &template).unwrap();
+        let wrong_ku = KeyUsage(KeyUsages::DigitalSignature.into());
+        for ext in cert.tbs_certificate.extensions.as_mut().unwrap() {
+            if ext.extn_id == ObjectIdentifier::new_unwrap("2.5.29.15") {
+                ext.extn_value = OctetString::new(wrong_ku.to_der().unwrap()).unwrap();
+                break;
+            }
+        }
+        let tbs_der = cert.tbs_certificate.to_der().unwrap();
+        cert.signature = BitString::from_bytes(&issuer.sign(&tbs_der).to_bytes()).unwrap();
+
+        let der = cert.to_der().unwrap();
+        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Now);
+        assert!(result.is_err());
+    }
+
+    /// Verifies that a certificate with non-UTF-8 subject attribute values is rejected.
+    #[test]
+    fn test_verify_rejects_binary_subject_attribute_values() {
+        let subject = xdsa::SecretKey::generate();
+        let issuer = xdsa::SecretKey::generate();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Alice Identity"),
+            issuer: DistinguishedName::new().cn("Root"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
+            ..Default::default()
+        };
+        let mut cert = build_xdsa_cert(&subject.public_key(), &issuer, &template).unwrap();
+
+        let mut set = SetOfVec::new();
+        set.insert(AttributeTypeAndValue {
+            oid: name::OID_CN,
+            value: Any::new(Tag::OctetString, vec![1, 2, 3]).unwrap(),
+        })
+        .unwrap();
+        cert.tbs_certificate.subject = RdnSequence(vec![RelativeDistinguishedName::from(set)]);
+
+        let tbs_der = cert.tbs_certificate.to_der().unwrap();
+        cert.signature = BitString::from_bytes(&issuer.sign(&tbs_der).to_bytes()).unwrap();
+
+        let der = cert.to_der().unwrap();
+        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Now);
+        assert!(result.is_err());
+    }
+
+    /// Verifies that an xHPKE certificate with a wrong SPKI algorithm OID is rejected.
+    #[test]
+    #[cfg(feature = "xhpke")]
+    fn test_verify_rejects_xhpke_subject_algorithm_mismatch() {
+        let subject = xhpke::SecretKey::generate();
+        let issuer = xdsa::SecretKey::generate();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+        let template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Alice Encryption"),
+            issuer: DistinguishedName::new().cn("Root"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
+            ..Default::default()
+        };
+        let mut cert = build_xhpke_cert(&subject.public_key(), &issuer, &template).unwrap();
+        cert.tbs_certificate.subject_public_key_info.algorithm.oid =
+            ObjectIdentifier::new_unwrap("1.2.3.4");
+
+        let tbs_der = cert.tbs_certificate.to_der().unwrap();
+        cert.signature = BitString::from_bytes(&issuer.sign(&tbs_der).to_bytes()).unwrap();
+
+        let der = cert.to_der().unwrap();
+        let result = verify_xhpke_cert_der(&der, &issuer.public_key(), ValidityCheck::Now);
+        assert!(result.is_err());
+    }
+
+    /// Verifies that an xHPKE certificate with SPKI algorithm parameters is rejected.
+    #[test]
+    #[cfg(feature = "xhpke")]
+    fn test_verify_rejects_xhpke_spki_parameters() {
+        let subject = xhpke::SecretKey::generate();
+        let issuer = xdsa::SecretKey::generate();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+        let template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Alice Encryption"),
+            issuer: DistinguishedName::new().cn("Root"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
+            ..Default::default()
+        };
+        let mut cert = build_xhpke_cert(&subject.public_key(), &issuer, &template).unwrap();
+        cert.tbs_certificate
+            .subject_public_key_info
+            .algorithm
+            .parameters = Some(Any::new(Tag::Null, Vec::<u8>::new()).unwrap());
+
+        let tbs_der = cert.tbs_certificate.to_der().unwrap();
+        cert.signature = BitString::from_bytes(&issuer.sign(&tbs_der).to_bytes()).unwrap();
+
+        let der = cert.to_der().unwrap();
+        let result = verify_xhpke_cert_der(&der, &issuer.public_key(), ValidityCheck::Now);
+        assert!(result.is_err());
+    }
+
+    /// Verifies that issuer-cert chaining rejects a non-CA issuer certificate.
+    #[test]
+    #[cfg(feature = "xhpke")]
+    fn test_verify_with_issuer_cert_rejects_non_ca_issuer() {
+        let issuer_ee = xdsa::SecretKey::generate();
+        let subject_ee = xhpke::SecretKey::generate();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let issuer_template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Issuer EE"),
+            issuer: DistinguishedName::new().cn("Issuer EE"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
+            ..Default::default()
+        };
+        let issuer_cert_pem =
+            issue_xdsa_cert_pem(&issuer_ee.public_key(), &issuer_ee, &issuer_template).unwrap();
+        let issuer_cert = verify_xdsa_cert_pem(
+            &issuer_cert_pem,
+            &issuer_ee.public_key(),
+            ValidityCheck::Now,
+        )
+        .unwrap();
+
+        let leaf_template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Leaf HPKE"),
+            issuer: DistinguishedName::new().cn("Issuer EE"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
+            ..Default::default()
+        };
+        let leaf_pem =
+            issue_xhpke_cert_pem(&subject_ee.public_key(), &issuer_ee, &leaf_template).unwrap();
+
+        let result =
+            verify_xhpke_cert_pem_with_issuer_cert(&leaf_pem, &issuer_cert, ValidityCheck::Now);
+        assert!(result.is_err());
+    }
+
+    /// Verifies that pathLenConstraint without ca=true is rejected.
+    #[test]
+    fn test_verify_rejects_basic_constraints_pathlen_without_ca() {
+        let subject = xdsa::SecretKey::generate();
+        let issuer = xdsa::SecretKey::generate();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Alice Identity"),
+            issuer: DistinguishedName::new().cn("Root"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
+            ..Default::default()
+        };
+
+        let mut cert = build_xdsa_cert(&subject.public_key(), &issuer, &template).unwrap();
+        for ext in cert.tbs_certificate.extensions.as_mut().unwrap() {
+            if ext.extn_id == ObjectIdentifier::new_unwrap("2.5.29.19") {
+                let bc = BasicConstraints {
+                    ca: false,
+                    path_len_constraint: Some(0),
+                };
+                ext.extn_value = OctetString::new(bc.to_der().unwrap()).unwrap();
+                break;
+            }
+        }
+
+        let tbs_der = cert.tbs_certificate.to_der().unwrap();
+        cert.signature = BitString::from_bytes(&issuer.sign(&tbs_der).to_bytes()).unwrap();
+
+        let der = cert.to_der().unwrap();
+        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Now);
+        assert!(result.is_err());
+    }
+
+    /// Verifies that issuer-cert chaining rejects a CA child when pathLenConstraint is 0.
+    #[test]
+    fn test_verify_with_issuer_cert_enforces_path_len_for_ca_child() {
+        let issuer_sk = xdsa::SecretKey::generate();
+        let child_sk = xdsa::SecretKey::generate();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let issuer_template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Issuer"),
+            issuer: DistinguishedName::new().cn("Issuer"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Authority { path_len: Some(0) },
+            ..Default::default()
+        };
+        let issuer_pem =
+            issue_xdsa_cert_pem(&issuer_sk.public_key(), &issuer_sk, &issuer_template).unwrap();
+        let issuer_cert =
+            verify_xdsa_cert_pem(&issuer_pem, &issuer_sk.public_key(), ValidityCheck::Now).unwrap();
+
+        let child_template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Child CA"),
+            issuer: DistinguishedName::new().cn("Issuer"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Authority { path_len: Some(0) },
+            ..Default::default()
+        };
+        let child_pem =
+            issue_xdsa_cert_pem(&child_sk.public_key(), &issuer_sk, &child_template).unwrap();
+
+        let result =
+            verify_xdsa_cert_pem_with_issuer_cert(&child_pem, &issuer_cert, ValidityCheck::Now);
+        assert!(result.is_err());
+    }
+
+    /// Verifies that issuer-cert chaining allows an end-entity child when pathLenConstraint is 0.
+    #[test]
+    fn test_verify_with_issuer_cert_allows_path_len_zero_for_ee_child() {
+        let issuer_sk = xdsa::SecretKey::generate();
+        let child_sk = xdsa::SecretKey::generate();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let issuer_template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Issuer"),
+            issuer: DistinguishedName::new().cn("Issuer"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Authority { path_len: Some(0) },
+            ..Default::default()
+        };
+        let issuer_pem =
+            issue_xdsa_cert_pem(&issuer_sk.public_key(), &issuer_sk, &issuer_template).unwrap();
+        let issuer_cert =
+            verify_xdsa_cert_pem(&issuer_pem, &issuer_sk.public_key(), ValidityCheck::Now).unwrap();
+
+        let child_template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Child EE"),
+            issuer: DistinguishedName::new().cn("Issuer"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
+            ..Default::default()
+        };
+        let child_pem =
+            issue_xdsa_cert_pem(&child_sk.public_key(), &issuer_sk, &child_template).unwrap();
+
+        let result =
+            verify_xdsa_cert_pem_with_issuer_cert(&child_pem, &issuer_cert, ValidityCheck::Now);
+        assert!(result.is_ok());
+    }
+
+    /// Verifies that issuer-cert chaining rejects a DN name mismatch.
+    #[test]
+    fn test_verify_with_issuer_cert_rejects_dn_name_mismatch() {
+        let issuer_sk = xdsa::SecretKey::generate();
+        let child_sk = xdsa::SecretKey::generate();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let issuer_template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Issuer Subject"),
+            issuer: DistinguishedName::new().cn("Issuer Subject"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Authority { path_len: Some(0) },
+            ..Default::default()
+        };
+        let issuer_pem =
+            issue_xdsa_cert_pem(&issuer_sk.public_key(), &issuer_sk, &issuer_template).unwrap();
+        let issuer_cert =
+            verify_xdsa_cert_pem(&issuer_pem, &issuer_sk.public_key(), ValidityCheck::Now).unwrap();
+
+        let child_template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Child EE"),
+            issuer: DistinguishedName::new().cn("Fake Issuer Name"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
+            ..Default::default()
+        };
+        let child_pem =
+            issue_xdsa_cert_pem(&child_sk.public_key(), &issuer_sk, &child_template).unwrap();
+
+        let result =
+            verify_xdsa_cert_pem_with_issuer_cert(&child_pem, &issuer_cert, ValidityCheck::Now);
+        assert!(result.is_err());
+    }
+
+    /// Verifies that a CA certificate with non-critical basicConstraints is rejected.
+    #[test]
+    fn test_verify_rejects_ca_with_noncritical_basic_constraints() {
+        let subject = xdsa::SecretKey::generate();
+        let issuer = xdsa::SecretKey::generate();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("CA Subject"),
+            issuer: DistinguishedName::new().cn("CA Subject"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Authority { path_len: Some(0) },
+            ..Default::default()
+        };
+
+        let mut cert = build_xdsa_cert(&subject.public_key(), &issuer, &template).unwrap();
+        for ext in cert.tbs_certificate.extensions.as_mut().unwrap() {
+            if ext.extn_id == ObjectIdentifier::new_unwrap("2.5.29.19") {
+                ext.critical = false;
+                break;
+            }
+        }
+        let tbs_der = cert.tbs_certificate.to_der().unwrap();
+        cert.signature = BitString::from_bytes(&issuer.sign(&tbs_der).to_bytes()).unwrap();
+
+        let der = cert.to_der().unwrap();
+        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Now);
+        assert!(result.is_err());
+    }
+
+    /// Verifies that a certificate with non-critical keyUsage is rejected.
+    #[test]
+    fn test_verify_rejects_noncritical_key_usage() {
+        let subject = xdsa::SecretKey::generate();
+        let issuer = xdsa::SecretKey::generate();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("EE Subject"),
+            issuer: DistinguishedName::new().cn("Issuer"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
+            ..Default::default()
+        };
+
+        let mut cert = build_xdsa_cert(&subject.public_key(), &issuer, &template).unwrap();
+        for ext in cert.tbs_certificate.extensions.as_mut().unwrap() {
+            if ext.extn_id == ObjectIdentifier::new_unwrap("2.5.29.15") {
+                ext.critical = false;
+                break;
+            }
+        }
+        let tbs_der = cert.tbs_certificate.to_der().unwrap();
+        cert.signature = BitString::from_bytes(&issuer.sign(&tbs_der).to_bytes()).unwrap();
+
+        let der = cert.to_der().unwrap();
+        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Now);
+        assert!(result.is_err());
+    }
+
+    /// Verifies that a certificate with subjectUniqueID is rejected.
+    #[test]
+    fn test_verify_rejects_subject_unique_id() {
+        let subject = xdsa::SecretKey::generate();
+        let issuer = xdsa::SecretKey::generate();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("EE Subject"),
+            issuer: DistinguishedName::new().cn("Issuer"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
+            ..Default::default()
+        };
+
+        let mut cert = build_xdsa_cert(&subject.public_key(), &issuer, &template).unwrap();
+        cert.tbs_certificate.subject_unique_id = Some(BitString::from_bytes(&[0x01]).unwrap());
+
+        let tbs_der = cert.tbs_certificate.to_der().unwrap();
+        cert.signature = BitString::from_bytes(&issuer.sign(&tbs_der).to_bytes()).unwrap();
+
+        let der = cert.to_der().unwrap();
+        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Now);
+        assert!(result.is_err());
+    }
+
+    /// Verifies that a certificate with issuerUniqueID is rejected.
+    #[test]
+    fn test_verify_rejects_issuer_unique_id() {
+        let subject = xdsa::SecretKey::generate();
+        let issuer = xdsa::SecretKey::generate();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("EE Subject"),
+            issuer: DistinguishedName::new().cn("Issuer"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
+            ..Default::default()
+        };
+
+        let mut cert = build_xdsa_cert(&subject.public_key(), &issuer, &template).unwrap();
+        cert.tbs_certificate.issuer_unique_id = Some(BitString::from_bytes(&[0x01]).unwrap());
+
+        let tbs_der = cert.tbs_certificate.to_der().unwrap();
+        cert.signature = BitString::from_bytes(&issuer.sign(&tbs_der).to_bytes()).unwrap();
+
+        let der = cert.to_der().unwrap();
+        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Now);
+        assert!(result.is_err());
+    }
+
+    /// Verifies that verify_xdsa_cert_der_with_issuer_cert works for the DER path.
+    #[test]
+    fn test_verify_xdsa_der_with_issuer_cert() {
+        let issuer_sk = xdsa::SecretKey::generate();
+        let child_sk = xdsa::SecretKey::generate();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let issuer_template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Issuer"),
+            issuer: DistinguishedName::new().cn("Issuer"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Authority { path_len: None },
+            ..Default::default()
+        };
+        let issuer_der =
+            issue_xdsa_cert_der(&issuer_sk.public_key(), &issuer_sk, &issuer_template).unwrap();
+        let issuer_cert =
+            verify_xdsa_cert_der(&issuer_der, &issuer_sk.public_key(), ValidityCheck::Now).unwrap();
+
+        let child_template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Child EE"),
+            issuer: DistinguishedName::new().cn("Issuer"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
+            ..Default::default()
+        };
+        let child_der =
+            issue_xdsa_cert_der(&child_sk.public_key(), &issuer_sk, &child_template).unwrap();
+
+        let result =
+            verify_xdsa_cert_der_with_issuer_cert(&child_der, &issuer_cert, ValidityCheck::Now);
+        assert!(result.is_ok());
+    }
+
+    /// Verifies that verify_xhpke_cert_der_with_issuer_cert works for the DER path.
+    #[test]
+    #[cfg(feature = "xhpke")]
+    fn test_verify_xhpke_der_with_issuer_cert() {
+        let issuer_sk = xdsa::SecretKey::generate();
+        let child_sk = xhpke::SecretKey::generate();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let issuer_template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Issuer"),
+            issuer: DistinguishedName::new().cn("Issuer"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Authority { path_len: None },
+            ..Default::default()
+        };
+        let issuer_der =
+            issue_xdsa_cert_der(&issuer_sk.public_key(), &issuer_sk, &issuer_template).unwrap();
+        let issuer_cert =
+            verify_xdsa_cert_der(&issuer_der, &issuer_sk.public_key(), ValidityCheck::Now).unwrap();
+
+        let child_template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Child HPKE"),
+            issuer: DistinguishedName::new().cn("Issuer"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
+            ..Default::default()
+        };
+        let child_der =
+            issue_xhpke_cert_der(&child_sk.public_key(), &issuer_sk, &child_template).unwrap();
+
+        let result =
+            verify_xhpke_cert_der_with_issuer_cert(&child_der, &issuer_cert, ValidityCheck::Now);
+        assert!(result.is_ok());
+    }
+
+    /// Verifies that issuer-cert chaining rejects an issuer with wrong key usage.
+    #[test]
+    fn test_verify_with_issuer_cert_rejects_issuer_wrong_key_usage() {
+        let issuer_sk = xdsa::SecretKey::generate();
+        let child_sk = xdsa::SecretKey::generate();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let issuer_template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Issuer"),
+            issuer: DistinguishedName::new().cn("Issuer"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Authority { path_len: None },
+            ..Default::default()
+        };
+        let issuer_der =
+            issue_xdsa_cert_der(&issuer_sk.public_key(), &issuer_sk, &issuer_template).unwrap();
+        let mut issuer_cert =
+            verify_xdsa_cert_der(&issuer_der, &issuer_sk.public_key(), ValidityCheck::Now).unwrap();
+
+        // Tamper: swap the issuer's key usage to digitalSignature only.
+        issuer_cert.meta.key_usage = KeyUsage(KeyUsages::DigitalSignature.into());
+
+        let child_template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Child EE"),
+            issuer: DistinguishedName::new().cn("Issuer"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
+            ..Default::default()
+        };
+        let child_pem =
+            issue_xdsa_cert_pem(&child_sk.public_key(), &issuer_sk, &child_template).unwrap();
+
+        let result =
+            verify_xdsa_cert_pem_with_issuer_cert(&child_pem, &issuer_cert, ValidityCheck::Now);
+        assert!(result.is_err());
+    }
+
+    /// Verifies that a certificate with unknown key usage bits set is rejected.
+    #[test]
+    fn test_verify_rejects_unknown_key_usage_bits() {
+        let subject = xdsa::SecretKey::generate();
+        let issuer = xdsa::SecretKey::generate();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Alice Identity"),
+            issuer: DistinguishedName::new().cn("Root"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
+            ..Default::default()
+        };
+
+        let mut cert = build_xdsa_cert(&subject.public_key(), &issuer, &template).unwrap();
+        // Set bit 9 (outside the 9 known KeyUsage bits 0..8).
+        // DER BIT STRING: 03 04 06 00 02 00 (4 content bytes, 6 unused bits, bit 9 set).
+        let raw_ku = vec![0x03, 0x04, 0x06, 0x00, 0x02, 0x00];
+        for ext in cert.tbs_certificate.extensions.as_mut().unwrap() {
+            if ext.extn_id == ObjectIdentifier::new_unwrap("2.5.29.15") {
+                ext.extn_value = OctetString::new(raw_ku).unwrap();
+                break;
+            }
+        }
+        let tbs_der = cert.tbs_certificate.to_der().unwrap();
+        cert.signature = BitString::from_bytes(&issuer.sign(&tbs_der).to_bytes()).unwrap();
+
+        let der = cert.to_der().unwrap();
+        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Now);
+        assert!(result.is_err());
+    }
+
+    /// Verifies that a certificate containing an extendedKeyUsage extension is rejected.
+    #[test]
+    fn test_verify_rejects_extended_key_usage() {
+        let subject = xdsa::SecretKey::generate();
+        let issuer = xdsa::SecretKey::generate();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Alice Identity"),
+            issuer: DistinguishedName::new().cn("Root"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
+            ..Default::default()
+        };
+
+        let mut cert = build_xdsa_cert(&subject.public_key(), &issuer, &template).unwrap();
+        // EKU OID 2.5.29.37 with serverAuth (1.3.6.1.5.5.7.3.1).
+        let eku_ext = x509_cert::ext::Extension {
+            extn_id: ObjectIdentifier::new_unwrap("2.5.29.37"),
+            critical: false,
+            extn_value: OctetString::new(vec![0x30, 0x0a, 0x06, 0x08, 0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x01]).unwrap(),
+        };
+        cert.tbs_certificate.extensions.as_mut().unwrap().push(eku_ext);
+
+        let tbs_der = cert.tbs_certificate.to_der().unwrap();
+        cert.signature = BitString::from_bytes(&issuer.sign(&tbs_der).to_bytes()).unwrap();
+
+        let der = cert.to_der().unwrap();
+        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Now);
+        assert!(result.is_err());
+    }
+
+    /// Verifies that a certificate with duplicate extension OIDs is rejected.
+    #[test]
+    fn test_verify_rejects_duplicate_extension_oid() {
+        let subject = xdsa::SecretKey::generate();
+        let issuer = xdsa::SecretKey::generate();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Alice Identity"),
+            issuer: DistinguishedName::new().cn("Root"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
+            ..Default::default()
+        };
+
+        let mut cert = build_xdsa_cert(&subject.public_key(), &issuer, &template).unwrap();
+        let duplicate = cert.tbs_certificate.extensions.as_ref().unwrap()[0].clone();
+        cert.tbs_certificate
+            .extensions
+            .as_mut()
+            .unwrap()
+            .push(duplicate);
+
+        let tbs_der = cert.tbs_certificate.to_der().unwrap();
+        cert.signature = BitString::from_bytes(&issuer.sign(&tbs_der).to_bytes()).unwrap();
+
+        let der = cert.to_der().unwrap();
+        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Now);
+        assert!(result.is_err());
+    }
 }

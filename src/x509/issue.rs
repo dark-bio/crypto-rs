@@ -4,7 +4,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use super::{CertificateRole, CertificateTemplate, Error, Result, key_identifier};
+use super::utils::key_identifier;
+use super::{CertificateRole, CertificateTemplate, Error, Result};
 use crate::xdsa;
 #[cfg(feature = "xhpke")]
 use crate::xhpke;
@@ -15,17 +16,14 @@ use std::collections::HashSet;
 use std::time::Duration;
 use x509_cert::certificate::{CertificateInner, TbsCertificateInner, Version};
 use x509_cert::ext::pkix::{
-    AuthorityKeyIdentifier, BasicConstraints, ExtendedKeyUsage, KeyUsage, KeyUsages,
-    SubjectKeyIdentifier,
+    AuthorityKeyIdentifier, BasicConstraints, KeyUsage, KeyUsages, SubjectKeyIdentifier,
 };
 use x509_cert::ext::{AsExtension, Extension};
 use x509_cert::serial_number::SerialNumber;
 use x509_cert::spki::{AlgorithmIdentifierOwned, SubjectPublicKeyInfoOwned};
 use x509_cert::time::{Time, Validity};
 
-/// Issues an xDSA subject certificate and returns DER.
-///
-/// The certificate is signed by `issuer` and populated from `template`.
+/// Issues an xDSA certificate and returns it DER encoded.
 pub fn issue_xdsa_cert_der(
     subject: &xdsa::PublicKey,
     issuer: &xdsa::SecretKey,
@@ -45,9 +43,7 @@ pub fn issue_xdsa_cert_der(
     .to_der()?)
 }
 
-/// Issues an xDSA subject certificate and returns PEM.
-///
-/// This is a thin wrapper over [`issue_xdsa_cert_der`] with `CERTIFICATE` PEM encoding.
+/// Issues an xDSA certificate and returns it PEM encoded.
 pub fn issue_xdsa_cert_pem(
     subject: &xdsa::PublicKey,
     issuer: &xdsa::SecretKey,
@@ -57,9 +53,7 @@ pub fn issue_xdsa_cert_pem(
     encode_certificate_pem(&der)
 }
 
-/// Issues an xHPKE subject certificate and returns DER.
-///
-/// xHPKE certificates are restricted to end-entity profile.
+/// Issues an xHPKE certificate and returns it DER encoded.
 #[cfg(feature = "xhpke")]
 pub fn issue_xhpke_cert_der(
     subject: &xhpke::PublicKey,
@@ -80,9 +74,7 @@ pub fn issue_xhpke_cert_der(
     .to_der()?)
 }
 
-/// Issues an xHPKE subject certificate and returns PEM.
-///
-/// This is a thin wrapper over [`issue_xhpke_cert_der`] with `CERTIFICATE` PEM encoding.
+/// Issues an xHPKE certificate and returns it PEM encoded.
 #[cfg(feature = "xhpke")]
 pub fn issue_xhpke_cert_pem(
     subject: &xhpke::PublicKey,
@@ -93,6 +85,7 @@ pub fn issue_xhpke_cert_pem(
     encode_certificate_pem(&der)
 }
 
+/// Helper to encode a supposedly DER blob into a PEM certificate container.
 fn encode_certificate_pem(der: &[u8]) -> Result<String> {
     let pem =
         der::pem::encode_string("CERTIFICATE", der::pem::LineEnding::LF, der).map_err(|e| {
@@ -114,6 +107,7 @@ pub(super) fn issue_cert(
     issuer: &xdsa::SecretKey,
     template: &CertificateTemplate,
 ) -> Result<CertificateInner> {
+    // Sanity check some mandatory fields
     if template.subject.attrs.is_empty() {
         return Err(Error::EmptyDistinguishedName { field: "subject" });
     }
@@ -123,7 +117,7 @@ pub(super) fn issue_cert(
     if template.validity.not_before >= template.validity.not_after {
         return Err(Error::InvalidValidityWindow);
     }
-
+    // Hard code xDSA as the signature algorithm
     let signature_alg = AlgorithmIdentifierOwned {
         oid: xdsa::OID,
         parameters: None,
@@ -133,11 +127,12 @@ pub(super) fn issue_cert(
     let subject_name = template.subject.to_x509_name()?;
     let issuer_name = template.issuer.to_x509_name()?;
 
-    // Keep extension tracking to ensure custom OIDs cannot collide with
-    // mandatory or previously inserted extension IDs.
+    // Tracking extensions to ensure custom OIDs don't collide with mandatory
+    // or previously inserted extension IDs
     let mut extensions = Vec::<Extension>::new();
     let mut extension_oids = HashSet::new();
 
+    // Inject the base components
     let (is_ca, path_len) = match &template.role {
         CertificateRole::Leaf => (false, None),
         CertificateRole::Authority { path_len } => (true, *path_len),
@@ -151,27 +146,23 @@ pub(super) fn issue_cert(
     extension_oids.insert(bc_ext.extn_id.to_string());
     extensions.push(bc_ext);
 
-    let key_usage = template.key_usage.unwrap_or(default_key_usage);
+    let key_usage = default_key_usage;
     let ku_ext = key_usage.to_extension(&subject_name, extensions.as_slice())?;
     extension_oids.insert(ku_ext.extn_id.to_string());
     extensions.push(ku_ext);
 
+    // Inject the subject and authority key identifiers
     let ski = make_ski(subject_key);
     let aki = make_aki(&issuer.public_key().to_bytes());
     let ski_ext = ski.to_extension(&subject_name, extensions.as_slice())?;
     extension_oids.insert(ski_ext.extn_id.to_string());
     extensions.push(ski_ext);
+
     let aki_ext = aki.to_extension(&subject_name, extensions.as_slice())?;
     extension_oids.insert(aki_ext.extn_id.to_string());
     extensions.push(aki_ext);
 
-    if !template.ext_key_usage.is_empty() {
-        let eku = ExtendedKeyUsage(template.ext_key_usage.clone());
-        let eku_ext = eku.to_extension(&subject_name, extensions.as_slice())?;
-        extension_oids.insert(eku_ext.extn_id.to_string());
-        extensions.push(eku_ext);
-    }
-
+    // Inject custom extensions
     for custom in &template.extensions {
         let oid = custom.oid.to_string();
         if oid.starts_with("2.5.29.") {
@@ -187,18 +178,19 @@ pub(super) fn issue_cert(
         });
     }
 
-    let not_before =
-        UtcTime::from_unix_duration(Duration::from_secs(template.validity.not_before))?;
-    let not_after = UtcTime::from_unix_duration(Duration::from_secs(template.validity.not_after))?;
-
+    // Assemble the certificate content
     let tbs_certificate = TbsCertificateInner {
         version: Version::V3,
         serial_number,
         signature: signature_alg.clone(),
         issuer: issuer_name,
         validity: Validity {
-            not_before: Time::UtcTime(not_before),
-            not_after: Time::UtcTime(not_after),
+            not_before: Time::UtcTime(UtcTime::from_unix_duration(Duration::from_secs(
+                template.validity.not_before,
+            ))?),
+            not_after: Time::UtcTime(UtcTime::from_unix_duration(Duration::from_secs(
+                template.validity.not_after,
+            ))?),
         },
         subject: subject_name,
         subject_public_key_info: SubjectPublicKeyInfoOwned {
@@ -213,7 +205,7 @@ pub(super) fn issue_cert(
         extensions: Some(extensions),
     };
 
-    // Signature always covers the canonical DER encoding of TBSCertificate.
+    // Sign the canonical DER encoding of TBSCertificate.
     let tbs_der = tbs_certificate.to_der()?;
     let signature = issuer.sign(&tbs_der);
 
@@ -224,8 +216,14 @@ pub(super) fn issue_cert(
     })
 }
 
+/// Builds the serial number either from input or random.
 fn make_serial(serial: Option<&[u8]>) -> Result<SerialNumber> {
     if let Some(serial) = serial {
+        if serial.first().is_some_and(|b| b & 0x80 != 0) {
+            return Err(Error::InvalidSerial {
+                details: "serial number must be positive (MSB must be clear)",
+            });
+        }
         return Ok(SerialNumber::new(serial)?);
     }
     let mut serial_bytes = [0u8; 16];
@@ -263,6 +261,7 @@ mod test {
     use const_oid::ObjectIdentifier;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+    /// Verifies that an xDSA certificate round-trips through issue and verify in both PEM and DER.
     #[test]
     fn test_issue_and_verify_xdsa() {
         let alice = xdsa::SecretKey::generate();
@@ -282,8 +281,6 @@ mod test {
             },
             role: CertificateRole::Authority { path_len: Some(0) },
             serial: None,
-            key_usage: None,
-            ext_key_usage: Vec::new(),
             extensions: vec![CustomExtension {
                 oid: private_enterprise_oid(62253, &[1, 1]).unwrap(),
                 critical: false,
@@ -311,6 +308,7 @@ mod test {
         assert_eq!(cert.meta.extensions.len(), 1);
     }
 
+    /// Verifies that an xHPKE certificate round-trips through issue and verify in DER.
     #[test]
     #[cfg(feature = "xhpke")]
     fn test_issue_and_verify_xhpke() {
@@ -331,18 +329,22 @@ mod test {
             },
             role: CertificateRole::Leaf,
             serial: None,
-            key_usage: None,
-            ext_key_usage: Vec::new(),
             extensions: Vec::new(),
         };
 
+        let pem = issue_xhpke_cert_pem(&alice.public_key(), &issuer, &template).unwrap();
+        let cert = verify_xhpke_cert_pem(&pem, &issuer.public_key(), ValidityCheck::Now).unwrap();
+
+        assert_eq!(cert.public_key.to_bytes(), alice.public_key().to_bytes());
+        assert!(matches!(cert.meta.role, CertificateRole::Leaf));
+
         let der = issue_xhpke_cert_der(&alice.public_key(), &issuer, &template).unwrap();
         let cert = verify_xhpke_cert_der(&der, &issuer.public_key(), ValidityCheck::Now).unwrap();
-
         assert_eq!(cert.public_key.to_bytes(), alice.public_key().to_bytes());
         assert!(matches!(cert.meta.role, CertificateRole::Leaf));
     }
 
+    /// Verifies that issuing an xHPKE certificate with a CA role is rejected.
     #[test]
     #[cfg(feature = "xhpke")]
     fn test_issue_xhpke_rejects_ca_profile() {
@@ -369,6 +371,7 @@ mod test {
         assert!(result.is_err());
     }
 
+    /// Verifies that a template with not_before > not_after is rejected.
     #[test]
     fn test_issue_rejects_inverted_validity_window() {
         let subject = xdsa::SecretKey::generate();
@@ -393,6 +396,7 @@ mod test {
         assert!(result.is_err());
     }
 
+    /// Verifies that a custom extension using a reserved standard OID (2.5.29.*) is rejected.
     #[test]
     fn test_issue_rejects_custom_standard_extension_oid() {
         let subject = xdsa::SecretKey::generate();
@@ -422,6 +426,7 @@ mod test {
         assert!(result.is_err());
     }
 
+    /// Verifies that DN attributes with custom private-enterprise OIDs are accepted.
     #[test]
     fn test_issue_accepts_custom_oid_names() {
         let subject = xdsa::SecretKey::generate();
@@ -452,6 +457,7 @@ mod test {
         assert_eq!(cert.public_key.to_bytes(), subject.public_key().to_bytes());
     }
 
+    /// Verifies that a template with an empty subject DN is rejected.
     #[test]
     fn test_issue_rejects_empty_subject_dn() {
         let subject = xdsa::SecretKey::generate();
@@ -475,6 +481,7 @@ mod test {
         assert!(result.is_err());
     }
 
+    /// Verifies that a template with an empty issuer DN is rejected.
     #[test]
     fn test_issue_rejects_empty_issuer_dn() {
         let subject = xdsa::SecretKey::generate();
@@ -498,6 +505,7 @@ mod test {
         assert!(result.is_err());
     }
 
+    /// Verifies that a user-supplied serial number is used verbatim in the issued certificate.
     #[test]
     fn test_issue_uses_explicit_serial() {
         let subject = xdsa::SecretKey::generate();
@@ -525,6 +533,7 @@ mod test {
         assert_eq!(cert.meta.serial, serial);
     }
 
+    /// Verifies that duplicate custom extension OIDs in a template are rejected.
     #[test]
     fn test_issue_rejects_duplicate_custom_extension_oid() {
         let subject = xdsa::SecretKey::generate();
@@ -555,6 +564,57 @@ mod test {
                     value: vec![0x05, 0x00],
                 },
             ],
+            ..Default::default()
+        };
+
+        let result = issue_xdsa_cert_der(&subject.public_key(), &issuer, &template);
+        assert!(result.is_err());
+    }
+
+    /// Verifies that a user-supplied serial number with MSB set is rejected as negative.
+    #[test]
+    fn test_issue_rejects_negative_serial() {
+        let subject = xdsa::SecretKey::generate();
+        let issuer = xdsa::SecretKey::generate();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Alice Identity"),
+            issuer: DistinguishedName::new().cn("Root"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
+            serial: Some(vec![0x80, 0x01]),
+            ..Default::default()
+        };
+
+        let result = issue_xdsa_cert_der(&subject.public_key(), &issuer, &template);
+        assert!(result.is_err());
+    }
+
+    /// Verifies that a validity window with equal not_before and not_after is rejected.
+    #[test]
+    fn test_issue_rejects_equal_validity_window() {
+        let subject = xdsa::SecretKey::generate();
+        let issuer = xdsa::SecretKey::generate();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let template = CertificateTemplate {
+            subject: DistinguishedName::new().cn("Alice Identity"),
+            issuer: DistinguishedName::new().cn("Root"),
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now,
+            },
+            role: CertificateRole::Leaf,
             ..Default::default()
         };
 
