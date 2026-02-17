@@ -47,7 +47,7 @@ fn main() {
         subject: x509::DistinguishedName::new().cn("Alice Identity"),
         issuer: x509::DistinguishedName::new().cn("Root"),
         validity: x509::ValidityWindow::from_unix(now, end),
-        profile: x509::CertProfile::CertificateAuthority { path_len: Some(0) },
+        profile: x509::CertificateProfile::CertificateAuthority { path_len: Some(0) },
         ..Default::default()
     };
     let alice_xdsa_cert =
@@ -69,7 +69,7 @@ fn main() {
         subject: x509::DistinguishedName::new().cn("Bob Identity"),
         issuer: x509::DistinguishedName::new().cn("Root"),
         validity: x509::ValidityWindow::from_unix(now, end),
-        profile: x509::CertProfile::CertificateAuthority { path_len: Some(0) },
+        profile: x509::CertificateProfile::CertificateAuthority { path_len: Some(0) },
         ..Default::default()
     };
     let bob_xdsa_cert =
@@ -89,9 +89,9 @@ fn main() {
     // Create a certificate for Alice's HPKE key, signed by her xDSA key
     let alice_xhpke_template = x509::CertificateTemplate {
         subject: x509::DistinguishedName::new().cn("Alice Encryption"),
-        issuer: x509::DistinguishedName::new().cn("Alice"),
+        issuer: x509::DistinguishedName::new().cn("Alice Identity"),
         validity: x509::ValidityWindow::from_unix(now, end),
-        profile: x509::CertProfile::EndEntity,
+        profile: x509::CertificateProfile::EndEntity,
         ..Default::default()
     };
     let alice_xhpke_cert = x509::issue_xhpke_cert_pem(
@@ -115,9 +115,9 @@ fn main() {
     // Create a certificate for Bob's HPKE key, signed by his xDSA key
     let bob_xhpke_template = x509::CertificateTemplate {
         subject: x509::DistinguishedName::new().cn("Bob Encryption"),
-        issuer: x509::DistinguishedName::new().cn("Bob"),
+        issuer: x509::DistinguishedName::new().cn("Bob Identity"),
         validity: x509::ValidityWindow::from_unix(now, end),
-        profile: x509::CertProfile::EndEntity,
+        profile: x509::CertificateProfile::EndEntity,
         ..Default::default()
     };
     let bob_xhpke_cert =
