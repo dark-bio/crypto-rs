@@ -22,7 +22,7 @@ exclude = ["fuzz"]
 default = []
 argon2 = ["dep:argon2"]
 cbor = ["dep:thiserror", "dep:darkbio-crypto-cbor-derive"]
-cose = ["cbor", "xhpke"]
+cose = ["cbor", "xdsa", "xhpke"]
 eddsa = [
     "pem",
     "dep:der",
@@ -49,16 +49,19 @@ pem = ["dep:base64"]
 rand = []
 rsa = ["pem", "dep:rsa", "dep:serde", "dep:signature"]
 stream = ["dep:age-core", "dep:chacha20poly1305", "dep:pin-project", "dep:zeroize"]
-x509 = ["xdsa", "dep:chrono", "dep:const-oid", "dep:sha1", "dep:x509-cert"]
-xdsa = ["pem", "eddsa", "mldsa", "x509", "dep:x509-parser"]
+x509 = ["xdsa", "pem", "dep:chrono", "dep:const-oid", "dep:sha1", "dep:x509-cert", "dep:x509-parser"]
+xdsa = ["pem", "eddsa", "mldsa"]
 xhpke = [
     "pem",
-    "xdsa",
     "dep:generic-array",
     "dep:hpke",
+    "dep:pkcs8",
     "dep:rand",
     "dep:rand_chacha",
     "dep:serde",
+    "dep:sha2",
+    "dep:spki",
+    "dep:subtle",
     "dep:x-wing",
 ]
 
@@ -102,4 +105,4 @@ hex = "0.4"
 
 [[example]]
 name = "demo"
-required-features = ["cose"]
+required-features = ["cose", "x509"]

@@ -8,8 +8,6 @@
 //!
 //! https://datatracker.ietf.org/doc/html/draft-ietf-lamps-pq-composite-sigs
 
-mod cert;
-
 use crate::pem;
 use crate::{eddsa, mldsa};
 use base64::Engine;
