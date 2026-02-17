@@ -18,10 +18,10 @@ mod types;
 mod verify;
 
 pub use error::{Error, Result};
-pub use name::{DistinguishedName, NameAttribute, NameValue};
+pub use name::{DistinguishedName, NameAttribute};
 pub use types::{
-    CertificateMetadata, CertificateProfile, CertificateTemplate, CustomExtension, ValidityCheck,
-    ValidityWindow, VerifiedCertificate, VerifyPolicy,
+    CertificateMetadata, CertificateRole, CertificateTemplate, CustomExtension, ValidityCheck,
+    ValidityWindow, VerifiedCertificate,
 };
 
 /// Returns a PEN-scoped OID (`1.3.6.1.4.1.<pen>.<suffix...>`).
@@ -59,8 +59,6 @@ fn key_identifier(public_key: &[u8]) -> Vec<u8> {
     hasher.finalize().to_vec()
 }
 
-use types::Subject;
-
 #[cfg(test)]
 mod verify_tests {
     use super::*;
@@ -75,10 +73,39 @@ mod verify_tests {
     use der::{Encode, Tag};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
     use x509_cert::attr::AttributeTypeAndValue;
-    use x509_cert::certificate::Version;
+    use x509_cert::certificate::{CertificateInner, Version};
     use x509_cert::ext::pkix::BasicConstraints;
     use x509_cert::ext::pkix::{KeyUsage, KeyUsages};
     use x509_cert::name::{RdnSequence, RelativeDistinguishedName};
+
+    fn build_xdsa_cert(
+        subject: &xdsa::PublicKey,
+        issuer: &xdsa::SecretKey,
+        template: &CertificateTemplate,
+    ) -> Result<CertificateInner> {
+        let default_ku = match template.role {
+            CertificateRole::Authority { .. } => {
+                KeyUsage(KeyUsages::KeyCertSign | KeyUsages::CRLSign)
+            }
+            CertificateRole::Leaf => KeyUsage(KeyUsages::DigitalSignature.into()),
+        };
+        issue_cert(&subject.to_bytes(), xdsa::OID, default_ku, issuer, template)
+    }
+
+    #[cfg(feature = "xhpke")]
+    fn build_xhpke_cert(
+        subject: &xhpke::PublicKey,
+        issuer: &xdsa::SecretKey,
+        template: &CertificateTemplate,
+    ) -> Result<CertificateInner> {
+        issue_cert(
+            &subject.to_bytes(),
+            xhpke::OID,
+            KeyUsage(KeyUsages::KeyAgreement.into()),
+            issuer,
+            template,
+        )
+    }
 
     #[test]
     fn test_verify_xdsa_rejects_wrong_signer() {
@@ -94,13 +121,16 @@ mod verify_tests {
         let template = CertificateTemplate {
             subject: DistinguishedName::new().cn("Alice Identity"),
             issuer: DistinguishedName::new().cn("Root"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::EndEntity,
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
             ..Default::default()
         };
 
         let pem = issue_xdsa_cert_pem(&subject.public_key(), &issuer, &template).unwrap();
-        let result = verify_xdsa_cert_pem(&pem, &wrong.public_key(), &VerifyPolicy::default());
+        let result = verify_xdsa_cert_pem(&pem, &wrong.public_key(), ValidityCheck::Now);
         assert!(result.is_err());
     }
 
@@ -117,14 +147,17 @@ mod verify_tests {
         let template = CertificateTemplate {
             subject: DistinguishedName::new().cn("Alice Identity"),
             issuer: DistinguishedName::new().cn("Root"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::EndEntity,
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
             key_usage: Some(KeyUsage(KeyUsages::KeyAgreement.into())),
             ..Default::default()
         };
 
         let pem = issue_xdsa_cert_pem(&subject.public_key(), &issuer, &template).unwrap();
-        let result = verify_xdsa_cert_pem(&pem, &issuer.public_key(), &VerifyPolicy::default());
+        let result = verify_xdsa_cert_pem(&pem, &issuer.public_key(), ValidityCheck::Now);
         assert!(result.is_err());
     }
 
@@ -143,13 +176,16 @@ mod verify_tests {
         let template = CertificateTemplate {
             subject: DistinguishedName::new().cn("Alice Encryption"),
             issuer: DistinguishedName::new().cn("Alice Identity"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::EndEntity,
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
             ..Default::default()
         };
 
         let pem = issue_xhpke_cert_pem(&subject.public_key(), &issuer, &template).unwrap();
-        let result = verify_xhpke_cert_pem(&pem, &wrong.public_key(), &VerifyPolicy::default());
+        let result = verify_xhpke_cert_pem(&pem, &wrong.public_key(), ValidityCheck::Now);
         assert!(result.is_err());
     }
 
@@ -167,14 +203,17 @@ mod verify_tests {
         let template = CertificateTemplate {
             subject: DistinguishedName::new().cn("Alice Encryption"),
             issuer: DistinguishedName::new().cn("Alice Identity"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::EndEntity,
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
             key_usage: Some(KeyUsage(KeyUsages::DigitalSignature.into())),
             ..Default::default()
         };
 
         let pem = issue_xhpke_cert_pem(&subject.public_key(), &issuer, &template).unwrap();
-        let result = verify_xhpke_cert_pem(&pem, &issuer.public_key(), &VerifyPolicy::default());
+        let result = verify_xhpke_cert_pem(&pem, &issuer.public_key(), ValidityCheck::Now);
         assert!(result.is_err());
     }
 
@@ -192,18 +231,21 @@ mod verify_tests {
         let template = CertificateTemplate {
             subject: DistinguishedName::new().cn("Alice Encryption"),
             issuer: DistinguishedName::new().cn("Alice Identity"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::CertificateAuthority { path_len: Some(0) },
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Authority { path_len: Some(0) },
             ..Default::default()
         };
 
         // Build a malformed xHPKE CA certificate via internal helper to ensure
         // verification enforces the end-entity invariant.
-        let der = issue_cert(&subject.public_key(), &issuer, &template)
+        let der = build_xhpke_cert(&subject.public_key(), &issuer, &template)
             .unwrap()
             .to_der()
             .unwrap();
-        let result = verify_xhpke_cert_der(&der, &issuer.public_key(), &VerifyPolicy::default());
+        let result = verify_xhpke_cert_der(&der, &issuer.public_key(), ValidityCheck::Now);
         assert!(result.is_err());
     }
 
@@ -220,18 +262,21 @@ mod verify_tests {
         let template = CertificateTemplate {
             subject: DistinguishedName::new().cn("Alice Identity"),
             issuer: DistinguishedName::new().cn("Root"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::EndEntity,
-            custom_extensions: vec![CustomExtension {
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
+            extensions: vec![CustomExtension {
                 oid: private_enterprise_oid(62253, &[9, 9]).unwrap(),
                 critical: true,
-                value_der: vec![0x05, 0x00],
+                value: vec![0x05, 0x00],
             }],
             ..Default::default()
         };
 
         let pem = issue_xdsa_cert_pem(&subject.public_key(), &issuer, &template).unwrap();
-        let result = verify_xdsa_cert_pem(&pem, &issuer.public_key(), &VerifyPolicy::default());
+        let result = verify_xdsa_cert_pem(&pem, &issuer.public_key(), ValidityCheck::Now);
         assert!(result.is_err());
     }
 
@@ -248,12 +293,15 @@ mod verify_tests {
         let template = CertificateTemplate {
             subject: DistinguishedName::new().cn("Alice Identity"),
             issuer: DistinguishedName::new().cn("Root"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::EndEntity,
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
             ..Default::default()
         };
 
-        let mut cert = issue_cert(&subject.public_key(), &issuer, &template).unwrap();
+        let mut cert = build_xdsa_cert(&subject.public_key(), &issuer, &template).unwrap();
         cert.tbs_certificate.version = Version::V1;
         cert.tbs_certificate.extensions = None;
 
@@ -262,7 +310,7 @@ mod verify_tests {
         cert.signature = BitString::from_bytes(&signature.to_bytes()).unwrap();
 
         let der = cert.to_der().unwrap();
-        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), &VerifyPolicy::default());
+        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Now);
         assert!(result.is_err());
     }
 
@@ -278,15 +326,18 @@ mod verify_tests {
         let template = CertificateTemplate {
             subject: DistinguishedName::new().cn("Alice Identity"),
             issuer: DistinguishedName::new().cn("Root"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::EndEntity,
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
             ..Default::default()
         };
 
         let pem = issue_xdsa_cert_pem(&subject.public_key(), &issuer, &template).unwrap();
         let pem = pem.replace("CERTIFICATE", "PRIVATE KEY");
 
-        let result = verify_xdsa_cert_pem(&pem, &issuer.public_key(), &VerifyPolicy::default());
+        let result = verify_xdsa_cert_pem(&pem, &issuer.public_key(), ValidityCheck::Now);
         assert!(result.is_err());
     }
 
@@ -302,14 +353,17 @@ mod verify_tests {
         let template = CertificateTemplate {
             subject: DistinguishedName::new().cn("Alice Identity"),
             issuer: DistinguishedName::new().cn("Root"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::EndEntity,
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
             ..Default::default()
         };
 
         let mut der = issue_xdsa_cert_der(&subject.public_key(), &issuer, &template).unwrap();
         der.extend_from_slice(&[0xde, 0xad]);
-        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), &VerifyPolicy::default());
+        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Now);
         assert!(result.is_err());
     }
 
@@ -325,14 +379,17 @@ mod verify_tests {
         let template = CertificateTemplate {
             subject: DistinguishedName::new().cn("Alice Identity"),
             issuer: DistinguishedName::new().cn("Root"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::EndEntity,
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
             ..Default::default()
         };
 
         let mut pem = issue_xdsa_cert_pem(&subject.public_key(), &issuer, &template).unwrap();
         pem.push_str("TRAILING");
-        let result = verify_xdsa_cert_pem(&pem, &issuer.public_key(), &VerifyPolicy::default());
+        let result = verify_xdsa_cert_pem(&pem, &issuer.public_key(), ValidityCheck::Now);
         assert!(result.is_err());
     }
 
@@ -348,12 +405,15 @@ mod verify_tests {
         let template = CertificateTemplate {
             subject: DistinguishedName::new().cn("Alice Identity"),
             issuer: DistinguishedName::new().cn("Root"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::EndEntity,
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
             ..Default::default()
         };
 
-        let mut cert = issue_cert(&subject.public_key(), &issuer, &template).unwrap();
+        let mut cert = build_xdsa_cert(&subject.public_key(), &issuer, &template).unwrap();
         cert.tbs_certificate.signature.parameters =
             Some(Any::new(Tag::Null, Vec::<u8>::new()).unwrap());
         cert.signature_algorithm.parameters = Some(Any::new(Tag::Null, Vec::<u8>::new()).unwrap());
@@ -363,7 +423,7 @@ mod verify_tests {
         cert.signature = BitString::from_bytes(&signature.to_bytes()).unwrap();
 
         let der = cert.to_der().unwrap();
-        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), &VerifyPolicy::default());
+        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Now);
         assert!(result.is_err());
     }
 
@@ -380,8 +440,11 @@ mod verify_tests {
         let template = CertificateTemplate {
             subject: DistinguishedName::new().cn("Alice Identity"),
             issuer: DistinguishedName::new().cn("Root"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::EndEntity,
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
             key_usage: Some(KeyUsage(
                 KeyUsages::DigitalSignature | KeyUsages::KeyCertSign,
             )),
@@ -389,7 +452,7 @@ mod verify_tests {
         };
 
         let pem = issue_xdsa_cert_pem(&subject.public_key(), &issuer, &template).unwrap();
-        let result = verify_xdsa_cert_pem(&pem, &issuer.public_key(), &VerifyPolicy::default());
+        let result = verify_xdsa_cert_pem(&pem, &issuer.public_key(), ValidityCheck::Now);
         assert!(result.is_err());
     }
 
@@ -405,12 +468,15 @@ mod verify_tests {
         let template = CertificateTemplate {
             subject: DistinguishedName::new().cn("Alice Identity"),
             issuer: DistinguishedName::new().cn("Root"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::EndEntity,
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
             ..Default::default()
         };
 
-        let mut cert = issue_cert(&subject.public_key(), &issuer, &template).unwrap();
+        let mut cert = build_xdsa_cert(&subject.public_key(), &issuer, &template).unwrap();
         cert.tbs_certificate.validity.not_after = cert.tbs_certificate.validity.not_before;
 
         let tbs_der = cert.tbs_certificate.to_der().unwrap();
@@ -418,11 +484,7 @@ mod verify_tests {
         cert.signature = BitString::from_bytes(&signature.to_bytes()).unwrap();
 
         let der = cert.to_der().unwrap();
-        let policy = VerifyPolicy {
-            validity_check: ValidityCheck::Disabled,
-            ..Default::default()
-        };
-        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), &policy);
+        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Disabled);
         assert!(result.is_err());
     }
 
@@ -438,12 +500,15 @@ mod verify_tests {
         let template = CertificateTemplate {
             subject: DistinguishedName::new().cn("Alice Identity"),
             issuer: DistinguishedName::new().cn("Root"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::EndEntity,
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
             ..Default::default()
         };
 
-        let mut cert = issue_cert(&subject.public_key(), &issuer, &template).unwrap();
+        let mut cert = build_xdsa_cert(&subject.public_key(), &issuer, &template).unwrap();
         let mut patched = false;
         for ext in cert.tbs_certificate.extensions.as_mut().unwrap() {
             if ext.extn_id == ObjectIdentifier::new_unwrap("2.5.29.14") {
@@ -459,7 +524,7 @@ mod verify_tests {
         cert.signature = BitString::from_bytes(&signature.to_bytes()).unwrap();
 
         let der = cert.to_der().unwrap();
-        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), &VerifyPolicy::default());
+        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Now);
         assert!(result.is_err());
     }
 
@@ -476,15 +541,18 @@ mod verify_tests {
         let template = CertificateTemplate {
             subject: DistinguishedName::new().cn("Alice Encryption"),
             issuer: DistinguishedName::new().cn("Alice Identity"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::EndEntity,
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
             ..Default::default()
         };
 
         let pem = issue_xhpke_cert_pem(&subject.public_key(), &issuer, &template).unwrap();
         let pem = pem.replace("CERTIFICATE", "PRIVATE KEY");
 
-        let result = verify_xhpke_cert_pem(&pem, &issuer.public_key(), &VerifyPolicy::default());
+        let result = verify_xhpke_cert_pem(&pem, &issuer.public_key(), ValidityCheck::Now);
         assert!(result.is_err());
     }
 
@@ -523,11 +591,14 @@ mod verify_tests {
         let template = CertificateTemplate {
             subject: DistinguishedName::new().cn("Alice Identity"),
             issuer: DistinguishedName::new().cn("Root"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::EndEntity,
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
             ..Default::default()
         };
-        let mut cert = issue_cert(&subject.public_key(), &issuer, &template).unwrap();
+        let mut cert = build_xdsa_cert(&subject.public_key(), &issuer, &template).unwrap();
         cert.tbs_certificate.subject_public_key_info.algorithm.oid =
             ObjectIdentifier::new_unwrap("1.2.3.4");
 
@@ -535,7 +606,7 @@ mod verify_tests {
         cert.signature = BitString::from_bytes(&issuer.sign(&tbs_der).to_bytes()).unwrap();
 
         let der = cert.to_der().unwrap();
-        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), &VerifyPolicy::default());
+        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Now);
         assert!(result.is_err());
     }
 
@@ -551,11 +622,14 @@ mod verify_tests {
         let template = CertificateTemplate {
             subject: DistinguishedName::new().cn("Alice Identity"),
             issuer: DistinguishedName::new().cn("Root"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::EndEntity,
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
             ..Default::default()
         };
-        let mut cert = issue_cert(&subject.public_key(), &issuer, &template).unwrap();
+        let mut cert = build_xdsa_cert(&subject.public_key(), &issuer, &template).unwrap();
         cert.tbs_certificate
             .subject_public_key_info
             .algorithm
@@ -565,7 +639,7 @@ mod verify_tests {
         cert.signature = BitString::from_bytes(&issuer.sign(&tbs_der).to_bytes()).unwrap();
 
         let der = cert.to_der().unwrap();
-        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), &VerifyPolicy::default());
+        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Now);
         assert!(result.is_err());
     }
 
@@ -581,11 +655,14 @@ mod verify_tests {
         let template = CertificateTemplate {
             subject: DistinguishedName::new().cn("Alice Identity"),
             issuer: DistinguishedName::new().cn("Root"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::EndEntity,
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
             ..Default::default()
         };
-        let mut cert = issue_cert(&subject.public_key(), &issuer, &template).unwrap();
+        let mut cert = build_xdsa_cert(&subject.public_key(), &issuer, &template).unwrap();
         let wrong = ObjectIdentifier::new_unwrap("1.2.3.4");
         cert.tbs_certificate.signature.oid = wrong;
         cert.signature_algorithm.oid = wrong;
@@ -594,7 +671,7 @@ mod verify_tests {
         cert.signature = BitString::from_bytes(&issuer.sign(&tbs_der).to_bytes()).unwrap();
 
         let der = cert.to_der().unwrap();
-        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), &VerifyPolicy::default());
+        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Now);
         assert!(result.is_err());
     }
 
@@ -610,17 +687,16 @@ mod verify_tests {
         let template = CertificateTemplate {
             subject: DistinguishedName::new().cn("Alice Identity"),
             issuer: DistinguishedName::new().cn("Root"),
-            validity: ValidityWindow::from_unix(now + 3600, now + 7200),
-            profile: CertificateProfile::EndEntity,
+            validity: ValidityWindow {
+                not_before: now + 3600,
+                not_after: now + 7200,
+            },
+            role: CertificateRole::Leaf,
             ..Default::default()
         };
 
         let der = issue_xdsa_cert_der(&subject.public_key(), &issuer, &template).unwrap();
-        let policy = VerifyPolicy {
-            validity_check: ValidityCheck::At(now),
-            ..Default::default()
-        };
-        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), &policy);
+        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::At(now));
         assert!(result.is_err());
     }
 
@@ -636,17 +712,16 @@ mod verify_tests {
         let template = CertificateTemplate {
             subject: DistinguishedName::new().cn("Alice Identity"),
             issuer: DistinguishedName::new().cn("Root"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::EndEntity,
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
             ..Default::default()
         };
 
         let der = issue_xdsa_cert_der(&subject.public_key(), &issuer, &template).unwrap();
-        let policy = VerifyPolicy {
-            validity_check: ValidityCheck::Disabled,
-            ..Default::default()
-        };
-        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), &policy);
+        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Disabled);
         assert!(result.is_ok());
     }
 
@@ -662,8 +737,11 @@ mod verify_tests {
         let template = CertificateTemplate {
             subject: DistinguishedName::new().cn("Alice Identity"),
             issuer: DistinguishedName::new().cn("Root"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::EndEntity,
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
             ext_key_usage: vec![
                 ObjectIdentifier::new_unwrap("2.5.29.37.0"),
                 ID_KP_SERVER_AUTH,
@@ -678,8 +756,7 @@ mod verify_tests {
         };
 
         let der = issue_xdsa_cert_der(&subject.public_key(), &issuer, &template).unwrap();
-        let cert =
-            verify_xdsa_cert_der(&der, &issuer.public_key(), &VerifyPolicy::default()).unwrap();
+        let cert = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Now).unwrap();
         assert!(
             cert.meta
                 .ext_key_usage
@@ -734,12 +811,15 @@ mod verify_tests {
         let template = CertificateTemplate {
             subject: DistinguishedName::new().cn("Alice Identity"),
             issuer: DistinguishedName::new().cn("Root"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::EndEntity,
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
             ..Default::default()
         };
 
-        let mut cert = issue_cert(&subject.public_key(), &issuer, &template).unwrap();
+        let mut cert = build_xdsa_cert(&subject.public_key(), &issuer, &template).unwrap();
         cert.tbs_certificate
             .extensions
             .as_mut()
@@ -750,10 +830,8 @@ mod verify_tests {
         cert.signature = BitString::from_bytes(&issuer.sign(&tbs_der).to_bytes()).unwrap();
 
         let der = cert.to_der().unwrap();
-        let parsed =
-            verify_xdsa_cert_der(&der, &issuer.public_key(), &VerifyPolicy::default()).unwrap();
-        assert!(!parsed.meta.is_ca);
-        assert_eq!(parsed.meta.path_len, None);
+        let parsed = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Now).unwrap();
+        assert!(matches!(parsed.meta.role, CertificateRole::Leaf));
     }
 
     #[test]
@@ -768,12 +846,15 @@ mod verify_tests {
         let template = CertificateTemplate {
             subject: DistinguishedName::new().cn("Alice Identity"),
             issuer: DistinguishedName::new().cn("Root"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::EndEntity,
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
             ..Default::default()
         };
 
-        let mut cert = issue_cert(&subject.public_key(), &issuer, &template).unwrap();
+        let mut cert = build_xdsa_cert(&subject.public_key(), &issuer, &template).unwrap();
         let mut patched = false;
         for ext in cert.tbs_certificate.extensions.as_mut().unwrap() {
             if ext.extn_id == ObjectIdentifier::new_unwrap("2.5.29.35") {
@@ -788,106 +869,7 @@ mod verify_tests {
         cert.signature = BitString::from_bytes(&issuer.sign(&tbs_der).to_bytes()).unwrap();
 
         let der = cert.to_der().unwrap();
-        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), &VerifyPolicy::default());
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_verify_rejects_missing_ski_and_aki_by_default() {
-        let subject = xdsa::SecretKey::generate();
-        let issuer = xdsa::SecretKey::generate();
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or(Duration::ZERO)
-            .as_secs();
-
-        let template = CertificateTemplate {
-            subject: DistinguishedName::new().cn("Alice Identity"),
-            issuer: DistinguishedName::new().cn("Root"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::EndEntity,
-            ..Default::default()
-        };
-
-        let mut cert = issue_cert(&subject.public_key(), &issuer, &template).unwrap();
-        cert.tbs_certificate
-            .extensions
-            .as_mut()
-            .unwrap()
-            .retain(|ext| {
-                ext.extn_id != ObjectIdentifier::new_unwrap("2.5.29.14")
-                    && ext.extn_id != ObjectIdentifier::new_unwrap("2.5.29.35")
-            });
-
-        let tbs_der = cert.tbs_certificate.to_der().unwrap();
-        cert.signature = BitString::from_bytes(&issuer.sign(&tbs_der).to_bytes()).unwrap();
-
-        let der = cert.to_der().unwrap();
-        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), &VerifyPolicy::default());
-        assert!(result.is_err());
-
-        let policy = VerifyPolicy {
-            require_subject_key_id: false,
-            require_authority_key_id: false,
-            ..Default::default()
-        };
-        let parsed = verify_xdsa_cert_der(&der, &issuer.public_key(), &policy).unwrap();
-        assert!(parsed.meta.subject_key_id.is_none());
-        assert!(parsed.meta.authority_key_id.is_none());
-    }
-
-    #[test]
-    fn test_verify_rejects_certificate_over_size_limit() {
-        let subject = xdsa::SecretKey::generate();
-        let issuer = xdsa::SecretKey::generate();
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or(Duration::ZERO)
-            .as_secs();
-
-        let template = CertificateTemplate {
-            subject: DistinguishedName::new().cn("Alice Identity"),
-            issuer: DistinguishedName::new().cn("Root"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::EndEntity,
-            ..Default::default()
-        };
-        let der = issue_xdsa_cert_der(&subject.public_key(), &issuer, &template).unwrap();
-        let policy = VerifyPolicy {
-            max_certificate_size: der.len() - 1,
-            ..Default::default()
-        };
-        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), &policy);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_verify_rejects_extension_value_over_limit() {
-        let subject = xdsa::SecretKey::generate();
-        let issuer = xdsa::SecretKey::generate();
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or(Duration::ZERO)
-            .as_secs();
-
-        let template = CertificateTemplate {
-            subject: DistinguishedName::new().cn("Alice Identity"),
-            issuer: DistinguishedName::new().cn("Root"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::EndEntity,
-            custom_extensions: vec![CustomExtension {
-                oid: private_enterprise_oid(62253, &[99]).unwrap(),
-                critical: false,
-                value_der: vec![0x04, 0x03, 1, 2, 3],
-            }],
-            ..Default::default()
-        };
-        let der = issue_xdsa_cert_der(&subject.public_key(), &issuer, &template).unwrap();
-        let policy = VerifyPolicy {
-            max_extension_value_size: 2,
-            ..Default::default()
-        };
-        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), &policy);
+        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Now);
         assert!(result.is_err());
     }
 
@@ -903,19 +885,22 @@ mod verify_tests {
         let template = CertificateTemplate {
             subject: DistinguishedName::new().cn("Alice Identity"),
             issuer: DistinguishedName::new().cn("Root"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::CertificateAuthority { path_len: Some(0) },
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Authority { path_len: Some(0) },
             key_usage: Some(KeyUsage(KeyUsages::DigitalSignature.into())),
             ..Default::default()
         };
 
         let der = issue_xdsa_cert_der(&subject.public_key(), &issuer, &template).unwrap();
-        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), &VerifyPolicy::default());
+        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Now);
         assert!(result.is_err());
     }
 
     #[test]
-    fn test_verify_handles_binary_subject_attribute_values() {
+    fn test_verify_rejects_binary_subject_attribute_values() {
         let subject = xdsa::SecretKey::generate();
         let issuer = xdsa::SecretKey::generate();
         let now = SystemTime::now()
@@ -926,11 +911,14 @@ mod verify_tests {
         let template = CertificateTemplate {
             subject: DistinguishedName::new().cn("Alice Identity"),
             issuer: DistinguishedName::new().cn("Root"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::EndEntity,
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
             ..Default::default()
         };
-        let mut cert = issue_cert(&subject.public_key(), &issuer, &template).unwrap();
+        let mut cert = build_xdsa_cert(&subject.public_key(), &issuer, &template).unwrap();
 
         let mut set = SetOfVec::new();
         set.insert(AttributeTypeAndValue {
@@ -944,13 +932,8 @@ mod verify_tests {
         cert.signature = BitString::from_bytes(&issuer.sign(&tbs_der).to_bytes()).unwrap();
 
         let der = cert.to_der().unwrap();
-        let parsed =
-            verify_xdsa_cert_der(&der, &issuer.public_key(), &VerifyPolicy::default()).unwrap();
-        assert_eq!(parsed.meta.subject.attrs.len(), 1);
-        assert!(matches!(
-            parsed.meta.subject.attrs[0].value,
-            NameValue::Bytes(_)
-        ));
+        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Now);
+        assert!(result.is_err());
     }
 
     #[test]
@@ -965,11 +948,14 @@ mod verify_tests {
         let template = CertificateTemplate {
             subject: DistinguishedName::new().cn("Alice Encryption"),
             issuer: DistinguishedName::new().cn("Root"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::EndEntity,
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
             ..Default::default()
         };
-        let mut cert = issue_cert(&subject.public_key(), &issuer, &template).unwrap();
+        let mut cert = build_xhpke_cert(&subject.public_key(), &issuer, &template).unwrap();
         cert.tbs_certificate.subject_public_key_info.algorithm.oid =
             ObjectIdentifier::new_unwrap("1.2.3.4");
 
@@ -977,7 +963,7 @@ mod verify_tests {
         cert.signature = BitString::from_bytes(&issuer.sign(&tbs_der).to_bytes()).unwrap();
 
         let der = cert.to_der().unwrap();
-        let result = verify_xhpke_cert_der(&der, &issuer.public_key(), &VerifyPolicy::default());
+        let result = verify_xhpke_cert_der(&der, &issuer.public_key(), ValidityCheck::Now);
         assert!(result.is_err());
     }
 
@@ -993,11 +979,14 @@ mod verify_tests {
         let template = CertificateTemplate {
             subject: DistinguishedName::new().cn("Alice Encryption"),
             issuer: DistinguishedName::new().cn("Root"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::EndEntity,
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
             ..Default::default()
         };
-        let mut cert = issue_cert(&subject.public_key(), &issuer, &template).unwrap();
+        let mut cert = build_xhpke_cert(&subject.public_key(), &issuer, &template).unwrap();
         cert.tbs_certificate
             .subject_public_key_info
             .algorithm
@@ -1007,7 +996,7 @@ mod verify_tests {
         cert.signature = BitString::from_bytes(&issuer.sign(&tbs_der).to_bytes()).unwrap();
 
         let der = cert.to_der().unwrap();
-        let result = verify_xhpke_cert_der(&der, &issuer.public_key(), &VerifyPolicy::default());
+        let result = verify_xhpke_cert_der(&der, &issuer.public_key(), ValidityCheck::Now);
         assert!(result.is_err());
     }
 
@@ -1024,8 +1013,11 @@ mod verify_tests {
         let issuer_template = CertificateTemplate {
             subject: DistinguishedName::new().cn("Issuer EE"),
             issuer: DistinguishedName::new().cn("Issuer EE"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::EndEntity,
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
             ..Default::default()
         };
         let issuer_cert_pem =
@@ -1033,25 +1025,25 @@ mod verify_tests {
         let issuer_cert = verify_xdsa_cert_pem(
             &issuer_cert_pem,
             &issuer_ee.public_key(),
-            &VerifyPolicy::default(),
+            ValidityCheck::Now,
         )
         .unwrap();
 
         let leaf_template = CertificateTemplate {
             subject: DistinguishedName::new().cn("Leaf HPKE"),
             issuer: DistinguishedName::new().cn("Issuer EE"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::EndEntity,
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
             ..Default::default()
         };
         let leaf_pem =
             issue_xhpke_cert_pem(&subject_ee.public_key(), &issuer_ee, &leaf_template).unwrap();
 
-        let result = verify_xhpke_cert_pem_with_issuer_cert(
-            &leaf_pem,
-            &issuer_cert,
-            &VerifyPolicy::default(),
-        );
+        let result =
+            verify_xhpke_cert_pem_with_issuer_cert(&leaf_pem, &issuer_cert, ValidityCheck::Now);
         assert!(result.is_err());
     }
 
@@ -1067,12 +1059,15 @@ mod verify_tests {
         let template = CertificateTemplate {
             subject: DistinguishedName::new().cn("Alice Identity"),
             issuer: DistinguishedName::new().cn("Root"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::EndEntity,
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
             ..Default::default()
         };
 
-        let mut cert = issue_cert(&subject.public_key(), &issuer, &template).unwrap();
+        let mut cert = build_xdsa_cert(&subject.public_key(), &issuer, &template).unwrap();
         for ext in cert.tbs_certificate.extensions.as_mut().unwrap() {
             if ext.extn_id == ObjectIdentifier::new_unwrap("2.5.29.19") {
                 let bc = BasicConstraints {
@@ -1088,7 +1083,7 @@ mod verify_tests {
         cert.signature = BitString::from_bytes(&issuer.sign(&tbs_der).to_bytes()).unwrap();
 
         let der = cert.to_der().unwrap();
-        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), &VerifyPolicy::default());
+        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Now);
         assert!(result.is_err());
     }
 
@@ -1104,34 +1099,33 @@ mod verify_tests {
         let issuer_template = CertificateTemplate {
             subject: DistinguishedName::new().cn("Issuer"),
             issuer: DistinguishedName::new().cn("Issuer"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::CertificateAuthority { path_len: Some(0) },
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Authority { path_len: Some(0) },
             ..Default::default()
         };
         let issuer_pem =
             issue_xdsa_cert_pem(&issuer_sk.public_key(), &issuer_sk, &issuer_template).unwrap();
-        let issuer_cert = verify_xdsa_cert_pem(
-            &issuer_pem,
-            &issuer_sk.public_key(),
-            &VerifyPolicy::default(),
-        )
-        .unwrap();
+        let issuer_cert =
+            verify_xdsa_cert_pem(&issuer_pem, &issuer_sk.public_key(), ValidityCheck::Now).unwrap();
 
         let child_template = CertificateTemplate {
             subject: DistinguishedName::new().cn("Child CA"),
             issuer: DistinguishedName::new().cn("Issuer"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::CertificateAuthority { path_len: Some(0) },
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Authority { path_len: Some(0) },
             ..Default::default()
         };
         let child_pem =
             issue_xdsa_cert_pem(&child_sk.public_key(), &issuer_sk, &child_template).unwrap();
 
-        let result = verify_xdsa_cert_pem_with_issuer_cert(
-            &child_pem,
-            &issuer_cert,
-            &VerifyPolicy::default(),
-        );
+        let result =
+            verify_xdsa_cert_pem_with_issuer_cert(&child_pem, &issuer_cert, ValidityCheck::Now);
         assert!(result.is_err());
     }
 
@@ -1147,34 +1141,33 @@ mod verify_tests {
         let issuer_template = CertificateTemplate {
             subject: DistinguishedName::new().cn("Issuer"),
             issuer: DistinguishedName::new().cn("Issuer"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::CertificateAuthority { path_len: Some(0) },
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Authority { path_len: Some(0) },
             ..Default::default()
         };
         let issuer_pem =
             issue_xdsa_cert_pem(&issuer_sk.public_key(), &issuer_sk, &issuer_template).unwrap();
-        let issuer_cert = verify_xdsa_cert_pem(
-            &issuer_pem,
-            &issuer_sk.public_key(),
-            &VerifyPolicy::default(),
-        )
-        .unwrap();
+        let issuer_cert =
+            verify_xdsa_cert_pem(&issuer_pem, &issuer_sk.public_key(), ValidityCheck::Now).unwrap();
 
         let child_template = CertificateTemplate {
             subject: DistinguishedName::new().cn("Child EE"),
             issuer: DistinguishedName::new().cn("Issuer"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::EndEntity,
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
             ..Default::default()
         };
         let child_pem =
             issue_xdsa_cert_pem(&child_sk.public_key(), &issuer_sk, &child_template).unwrap();
 
-        let result = verify_xdsa_cert_pem_with_issuer_cert(
-            &child_pem,
-            &issuer_cert,
-            &VerifyPolicy::default(),
-        );
+        let result =
+            verify_xdsa_cert_pem_with_issuer_cert(&child_pem, &issuer_cert, ValidityCheck::Now);
         assert!(result.is_ok());
     }
 
@@ -1190,78 +1183,34 @@ mod verify_tests {
         let issuer_template = CertificateTemplate {
             subject: DistinguishedName::new().cn("Issuer Subject"),
             issuer: DistinguishedName::new().cn("Issuer Subject"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::CertificateAuthority { path_len: Some(0) },
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Authority { path_len: Some(0) },
             ..Default::default()
         };
         let issuer_pem =
             issue_xdsa_cert_pem(&issuer_sk.public_key(), &issuer_sk, &issuer_template).unwrap();
-        let issuer_cert = verify_xdsa_cert_pem(
-            &issuer_pem,
-            &issuer_sk.public_key(),
-            &VerifyPolicy::default(),
-        )
-        .unwrap();
+        let issuer_cert =
+            verify_xdsa_cert_pem(&issuer_pem, &issuer_sk.public_key(), ValidityCheck::Now).unwrap();
 
         let child_template = CertificateTemplate {
             subject: DistinguishedName::new().cn("Child EE"),
             issuer: DistinguishedName::new().cn("Fake Issuer Name"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::EndEntity,
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
             ..Default::default()
         };
         let child_pem =
             issue_xdsa_cert_pem(&child_sk.public_key(), &issuer_sk, &child_template).unwrap();
 
-        let result = verify_xdsa_cert_pem_with_issuer_cert(
-            &child_pem,
-            &issuer_cert,
-            &VerifyPolicy::default(),
-        );
+        let result =
+            verify_xdsa_cert_pem_with_issuer_cert(&child_pem, &issuer_cert, ValidityCheck::Now);
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_verify_with_issuer_cert_can_disable_dn_name_chaining() {
-        let issuer_sk = xdsa::SecretKey::generate();
-        let child_sk = xdsa::SecretKey::generate();
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or(Duration::ZERO)
-            .as_secs();
-
-        let issuer_template = CertificateTemplate {
-            subject: DistinguishedName::new().cn("Issuer Subject"),
-            issuer: DistinguishedName::new().cn("Issuer Subject"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::CertificateAuthority { path_len: Some(0) },
-            ..Default::default()
-        };
-        let issuer_pem =
-            issue_xdsa_cert_pem(&issuer_sk.public_key(), &issuer_sk, &issuer_template).unwrap();
-        let issuer_cert = verify_xdsa_cert_pem(
-            &issuer_pem,
-            &issuer_sk.public_key(),
-            &VerifyPolicy::default(),
-        )
-        .unwrap();
-
-        let child_template = CertificateTemplate {
-            subject: DistinguishedName::new().cn("Child EE"),
-            issuer: DistinguishedName::new().cn("Fake Issuer Name"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::EndEntity,
-            ..Default::default()
-        };
-        let child_pem =
-            issue_xdsa_cert_pem(&child_sk.public_key(), &issuer_sk, &child_template).unwrap();
-
-        let policy = VerifyPolicy {
-            require_name_chaining: false,
-            ..Default::default()
-        };
-        let result = verify_xdsa_cert_pem_with_issuer_cert(&child_pem, &issuer_cert, &policy);
-        assert!(result.is_ok());
     }
 
     #[test]
@@ -1276,12 +1225,15 @@ mod verify_tests {
         let template = CertificateTemplate {
             subject: DistinguishedName::new().cn("CA Subject"),
             issuer: DistinguishedName::new().cn("CA Subject"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::CertificateAuthority { path_len: Some(0) },
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Authority { path_len: Some(0) },
             ..Default::default()
         };
 
-        let mut cert = issue_cert(&subject.public_key(), &issuer, &template).unwrap();
+        let mut cert = build_xdsa_cert(&subject.public_key(), &issuer, &template).unwrap();
         for ext in cert.tbs_certificate.extensions.as_mut().unwrap() {
             if ext.extn_id == ObjectIdentifier::new_unwrap("2.5.29.19") {
                 ext.critical = false;
@@ -1292,7 +1244,7 @@ mod verify_tests {
         cert.signature = BitString::from_bytes(&issuer.sign(&tbs_der).to_bytes()).unwrap();
 
         let der = cert.to_der().unwrap();
-        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), &VerifyPolicy::default());
+        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Now);
         assert!(result.is_err());
     }
 
@@ -1308,12 +1260,15 @@ mod verify_tests {
         let template = CertificateTemplate {
             subject: DistinguishedName::new().cn("EE Subject"),
             issuer: DistinguishedName::new().cn("Issuer"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::EndEntity,
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
             ..Default::default()
         };
 
-        let mut cert = issue_cert(&subject.public_key(), &issuer, &template).unwrap();
+        let mut cert = build_xdsa_cert(&subject.public_key(), &issuer, &template).unwrap();
         for ext in cert.tbs_certificate.extensions.as_mut().unwrap() {
             if ext.extn_id == ObjectIdentifier::new_unwrap("2.5.29.15") {
                 ext.critical = false;
@@ -1324,7 +1279,7 @@ mod verify_tests {
         cert.signature = BitString::from_bytes(&issuer.sign(&tbs_der).to_bytes()).unwrap();
 
         let der = cert.to_der().unwrap();
-        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), &VerifyPolicy::default());
+        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Now);
         assert!(result.is_err());
     }
 
@@ -1340,19 +1295,22 @@ mod verify_tests {
         let template = CertificateTemplate {
             subject: DistinguishedName::new().cn("EE Subject"),
             issuer: DistinguishedName::new().cn("Issuer"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::EndEntity,
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
             ..Default::default()
         };
 
-        let mut cert = issue_cert(&subject.public_key(), &issuer, &template).unwrap();
+        let mut cert = build_xdsa_cert(&subject.public_key(), &issuer, &template).unwrap();
         cert.tbs_certificate.subject_unique_id = Some(BitString::from_bytes(&[0x01]).unwrap());
 
         let tbs_der = cert.tbs_certificate.to_der().unwrap();
         cert.signature = BitString::from_bytes(&issuer.sign(&tbs_der).to_bytes()).unwrap();
 
         let der = cert.to_der().unwrap();
-        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), &VerifyPolicy::default());
+        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Now);
         assert!(result.is_err());
     }
 
@@ -1368,19 +1326,22 @@ mod verify_tests {
         let template = CertificateTemplate {
             subject: DistinguishedName::new().cn("EE Subject"),
             issuer: DistinguishedName::new().cn("Issuer"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::EndEntity,
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
             ..Default::default()
         };
 
-        let mut cert = issue_cert(&subject.public_key(), &issuer, &template).unwrap();
+        let mut cert = build_xdsa_cert(&subject.public_key(), &issuer, &template).unwrap();
         cert.tbs_certificate.issuer_unique_id = Some(BitString::from_bytes(&[0x01]).unwrap());
 
         let tbs_der = cert.tbs_certificate.to_der().unwrap();
         cert.signature = BitString::from_bytes(&issuer.sign(&tbs_der).to_bytes()).unwrap();
 
         let der = cert.to_der().unwrap();
-        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), &VerifyPolicy::default());
+        let result = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Now);
         assert!(result.is_err());
     }
 }

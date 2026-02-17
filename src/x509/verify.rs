@@ -5,8 +5,8 @@
 // license that can be found in the LICENSE file.
 
 use super::{
-    CertificateMetadata, CustomExtension, DistinguishedName, Error, NameAttribute, NameValue,
-    Result, ValidityWindow, VerifiedCertificate, VerifyPolicy, key_identifier,
+    CertificateMetadata, CertificateRole, CustomExtension, DistinguishedName, Error, NameAttribute,
+    Result, ValidityCheck, ValidityWindow, VerifiedCertificate, key_identifier,
 };
 #[cfg(feature = "xhpke")]
 use crate::xhpke;
@@ -18,19 +18,19 @@ use x509_parser::extensions::ParsedExtension;
 
 /// Verifies an xDSA cert from DER and returns key + metadata.
 ///
-/// Enforces signature validity, policy bounds, SKI/AKI bindings, and xDSA
-/// key usage/profile constraints.
+/// Enforces signature validity, SKI/AKI bindings, and xDSA
+/// key usage/role constraints.
 pub fn verify_xdsa_cert_der(
     der: &[u8],
     issuer: &xdsa::PublicKey,
-    policy: &VerifyPolicy,
+    validity: ValidityCheck,
 ) -> Result<VerifiedCertificate<xdsa::PublicKey>> {
-    let cert = parse_and_verify_cert(der, issuer, policy)?;
+    let cert = parse_and_verify_cert(der, issuer, validity)?;
     validate_subject_public_key_algorithm(&cert, xdsa::OID, "xDSA")?;
     let key_bytes = subject_public_key_bytes::<{ xdsa::PUBLIC_KEY_SIZE }>(&cert)?;
 
-    let meta = extract_meta(&cert, policy)?;
-    validate_key_identifier_bindings(&meta, &key_bytes, &issuer.to_bytes(), policy)?;
+    let meta = extract_meta(&cert)?;
+    validate_key_identifier_bindings(&meta, &key_bytes, &issuer.to_bytes())?;
     validate_key_usage_for_xdsa(&meta)?;
 
     Ok(VerifiedCertificate {
@@ -45,53 +45,53 @@ pub fn verify_xdsa_cert_der(
 pub fn verify_xdsa_cert_pem(
     pem_data: &str,
     issuer: &xdsa::PublicKey,
-    policy: &VerifyPolicy,
+    validity: ValidityCheck,
 ) -> Result<VerifiedCertificate<xdsa::PublicKey>> {
     let der = decode_certificate_pem(pem_data)?;
-    verify_xdsa_cert_der(&der, issuer, policy)
+    verify_xdsa_cert_der(&der, issuer, validity)
 }
 
 /// Verifies an xDSA cert from DER using an issuer certificate and enforces
-/// issuer authorization for chaining (CA profile + CA key usage).
+/// issuer authorization for chaining (CA role + CA key usage).
 pub fn verify_xdsa_cert_der_with_issuer_cert(
     der: &[u8],
     issuer_cert: &VerifiedCertificate<xdsa::PublicKey>,
-    policy: &VerifyPolicy,
+    validity: ValidityCheck,
 ) -> Result<VerifiedCertificate<xdsa::PublicKey>> {
-    let cert = verify_xdsa_cert_der(der, &issuer_cert.public_key, policy)?;
-    enforce_issuer_chaining(cert, issuer_cert, policy)
+    let cert = verify_xdsa_cert_der(der, &issuer_cert.public_key, validity)?;
+    enforce_issuer_chaining(cert, issuer_cert)
 }
 
 /// Verifies an xDSA cert from PEM using an issuer certificate and enforces
-/// issuer authorization for chaining (CA profile + CA key usage).
+/// issuer authorization for chaining (CA role + CA key usage).
 pub fn verify_xdsa_cert_pem_with_issuer_cert(
     pem_data: &str,
     issuer_cert: &VerifiedCertificate<xdsa::PublicKey>,
-    policy: &VerifyPolicy,
+    validity: ValidityCheck,
 ) -> Result<VerifiedCertificate<xdsa::PublicKey>> {
-    let cert = verify_xdsa_cert_pem(pem_data, &issuer_cert.public_key, policy)?;
-    enforce_issuer_chaining(cert, issuer_cert, policy)
+    let cert = verify_xdsa_cert_pem(pem_data, &issuer_cert.public_key, validity)?;
+    enforce_issuer_chaining(cert, issuer_cert)
 }
 
 /// Verifies an xHPKE cert from DER and returns key + metadata.
 ///
-/// Enforces signature validity, policy bounds, SKI/AKI bindings, and xHPKE
-/// end-entity key usage/profile constraints.
+/// Enforces signature validity, SKI/AKI bindings, and xHPKE
+/// end-entity key usage/role constraints.
 #[cfg(feature = "xhpke")]
 pub fn verify_xhpke_cert_der(
     der: &[u8],
     issuer: &xdsa::PublicKey,
-    policy: &VerifyPolicy,
+    validity: ValidityCheck,
 ) -> Result<VerifiedCertificate<xhpke::PublicKey>> {
-    let cert = parse_and_verify_cert(der, issuer, policy)?;
+    let cert = parse_and_verify_cert(der, issuer, validity)?;
     validate_subject_public_key_algorithm(&cert, xhpke::OID, "xHPKE (X-Wing)")?;
     let key_bytes = subject_public_key_bytes::<{ xhpke::PUBLIC_KEY_SIZE }>(&cert)?;
 
-    let meta = extract_meta(&cert, policy)?;
-    if meta.is_ca {
-        return Err(Error::XhpkeCertificateCannotBeCa);
+    let meta = extract_meta(&cert)?;
+    if matches!(meta.role, CertificateRole::Authority { .. }) {
+        return Err(Error::XhpkeMustBeEndEntity);
     }
-    validate_key_identifier_bindings(&meta, &key_bytes, &issuer.to_bytes(), policy)?;
+    validate_key_identifier_bindings(&meta, &key_bytes, &issuer.to_bytes())?;
     validate_key_usage_for_xhpke(&meta)?;
 
     Ok(VerifiedCertificate {
@@ -107,34 +107,34 @@ pub fn verify_xhpke_cert_der(
 pub fn verify_xhpke_cert_pem(
     pem_data: &str,
     issuer: &xdsa::PublicKey,
-    policy: &VerifyPolicy,
+    validity: ValidityCheck,
 ) -> Result<VerifiedCertificate<xhpke::PublicKey>> {
     let der = decode_certificate_pem(pem_data)?;
-    verify_xhpke_cert_der(&der, issuer, policy)
+    verify_xhpke_cert_der(&der, issuer, validity)
 }
 
 /// Verifies an xHPKE cert from DER using an issuer certificate and enforces
-/// issuer authorization for chaining (CA profile + CA key usage).
+/// issuer authorization for chaining (CA role + CA key usage).
 #[cfg(feature = "xhpke")]
 pub fn verify_xhpke_cert_der_with_issuer_cert(
     der: &[u8],
     issuer_cert: &VerifiedCertificate<xdsa::PublicKey>,
-    policy: &VerifyPolicy,
+    validity: ValidityCheck,
 ) -> Result<VerifiedCertificate<xhpke::PublicKey>> {
-    let cert = verify_xhpke_cert_der(der, &issuer_cert.public_key, policy)?;
-    enforce_issuer_chaining(cert, issuer_cert, policy)
+    let cert = verify_xhpke_cert_der(der, &issuer_cert.public_key, validity)?;
+    enforce_issuer_chaining(cert, issuer_cert)
 }
 
 /// Verifies an xHPKE cert from PEM using an issuer certificate and enforces
-/// issuer authorization for chaining (CA profile + CA key usage).
+/// issuer authorization for chaining (CA role + CA key usage).
 #[cfg(feature = "xhpke")]
 pub fn verify_xhpke_cert_pem_with_issuer_cert(
     pem_data: &str,
     issuer_cert: &VerifiedCertificate<xdsa::PublicKey>,
-    policy: &VerifyPolicy,
+    validity: ValidityCheck,
 ) -> Result<VerifiedCertificate<xhpke::PublicKey>> {
-    let cert = verify_xhpke_cert_pem(pem_data, &issuer_cert.public_key, policy)?;
-    enforce_issuer_chaining(cert, issuer_cert, policy)
+    let cert = verify_xhpke_cert_pem(pem_data, &issuer_cert.public_key, validity)?;
+    enforce_issuer_chaining(cert, issuer_cert)
 }
 
 fn decode_certificate_pem(pem_data: &str) -> Result<Vec<u8>> {
@@ -149,14 +149,13 @@ fn decode_certificate_pem(pem_data: &str) -> Result<Vec<u8>> {
 fn parse_and_verify_cert<'a>(
     der: &'a [u8],
     issuer: &xdsa::PublicKey,
-    policy: &VerifyPolicy,
+    validity: ValidityCheck,
 ) -> Result<x509_parser::certificate::X509Certificate<'a>> {
-    validate_der_size(der, policy)?;
     let (rem, cert) = x509_parser::parse_x509_certificate(der).map_err(|e| Error::X509Parse {
         details: e.to_string(),
     })?;
     ensure_no_trailing_der(rem)?;
-    verify_signature_and_policy(&cert, issuer, policy)?;
+    verify_signature_and_validity(&cert, issuer, validity)?;
     Ok(cert)
 }
 
@@ -174,8 +173,8 @@ fn validate_subject_public_key_algorithm(
         .to_id_string()
         != expected_oid.to_string()
     {
-        return Err(Error::SubjectAlgorithmMismatch {
-            algorithm: algorithm_name,
+        return Err(Error::InvalidSubjectAlgorithm {
+            details: format!("expected {algorithm_name}"),
         });
     }
     if cert
@@ -185,8 +184,8 @@ fn validate_subject_public_key_algorithm(
         .parameters
         .is_some()
     {
-        return Err(Error::SubjectAlgorithmParametersPresent {
-            algorithm: algorithm_name,
+        return Err(Error::InvalidSubjectAlgorithm {
+            details: format!("{algorithm_name} parameters must be absent"),
         });
     }
     Ok(())
@@ -209,18 +208,17 @@ fn subject_public_key_bytes<const N: usize>(
 fn enforce_issuer_chaining<K>(
     cert: VerifiedCertificate<K>,
     issuer_cert: &VerifiedCertificate<xdsa::PublicKey>,
-    policy: &VerifyPolicy,
 ) -> Result<VerifiedCertificate<K>> {
-    validate_issuer_authority(&issuer_cert.meta, cert.meta.is_ca)?;
-    validate_name_chaining(&cert.meta, &issuer_cert.meta, policy)?;
+    validate_issuer_authority(&issuer_cert.meta, &cert.meta.role)?;
+    validate_name_chaining(&cert.meta, &issuer_cert.meta)?;
     Ok(cert)
 }
 
-/// Performs signature-level and validity-window policy checks.
-fn verify_signature_and_policy(
+/// Performs signature-level and validity-window checks.
+fn verify_signature_and_validity(
     cert: &x509_parser::certificate::X509Certificate,
     issuer: &xdsa::PublicKey,
-    policy: &VerifyPolicy,
+    validity: ValidityCheck,
 ) -> Result<()> {
     if cert.tbs_certificate.version != x509_parser::x509::X509Version::V3 {
         return Err(Error::UnsupportedCertificateVersion);
@@ -237,12 +235,16 @@ fn verify_signature_and_policy(
     let tbs_sig_alg = cert.tbs_certificate.signature.algorithm.to_id_string();
     let expected_sig_alg = xdsa::OID.to_string();
     if outer_sig_alg != expected_sig_alg || tbs_sig_alg != expected_sig_alg {
-        return Err(Error::SignatureAlgorithmMismatch);
+        return Err(Error::InvalidSignatureAlgorithm {
+            details: "expected xDSA",
+        });
     }
     if cert.signature_algorithm.parameters.is_some()
         || cert.tbs_certificate.signature.parameters.is_some()
     {
-        return Err(Error::SignatureAlgorithmParametersPresent);
+        return Err(Error::InvalidSignatureAlgorithm {
+            details: "parameters must be absent",
+        });
     }
     if cert.tbs_certificate.issuer_uid.is_some() || cert.tbs_certificate.subject_uid.is_some() {
         return Err(Error::UniqueIdsNotAllowed);
@@ -259,7 +261,7 @@ fn verify_signature_and_policy(
     let sig = xdsa::Signature::from_bytes(&sig_bytes);
     issuer.verify(tbs, &sig)?;
 
-    if let Some(now) = policy.validity_timestamp()
+    if let Some(now) = validity.timestamp()
         && (now < not_before || now > not_after)
     {
         return Err(Error::InvalidAtRequestedTime);
@@ -267,39 +269,35 @@ fn verify_signature_and_policy(
     Ok(())
 }
 
-/// Extracts parsed metadata while enforcing policy size/criticality constraints.
-fn extract_meta(
-    cert: &x509_parser::certificate::X509Certificate,
-    policy: &VerifyPolicy,
-) -> Result<CertificateMetadata> {
+/// Extracts parsed metadata while enforcing criticality constraints.
+fn extract_meta(cert: &x509_parser::certificate::X509Certificate) -> Result<CertificateMetadata> {
     let serial = cert.tbs_certificate.raw_serial();
-    if serial.len() > policy.max_serial_length {
-        return Err(Error::SerialTooLong);
-    }
     validate_serial_encoding(serial)?;
 
     let basic_constraints =
         cert.tbs_certificate
             .basic_constraints()
-            .map_err(|e| Error::BasicConstraintsParse {
-                details: e.to_string(),
+            .map_err(|e| Error::ExtensionParseFailed {
+                details: format!("basicConstraints: {e}"),
             })?;
-    let (is_ca, path_len) = match basic_constraints {
-        Some(ext) => (
-            ext.value.ca,
-            convert_path_len(ext.value.path_len_constraint)?,
-        ),
-        None => (false, None),
+    let role = match basic_constraints {
+        Some(ext) if ext.value.ca => {
+            let path_len = convert_path_len(ext.value.path_len_constraint)?;
+            CertificateRole::Authority { path_len }
+        }
+        Some(ext) if ext.value.path_len_constraint.is_some() => {
+            return Err(Error::InvalidPathLen {
+                details: "requires ca=true",
+            });
+        }
+        _ => CertificateRole::Leaf,
     };
-    if !is_ca && path_len.is_some() {
-        return Err(Error::PathLenRequiresCa);
-    }
 
     let key_usage = cert
         .tbs_certificate
         .key_usage()
-        .map_err(|e| Error::KeyUsageParse {
-            details: e.to_string(),
+        .map_err(|e| Error::ExtensionParseFailed {
+            details: format!("keyUsage: {e}"),
         })?
         .map(|ku| parse_key_usage_flags(ku.value.flags))
         .transpose()?;
@@ -308,8 +306,8 @@ fn extract_meta(
     if let Some(eku) =
         cert.tbs_certificate
             .extended_key_usage()
-            .map_err(|e| Error::ExtendedKeyUsageParse {
-                details: e.to_string(),
+            .map_err(|e| Error::ExtensionParseFailed {
+                details: format!("extendedKeyUsage: {e}"),
             })?
     {
         if eku.value.any {
@@ -340,14 +338,11 @@ fn extract_meta(
 
     let mut subject_key_id = None;
     let mut authority_key_id = None;
-    let mut custom_extensions = Vec::new();
+    let mut extensions = Vec::new();
     let mut extension_oids = HashSet::new();
     let mut basic_constraints_critical = None;
     let mut key_usage_critical = None;
     for ext in cert.tbs_certificate.extensions() {
-        if ext.value.len() > policy.max_extension_value_size {
-            return Err(Error::ExtensionValueTooLarge);
-        }
         let oid = ext.oid.to_id_string();
         if !extension_oids.insert(oid.clone()) {
             return Err(Error::DuplicateCertificateExtension { oid });
@@ -374,47 +369,56 @@ fn extract_meta(
                         oid: ext.oid.to_id_string(),
                     });
                 }
-                custom_extensions.push(CustomExtension {
+                extensions.push(CustomExtension {
                     oid: ObjectIdentifier::new(ext.oid.to_id_string().as_str())?,
                     critical: ext.critical,
-                    value_der: ext.value.to_vec(),
+                    value: ext.value.to_vec(),
                 });
-                if custom_extensions.len() > policy.max_custom_extensions {
-                    return Err(Error::TooManyCustomExtensions);
-                }
             }
         }
     }
 
-    if is_ca && basic_constraints_critical != Some(true) {
-        return Err(Error::BasicConstraintsMustBeCritical);
+    if matches!(role, CertificateRole::Authority { .. }) && basic_constraints_critical != Some(true)
+    {
+        return Err(Error::ExtensionMustBeCritical {
+            extension: "basicConstraints",
+        });
     }
     if key_usage_critical != Some(true) {
-        return Err(Error::KeyUsageMustBeCritical);
+        return Err(Error::ExtensionMustBeCritical {
+            extension: "keyUsage",
+        });
     }
 
     Ok(CertificateMetadata {
         serial: serial.to_vec(),
-        subject: parse_name(&cert.tbs_certificate.subject, policy)?,
-        issuer: parse_name(&cert.tbs_certificate.issuer, policy)?,
+        subject: parse_name(&cert.tbs_certificate.subject)?,
+        issuer: parse_name(&cert.tbs_certificate.issuer)?,
         validity: ValidityWindow {
             not_before: unix_ts_to_u64(cert.tbs_certificate.validity.not_before.timestamp())?,
             not_after: unix_ts_to_u64(cert.tbs_certificate.validity.not_after.timestamp())?,
         },
-        is_ca,
-        path_len,
-        key_usage,
+        role,
+        key_usage: key_usage.ok_or(Error::ExtensionParseFailed {
+            details: "keyUsage extension is required".to_string(),
+        })?,
         ext_key_usage,
-        subject_key_id,
-        authority_key_id,
-        custom_extensions,
+        subject_key_id: subject_key_id.ok_or(Error::InvalidKeyIdentifier {
+            details: "missing subjectKeyIdentifier",
+        })?,
+        authority_key_id: authority_key_id.ok_or(Error::InvalidKeyIdentifier {
+            details: "missing authorityKeyIdentifier",
+        })?,
+        extensions,
     })
 }
 
 /// Converts parsed pathLenConstraint into storage type used by this module.
 pub(super) fn convert_path_len(path_len: Option<u32>) -> Result<Option<u8>> {
     match path_len {
-        Some(v) if v > u8::MAX as u32 => Err(Error::PathLenTooLarge),
+        Some(v) if v > u8::MAX as u32 => Err(Error::InvalidPathLen {
+            details: "exceeds u8::MAX",
+        }),
         Some(v) => Ok(Some(v as u8)),
         None => Ok(None),
     }
@@ -428,16 +432,24 @@ pub(super) fn unix_ts_to_u64(ts: i64) -> Result<u64> {
 /// Validates DER INTEGER canonicality constraints for serial numbers.
 pub(super) fn validate_serial_encoding(serial: &[u8]) -> Result<()> {
     if serial.is_empty() {
-        return Err(Error::EmptySerial);
+        return Err(Error::InvalidSerial {
+            details: "must not be empty",
+        });
     }
     if serial[0] & 0x80 != 0 {
-        return Err(Error::NegativeSerial);
+        return Err(Error::InvalidSerial {
+            details: "must be positive",
+        });
     }
     if serial.len() > 1 && serial[0] == 0x00 && serial[1] & 0x80 == 0 {
-        return Err(Error::NonCanonicalSerial);
+        return Err(Error::InvalidSerial {
+            details: "non-canonical DER INTEGER encoding",
+        });
     }
     if serial.iter().all(|b| *b == 0) {
-        return Err(Error::ZeroSerial);
+        return Err(Error::InvalidSerial {
+            details: "must be non-zero",
+        });
     }
     Ok(())
 }
@@ -449,18 +461,11 @@ fn ensure_no_trailing_der(rem: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn validate_der_size(der: &[u8], policy: &VerifyPolicy) -> Result<()> {
-    if der.len() > policy.max_certificate_size {
-        return Err(Error::CertificateTooLarge);
-    }
-    Ok(())
-}
-
 fn parse_key_usage_flags(flags: u16) -> Result<KeyUsage> {
     const ALL_KNOWN_BITS: u16 = (1 << 9) - 1;
     if flags & !ALL_KNOWN_BITS != 0 {
-        return Err(Error::KeyUsageParse {
-            details: "invalid keyUsage flags: unknown bits set".to_string(),
+        return Err(Error::ExtensionParseFailed {
+            details: "keyUsage: unknown bits set".to_string(),
         });
     }
     let mut parsed = der::flagset::FlagSet::<KeyUsages>::default();
@@ -494,72 +499,82 @@ fn parse_key_usage_flags(flags: u16) -> Result<KeyUsage> {
     Ok(KeyUsage(parsed))
 }
 
-/// Verifies SKI/AKI presence requirements and key-binding matches.
+/// Verifies SKI/AKI presence and key-binding matches.
 fn validate_key_identifier_bindings(
     meta: &CertificateMetadata,
     subject_public_key: &[u8],
     issuer_public_key: &[u8],
-    policy: &VerifyPolicy,
 ) -> Result<()> {
-    if policy.require_subject_key_id && meta.subject_key_id.is_none() {
-        return Err(Error::MissingSubjectKeyId);
+    let expected_ski = key_identifier(subject_public_key);
+    if meta.subject_key_id != expected_ski {
+        return Err(Error::InvalidKeyIdentifier {
+            details: "SKI does not match subject public key",
+        });
     }
-    if policy.require_authority_key_id && meta.authority_key_id.is_none() {
-        return Err(Error::MissingAuthorityKeyId);
-    }
-    if let Some(ski) = &meta.subject_key_id {
-        let expected = key_identifier(subject_public_key);
-        if *ski != expected {
-            return Err(Error::SubjectKeyIdMismatch);
-        }
-    }
-    if let Some(aki) = &meta.authority_key_id {
-        let expected = key_identifier(issuer_public_key);
-        if *aki != expected {
-            return Err(Error::AuthorityKeyIdMismatch);
-        }
+    let expected_aki = key_identifier(issuer_public_key);
+    if meta.authority_key_id != expected_aki {
+        return Err(Error::InvalidKeyIdentifier {
+            details: "AKI does not match issuer public key",
+        });
     }
     Ok(())
 }
 
 /// Enforces strict keyUsage profile for xDSA certificates.
 fn validate_key_usage_for_xdsa(meta: &CertificateMetadata) -> Result<()> {
-    let usage = meta.key_usage.ok_or(Error::MissingXdsaKeyUsage)?;
     let ca_usage = KeyUsages::KeyCertSign | KeyUsages::CRLSign;
     let ee_usage: der::flagset::FlagSet<KeyUsages> = KeyUsages::DigitalSignature.into();
-    if meta.is_ca {
-        if usage.0 != ca_usage {
-            return Err(Error::InvalidXdsaCaKeyUsage);
+    match meta.role {
+        CertificateRole::Authority { .. } => {
+            if meta.key_usage.0 != ca_usage {
+                return Err(Error::InvalidKeyUsage {
+                    details: "xDSA CA requires keyCertSign|cRLSign",
+                });
+            }
         }
-    } else if usage.0 != ee_usage {
-        return Err(Error::InvalidXdsaEeKeyUsage);
+        CertificateRole::Leaf => {
+            if meta.key_usage.0 != ee_usage {
+                return Err(Error::InvalidKeyUsage {
+                    details: "xDSA end-entity requires digitalSignature",
+                });
+            }
+        }
     }
     Ok(())
 }
 
-/// Ensures an issuer cert is allowed to issue the target child profile.
-fn validate_issuer_authority(meta: &CertificateMetadata, child_is_ca: bool) -> Result<()> {
-    if !meta.is_ca {
-        return Err(Error::IssuerNotCa);
-    }
-    let usage = meta.key_usage.ok_or(Error::MissingIssuerKeyUsage)?;
-    if usage.0 != (KeyUsages::KeyCertSign | KeyUsages::CRLSign) {
-        return Err(Error::InvalidIssuerKeyUsage);
-    }
-    if child_is_ca && meta.path_len == Some(0) {
-        return Err(Error::IssuerPathLenForbidsCa);
-    }
-    Ok(())
-}
-
-/// Enforces issuer/subject DN chaining when required by policy.
-fn validate_name_chaining(
-    child: &CertificateMetadata,
-    issuer: &CertificateMetadata,
-    policy: &VerifyPolicy,
+/// Ensures an issuer cert is allowed to issue the target child role.
+fn validate_issuer_authority(
+    meta: &CertificateMetadata,
+    child_role: &CertificateRole,
 ) -> Result<()> {
-    if policy.require_name_chaining && child.issuer != issuer.subject {
-        return Err(Error::IssuerNameMismatch);
+    let path_len = match &meta.role {
+        CertificateRole::Authority { path_len } => path_len,
+        CertificateRole::Leaf => {
+            return Err(Error::InvalidIssuer {
+                details: "not a CA",
+            });
+        }
+    };
+    if meta.key_usage.0 != (KeyUsages::KeyCertSign | KeyUsages::CRLSign) {
+        return Err(Error::InvalidKeyUsage {
+            details: "issuer requires keyCertSign|cRLSign",
+        });
+    }
+    if matches!(child_role, CertificateRole::Authority { .. }) && *path_len == Some(0) {
+        return Err(Error::InvalidIssuer {
+            details: "pathLenConstraint forbids CA certificates",
+        });
+    }
+    Ok(())
+}
+
+/// Enforces issuer/subject DN chaining.
+fn validate_name_chaining(child: &CertificateMetadata, issuer: &CertificateMetadata) -> Result<()> {
+    if child.issuer != issuer.subject {
+        return Err(Error::InvalidIssuer {
+            details: "issuer DN does not match",
+        });
     }
     Ok(())
 }
@@ -567,31 +582,23 @@ fn validate_name_chaining(
 #[cfg(feature = "xhpke")]
 /// Enforces strict keyUsage profile for xHPKE certificates.
 fn validate_key_usage_for_xhpke(meta: &CertificateMetadata) -> Result<()> {
-    let usage = meta.key_usage.ok_or(Error::MissingXhpkeKeyUsage)?;
     let ee_usage: der::flagset::FlagSet<KeyUsages> = KeyUsages::KeyAgreement.into();
-    if usage.0 != ee_usage {
-        return Err(Error::InvalidXhpkeKeyUsage);
+    if meta.key_usage.0 != ee_usage {
+        return Err(Error::InvalidKeyUsage {
+            details: "xHPKE requires keyAgreement",
+        });
     }
     Ok(())
 }
 
-/// Parses an X.509 name into public metadata format with policy limits.
-fn parse_name(
-    name: &x509_parser::x509::X509Name<'_>,
-    policy: &VerifyPolicy,
-) -> Result<DistinguishedName> {
+/// Parses an X.509 name into public metadata format.
+fn parse_name(name: &x509_parser::x509::X509Name<'_>) -> Result<DistinguishedName> {
     let mut attrs = Vec::new();
     for attr in name.iter_attributes() {
-        if attrs.len() >= policy.max_dn_attributes {
-            return Err(Error::TooManyDnAttributes);
-        }
-        if attr.as_slice().len() > policy.max_dn_attr_value_size {
-            return Err(Error::DnAttributeValueTooLarge);
-        }
-        let value = match attr.as_str() {
-            Ok(text) => NameValue::Utf8(text.to_string()),
-            Err(_) => NameValue::Bytes(attr.as_slice().to_vec()),
-        };
+        let value = attr
+            .as_str()
+            .map_err(|_| Error::NonUtf8DnAttribute)?
+            .to_string();
         attrs.push(NameAttribute {
             oid: ObjectIdentifier::new(attr.attr_type().to_id_string().as_str())?,
             value,

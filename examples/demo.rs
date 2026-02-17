@@ -46,8 +46,11 @@ fn main() {
     let alice_xdsa_template = x509::CertificateTemplate {
         subject: x509::DistinguishedName::new().cn("Alice Identity"),
         issuer: x509::DistinguishedName::new().cn("Root"),
-        validity: x509::ValidityWindow::from_unix(now, end),
-        profile: x509::CertificateProfile::CertificateAuthority { path_len: Some(0) },
+        validity: x509::ValidityWindow {
+            not_before: now,
+            not_after: end,
+        },
+        role: x509::CertificateRole::Authority { path_len: Some(0) },
         ..Default::default()
     };
     let alice_xdsa_cert =
@@ -68,8 +71,11 @@ fn main() {
     let bob_xdsa_template = x509::CertificateTemplate {
         subject: x509::DistinguishedName::new().cn("Bob Identity"),
         issuer: x509::DistinguishedName::new().cn("Root"),
-        validity: x509::ValidityWindow::from_unix(now, end),
-        profile: x509::CertificateProfile::CertificateAuthority { path_len: Some(0) },
+        validity: x509::ValidityWindow {
+            not_before: now,
+            not_after: end,
+        },
+        role: x509::CertificateRole::Authority { path_len: Some(0) },
         ..Default::default()
     };
     let bob_xdsa_cert =
@@ -90,8 +96,11 @@ fn main() {
     let alice_xhpke_template = x509::CertificateTemplate {
         subject: x509::DistinguishedName::new().cn("Alice Encryption"),
         issuer: x509::DistinguishedName::new().cn("Alice Identity"),
-        validity: x509::ValidityWindow::from_unix(now, end),
-        profile: x509::CertificateProfile::EndEntity,
+        validity: x509::ValidityWindow {
+            not_before: now,
+            not_after: end,
+        },
+        role: x509::CertificateRole::Leaf,
         ..Default::default()
     };
     let alice_xhpke_cert = x509::issue_xhpke_cert_pem(
@@ -116,8 +125,11 @@ fn main() {
     let bob_xhpke_template = x509::CertificateTemplate {
         subject: x509::DistinguishedName::new().cn("Bob Encryption"),
         issuer: x509::DistinguishedName::new().cn("Bob Identity"),
-        validity: x509::ValidityWindow::from_unix(now, end),
-        profile: x509::CertificateProfile::EndEntity,
+        validity: x509::ValidityWindow {
+            not_before: now,
+            not_after: end,
+        },
+        role: x509::CertificateRole::Leaf,
         ..Default::default()
     };
     let bob_xhpke_cert =
@@ -135,7 +147,7 @@ fn main() {
 
     // Alice verifies Bob's xDSA certificate against the root
     let verified_bob_xdsa =
-        x509::verify_xdsa_cert_pem(&bob_xdsa_cert, &root_public, &x509::VerifyPolicy::default())
+        x509::verify_xdsa_cert_pem(&bob_xdsa_cert, &root_public, x509::ValidityCheck::Now)
             .expect("Failed to verify Bob's xDSA cert against root");
     println!("   ✓ Bob's xDSA cert verified against root");
 
@@ -144,7 +156,7 @@ fn main() {
     let verified_bob_xhpke = x509::verify_xhpke_cert_pem_with_issuer_cert(
         &bob_xhpke_cert,
         &verified_bob_xdsa,
-        &x509::VerifyPolicy::default(),
+        x509::ValidityCheck::Now,
     )
     .expect("Failed to verify Bob's xHPKE cert against his xDSA")
     .public_key;
@@ -156,12 +168,9 @@ fn main() {
     println!("\n7. Bob verifies Alice's identity chain...");
 
     // Bob verifies Alice's xDSA certificate against the root
-    let verified_alice_xdsa = x509::verify_xdsa_cert_pem(
-        &alice_xdsa_cert,
-        &root_public,
-        &x509::VerifyPolicy::default(),
-    )
-    .expect("Failed to verify Alice's xDSA cert against root");
+    let verified_alice_xdsa =
+        x509::verify_xdsa_cert_pem(&alice_xdsa_cert, &root_public, x509::ValidityCheck::Now)
+            .expect("Failed to verify Alice's xDSA cert against root");
     println!("   ✓ Alice's xDSA cert verified against root");
 
     // Bob verifies Alice's xHPKE certificate against Alice's xDSA certificate
@@ -169,7 +178,7 @@ fn main() {
     let _verified_alice_xhpke = x509::verify_xhpke_cert_pem_with_issuer_cert(
         &alice_xhpke_cert,
         &verified_alice_xdsa,
-        &x509::VerifyPolicy::default(),
+        x509::ValidityCheck::Now,
     )
     .expect("Failed to verify Alice's xHPKE cert against her xDSA")
     .public_key;

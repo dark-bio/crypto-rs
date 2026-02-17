@@ -4,17 +4,19 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use super::{CertificateProfile, CertificateTemplate, Error, Result, Subject, key_identifier};
+use super::{CertificateRole, CertificateTemplate, Error, Result, key_identifier};
 use crate::xdsa;
 #[cfg(feature = "xhpke")]
 use crate::xhpke;
+use const_oid::ObjectIdentifier;
 use der::Encode;
 use der::asn1::{BitString, OctetString, UtcTime};
 use std::collections::HashSet;
 use std::time::Duration;
 use x509_cert::certificate::{CertificateInner, TbsCertificateInner, Version};
 use x509_cert::ext::pkix::{
-    AuthorityKeyIdentifier, BasicConstraints, ExtendedKeyUsage, SubjectKeyIdentifier,
+    AuthorityKeyIdentifier, BasicConstraints, ExtendedKeyUsage, KeyUsage, KeyUsages,
+    SubjectKeyIdentifier,
 };
 use x509_cert::ext::{AsExtension, Extension};
 use x509_cert::serial_number::SerialNumber;
@@ -29,7 +31,18 @@ pub fn issue_xdsa_cert_der(
     issuer: &xdsa::SecretKey,
     template: &CertificateTemplate,
 ) -> Result<Vec<u8>> {
-    Ok(issue_cert(subject, issuer, template)?.to_der()?)
+    let default_key_usage = match template.role {
+        CertificateRole::Authority { .. } => KeyUsage(KeyUsages::KeyCertSign | KeyUsages::CRLSign),
+        CertificateRole::Leaf => KeyUsage(KeyUsages::DigitalSignature.into()),
+    };
+    Ok(issue_cert(
+        &subject.to_bytes(),
+        xdsa::OID,
+        default_key_usage,
+        issuer,
+        template,
+    )?
+    .to_der()?)
 }
 
 /// Issues an xDSA subject certificate and returns PEM.
@@ -53,10 +66,18 @@ pub fn issue_xhpke_cert_der(
     issuer: &xdsa::SecretKey,
     template: &CertificateTemplate,
 ) -> Result<Vec<u8>> {
-    if !matches!(template.profile, CertificateProfile::EndEntity) {
+    if !matches!(template.role, CertificateRole::Leaf) {
         return Err(Error::XhpkeMustBeEndEntity);
     }
-    Ok(issue_cert(subject, issuer, template)?.to_der()?)
+    let default_key_usage = KeyUsage(KeyUsages::KeyAgreement.into());
+    Ok(issue_cert(
+        &subject.to_bytes(),
+        xhpke::OID,
+        default_key_usage,
+        issuer,
+        template,
+    )?
+    .to_der()?)
 }
 
 /// Issues an xHPKE subject certificate and returns PEM.
@@ -86,16 +107,18 @@ fn encode_certificate_pem(der: &[u8]) -> Result<String> {
 ///
 /// The function validates template invariants, builds RFC 5280 extensions,
 /// signs the `TBSCertificate`, and returns the in-memory certificate object.
-pub(super) fn issue_cert<S: Subject>(
-    subject: &S,
+pub(super) fn issue_cert(
+    subject_key: &[u8],
+    subject_algorithm: ObjectIdentifier,
+    default_key_usage: KeyUsage,
     issuer: &xdsa::SecretKey,
     template: &CertificateTemplate,
 ) -> Result<CertificateInner> {
     if template.subject.attrs.is_empty() {
-        return Err(Error::EmptySubjectDn);
+        return Err(Error::EmptyDistinguishedName { field: "subject" });
     }
     if template.issuer.attrs.is_empty() {
-        return Err(Error::EmptyIssuerDn);
+        return Err(Error::EmptyDistinguishedName { field: "issuer" });
     }
     if template.validity.not_before >= template.validity.not_after {
         return Err(Error::InvalidValidityWindow);
@@ -115,9 +138,9 @@ pub(super) fn issue_cert<S: Subject>(
     let mut extensions = Vec::<Extension>::new();
     let mut extension_oids = HashSet::new();
 
-    let (is_ca, path_len) = match &template.profile {
-        CertificateProfile::EndEntity => (false, None),
-        CertificateProfile::CertificateAuthority { path_len } => (true, *path_len),
+    let (is_ca, path_len) = match &template.role {
+        CertificateRole::Leaf => (false, None),
+        CertificateRole::Authority { path_len } => (true, *path_len),
     };
 
     let bc = BasicConstraints {
@@ -128,14 +151,12 @@ pub(super) fn issue_cert<S: Subject>(
     extension_oids.insert(bc_ext.extn_id.to_string());
     extensions.push(bc_ext);
 
-    let key_usage = template
-        .key_usage
-        .unwrap_or_else(|| S::default_key_usage(&template.profile));
+    let key_usage = template.key_usage.unwrap_or(default_key_usage);
     let ku_ext = key_usage.to_extension(&subject_name, extensions.as_slice())?;
     extension_oids.insert(ku_ext.extn_id.to_string());
     extensions.push(ku_ext);
 
-    let ski = make_ski(subject.to_bytes().as_ref());
+    let ski = make_ski(subject_key);
     let aki = make_aki(&issuer.public_key().to_bytes());
     let ski_ext = ski.to_extension(&subject_name, extensions.as_slice())?;
     extension_oids.insert(ski_ext.extn_id.to_string());
@@ -151,7 +172,7 @@ pub(super) fn issue_cert<S: Subject>(
         extensions.push(eku_ext);
     }
 
-    for custom in &template.custom_extensions {
+    for custom in &template.extensions {
         let oid = custom.oid.to_string();
         if oid.starts_with("2.5.29.") {
             return Err(Error::ReservedExtensionOid);
@@ -162,7 +183,7 @@ pub(super) fn issue_cert<S: Subject>(
         extensions.push(Extension {
             extn_id: custom.oid,
             critical: custom.critical,
-            extn_value: OctetString::new(custom.value_der.clone())?,
+            extn_value: OctetString::new(custom.value.clone())?,
         });
     }
 
@@ -182,10 +203,10 @@ pub(super) fn issue_cert<S: Subject>(
         subject: subject_name,
         subject_public_key_info: SubjectPublicKeyInfoOwned {
             algorithm: AlgorithmIdentifierOwned {
-                oid: subject.algorithm_oid(),
+                oid: subject_algorithm,
                 parameters: None,
             },
-            subject_public_key: BitString::from_bytes(subject.to_bytes().as_ref())?,
+            subject_public_key: BitString::from_bytes(subject_key)?,
         },
         issuer_unique_id: None,
         subject_unique_id: None,
@@ -234,7 +255,6 @@ fn make_aki(public_key: &[u8]) -> AuthorityKeyIdentifier {
 
 #[cfg(test)]
 mod test {
-    use super::super::name::OID_CN;
     use super::super::*;
     use super::*;
     use crate::xdsa;
@@ -256,34 +276,39 @@ mod test {
         let template = CertificateTemplate {
             subject: DistinguishedName::new().cn("Alice Identity"),
             issuer: DistinguishedName::new().cn("Root"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::CertificateAuthority { path_len: Some(0) },
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Authority { path_len: Some(0) },
             serial: None,
             key_usage: None,
             ext_key_usage: Vec::new(),
-            custom_extensions: vec![CustomExtension {
+            extensions: vec![CustomExtension {
                 oid: private_enterprise_oid(62253, &[1, 1]).unwrap(),
                 critical: false,
-                value_der: vec![0x0c, 0x04, b't', b'e', b's', b't'],
+                value: vec![0x0c, 0x04, b't', b'e', b's', b't'],
             }],
         };
 
         let pem = issue_xdsa_cert_pem(&alice.public_key(), &issuer, &template).unwrap();
-        let cert =
-            verify_xdsa_cert_pem(&pem, &issuer.public_key(), &VerifyPolicy::default()).unwrap();
+        let cert = verify_xdsa_cert_pem(&pem, &issuer.public_key(), ValidityCheck::Now).unwrap();
 
         assert_eq!(cert.public_key.to_bytes(), alice.public_key().to_bytes());
-        assert!(cert.meta.is_ca);
-        assert_eq!(cert.meta.path_len, Some(0));
-        assert_eq!(cert.meta.custom_extensions.len(), 1);
+        assert!(matches!(
+            cert.meta.role,
+            CertificateRole::Authority { path_len: Some(0) }
+        ));
+        assert_eq!(cert.meta.extensions.len(), 1);
 
         let der = issue_xdsa_cert_der(&alice.public_key(), &issuer, &template).unwrap();
-        let cert =
-            verify_xdsa_cert_der(&der, &issuer.public_key(), &VerifyPolicy::default()).unwrap();
+        let cert = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Now).unwrap();
         assert_eq!(cert.public_key.to_bytes(), alice.public_key().to_bytes());
-        assert!(cert.meta.is_ca);
-        assert_eq!(cert.meta.path_len, Some(0));
-        assert_eq!(cert.meta.custom_extensions.len(), 1);
+        assert!(matches!(
+            cert.meta.role,
+            CertificateRole::Authority { path_len: Some(0) }
+        ));
+        assert_eq!(cert.meta.extensions.len(), 1);
     }
 
     #[test]
@@ -300,20 +325,22 @@ mod test {
         let template = CertificateTemplate {
             subject: DistinguishedName::new().cn("Alice Encryption"),
             issuer: DistinguishedName::new().cn("Alice Identity"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::EndEntity,
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
             serial: None,
             key_usage: None,
             ext_key_usage: Vec::new(),
-            custom_extensions: Vec::new(),
+            extensions: Vec::new(),
         };
 
         let der = issue_xhpke_cert_der(&alice.public_key(), &issuer, &template).unwrap();
-        let cert =
-            verify_xhpke_cert_der(&der, &issuer.public_key(), &VerifyPolicy::default()).unwrap();
+        let cert = verify_xhpke_cert_der(&der, &issuer.public_key(), ValidityCheck::Now).unwrap();
 
         assert_eq!(cert.public_key.to_bytes(), alice.public_key().to_bytes());
-        assert!(!cert.meta.is_ca);
+        assert!(matches!(cert.meta.role, CertificateRole::Leaf));
     }
 
     #[test]
@@ -330,54 +357,15 @@ mod test {
         let template = CertificateTemplate {
             subject: DistinguishedName::new().cn("Alice Encryption"),
             issuer: DistinguishedName::new().cn("Alice Identity"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::CertificateAuthority { path_len: Some(0) },
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Authority { path_len: Some(0) },
             ..Default::default()
         };
 
         let result = issue_xhpke_cert_der(&subject.public_key(), &issuer, &template);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_issue_rejects_invalid_printable_name() {
-        let subject = xdsa::SecretKey::generate();
-        let issuer = xdsa::SecretKey::generate();
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or(Duration::ZERO)
-            .as_secs();
-
-        let template = CertificateTemplate {
-            subject: DistinguishedName::new().push(OID_CN, NameValue::Printable("bad*name".into())),
-            issuer: DistinguishedName::new().cn("Root"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::EndEntity,
-            ..Default::default()
-        };
-
-        let result = issue_xdsa_cert_der(&subject.public_key(), &issuer, &template);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_issue_rejects_invalid_ia5_name() {
-        let subject = xdsa::SecretKey::generate();
-        let issuer = xdsa::SecretKey::generate();
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or(Duration::ZERO)
-            .as_secs();
-
-        let template = CertificateTemplate {
-            subject: DistinguishedName::new().push(OID_CN, NameValue::Ia5("na\u{80}me".into())),
-            issuer: DistinguishedName::new().cn("Root"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::EndEntity,
-            ..Default::default()
-        };
-
-        let result = issue_xdsa_cert_der(&subject.public_key(), &issuer, &template);
         assert!(result.is_err());
     }
 
@@ -393,8 +381,11 @@ mod test {
         let template = CertificateTemplate {
             subject: DistinguishedName::new().cn("Alice Identity"),
             issuer: DistinguishedName::new().cn("Root"),
-            validity: ValidityWindow::from_unix(now + 3600, now),
-            profile: CertificateProfile::EndEntity,
+            validity: ValidityWindow {
+                not_before: now + 3600,
+                not_after: now,
+            },
+            role: CertificateRole::Leaf,
             ..Default::default()
         };
 
@@ -414,12 +405,15 @@ mod test {
         let template = CertificateTemplate {
             subject: DistinguishedName::new().cn("Alice Identity"),
             issuer: DistinguishedName::new().cn("Root"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::EndEntity,
-            custom_extensions: vec![CustomExtension {
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
+            extensions: vec![CustomExtension {
                 oid: ObjectIdentifier::new_unwrap("2.5.29.19"),
                 critical: false,
-                value_der: vec![0x05, 0x00],
+                value: vec![0x05, 0x00],
             }],
             ..Default::default()
         };
@@ -429,7 +423,7 @@ mod test {
     }
 
     #[test]
-    fn test_issue_accepts_valid_printable_and_ia5_names() {
+    fn test_issue_accepts_custom_oid_names() {
         let subject = xdsa::SecretKey::generate();
         let issuer = xdsa::SecretKey::generate();
         let now = SystemTime::now()
@@ -437,24 +431,24 @@ mod test {
             .unwrap_or(Duration::ZERO)
             .as_secs();
 
-        let subject_dn = DistinguishedName::new()
-            .push(OID_CN, NameValue::Printable("Alice-1".into()))
-            .push(
-                private_enterprise_oid(62253, &[42]).unwrap(),
-                NameValue::Ia5("alice@example.com".into()),
-            );
+        let subject_dn = DistinguishedName::new().cn("Alice-1").push(
+            private_enterprise_oid(62253, &[42]).unwrap(),
+            "alice@example.com",
+        );
 
         let template = CertificateTemplate {
             subject: subject_dn,
             issuer: DistinguishedName::new().cn("Root"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::EndEntity,
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
             ..Default::default()
         };
 
         let der = issue_xdsa_cert_der(&subject.public_key(), &issuer, &template).unwrap();
-        let cert =
-            verify_xdsa_cert_der(&der, &issuer.public_key(), &VerifyPolicy::default()).unwrap();
+        let cert = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Now).unwrap();
         assert_eq!(cert.public_key.to_bytes(), subject.public_key().to_bytes());
     }
 
@@ -470,8 +464,11 @@ mod test {
         let template = CertificateTemplate {
             subject: DistinguishedName::new(),
             issuer: DistinguishedName::new().cn("Issuer"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::EndEntity,
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
             ..Default::default()
         };
         let result = issue_xdsa_cert_der(&subject.public_key(), &issuer, &template);
@@ -490,8 +487,11 @@ mod test {
         let template = CertificateTemplate {
             subject: DistinguishedName::new().cn("Subject"),
             issuer: DistinguishedName::new(),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::EndEntity,
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
             ..Default::default()
         };
         let result = issue_xdsa_cert_der(&subject.public_key(), &issuer, &template);
@@ -511,15 +511,17 @@ mod test {
         let template = CertificateTemplate {
             subject: DistinguishedName::new().cn("Alice Identity"),
             issuer: DistinguishedName::new().cn("Root"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::EndEntity,
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
             serial: Some(serial.clone()),
             ..Default::default()
         };
 
         let der = issue_xdsa_cert_der(&subject.public_key(), &issuer, &template).unwrap();
-        let cert =
-            verify_xdsa_cert_der(&der, &issuer.public_key(), &VerifyPolicy::default()).unwrap();
+        let cert = verify_xdsa_cert_der(&der, &issuer.public_key(), ValidityCheck::Now).unwrap();
         assert_eq!(cert.meta.serial, serial);
     }
 
@@ -536,18 +538,21 @@ mod test {
         let template = CertificateTemplate {
             subject: DistinguishedName::new().cn("Alice Identity"),
             issuer: DistinguishedName::new().cn("Root"),
-            validity: ValidityWindow::from_unix(now, now + 3600),
-            profile: CertificateProfile::EndEntity,
-            custom_extensions: vec![
+            validity: ValidityWindow {
+                not_before: now,
+                not_after: now + 3600,
+            },
+            role: CertificateRole::Leaf,
+            extensions: vec![
                 CustomExtension {
                     oid,
                     critical: false,
-                    value_der: vec![0x05, 0x00],
+                    value: vec![0x05, 0x00],
                 },
                 CustomExtension {
                     oid,
                     critical: false,
-                    value_der: vec![0x05, 0x00],
+                    value: vec![0x05, 0x00],
                 },
             ],
             ..Default::default()

@@ -4,7 +4,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use super::{Error, Result};
+use super::Result;
 use const_oid::ObjectIdentifier;
 use der::Tag;
 use der::asn1::{Any, SetOfVec};
@@ -13,58 +13,26 @@ use x509_cert::name::{Name, RdnSequence, RelativeDistinguishedName};
 
 /// OID for CommonName (2.5.4.3).
 pub(super) const OID_CN: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.5.4.3");
-
-/// A DN attribute value encoding.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum NameValue {
-    /// UTF8String value.
-    Utf8(String),
-    /// PrintableString value (restricted ASCII subset from RFC 5280).
-    Printable(String),
-    /// IA5String value (7-bit ASCII).
-    Ia5(String),
-    /// Raw bytes for non-text or undecodable values.
-    Bytes(Vec<u8>),
-}
-
-impl NameValue {
-    fn as_any(&self) -> Result<Any> {
-        match self {
-            NameValue::Utf8(value) => Ok(Any::new(Tag::Utf8String, value.as_bytes())?),
-            NameValue::Printable(value) => {
-                if !is_printable_string(value) {
-                    return Err(Error::InvalidPrintableString);
-                }
-                Ok(Any::new(Tag::PrintableString, value.as_bytes())?)
-            }
-            NameValue::Ia5(value) => {
-                if !value.is_ascii() {
-                    return Err(Error::InvalidIa5String);
-                }
-                Ok(Any::new(Tag::Ia5String, value.as_bytes())?)
-            }
-            NameValue::Bytes(_) => Err(Error::RawNameValueNotAllowedForIssuance),
-        }
-    }
-}
-
-fn is_printable_string(value: &str) -> bool {
-    value.as_bytes().iter().all(|b| {
-        b.is_ascii_alphanumeric()
-            || matches!(
-                *b,
-                b' ' | b'\'' | b'(' | b')' | b'+' | b',' | b'-' | b'.' | b'/' | b':' | b'=' | b'?'
-            )
-    })
-}
+/// OID for Organization (2.5.4.10).
+const OID_O: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.5.4.10");
+/// OID for Country (2.5.4.6).
+const OID_C: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.5.4.6");
+/// OID for StateOrProvinceName (2.5.4.8).
+const OID_ST: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.5.4.8");
+/// OID for Locality (2.5.4.7).
+const OID_L: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.5.4.7");
+/// OID for StreetAddress (2.5.4.9).
+const OID_STREET: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.5.4.9");
+/// OID for PostalCode (2.5.4.17).
+const OID_POSTAL_CODE: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.5.4.17");
 
 /// A single DN attribute.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NameAttribute {
     /// Attribute OID (for example `2.5.4.3` for CN).
     pub oid: ObjectIdentifier,
-    /// Encoded attribute value.
-    pub value: NameValue,
+    /// Attribute value (UTF-8).
+    pub value: String,
 }
 
 /// Distinguished Name represented as ordered attributes.
@@ -80,18 +48,75 @@ impl DistinguishedName {
         Self { attrs: Vec::new() }
     }
 
-    /// Adds a UTF8String CN attribute.
+    /// Adds a common name (CN) attribute.
     pub fn cn(mut self, value: impl Into<String>) -> Self {
         self.attrs.push(NameAttribute {
             oid: OID_CN,
-            value: NameValue::Utf8(value.into()),
+            value: value.into(),
+        });
+        self
+    }
+
+    /// Adds an organization (O) attribute.
+    pub fn org(mut self, value: impl Into<String>) -> Self {
+        self.attrs.push(NameAttribute {
+            oid: OID_O,
+            value: value.into(),
+        });
+        self
+    }
+
+    /// Adds a country (C) attribute.
+    pub fn country(mut self, value: impl Into<String>) -> Self {
+        self.attrs.push(NameAttribute {
+            oid: OID_C,
+            value: value.into(),
+        });
+        self
+    }
+
+    /// Adds a state or province (ST) attribute.
+    pub fn province(mut self, value: impl Into<String>) -> Self {
+        self.attrs.push(NameAttribute {
+            oid: OID_ST,
+            value: value.into(),
+        });
+        self
+    }
+
+    /// Adds a locality (L) attribute.
+    pub fn locality(mut self, value: impl Into<String>) -> Self {
+        self.attrs.push(NameAttribute {
+            oid: OID_L,
+            value: value.into(),
+        });
+        self
+    }
+
+    /// Adds a street address attribute.
+    pub fn street(mut self, value: impl Into<String>) -> Self {
+        self.attrs.push(NameAttribute {
+            oid: OID_STREET,
+            value: value.into(),
+        });
+        self
+    }
+
+    /// Adds a postal code attribute.
+    pub fn postal_code(mut self, value: impl Into<String>) -> Self {
+        self.attrs.push(NameAttribute {
+            oid: OID_POSTAL_CODE,
+            value: value.into(),
         });
         self
     }
 
     /// Adds an arbitrary attribute.
-    pub fn push(mut self, oid: ObjectIdentifier, value: NameValue) -> Self {
-        self.attrs.push(NameAttribute { oid, value });
+    pub fn push(mut self, oid: ObjectIdentifier, value: impl Into<String>) -> Self {
+        self.attrs.push(NameAttribute {
+            oid,
+            value: value.into(),
+        });
         self
     }
 
@@ -101,7 +126,7 @@ impl DistinguishedName {
             let mut set = SetOfVec::new();
             set.insert(AttributeTypeAndValue {
                 oid: attr.oid,
-                value: attr.value.as_any()?,
+                value: Any::new(Tag::Utf8String, attr.value.as_bytes())?,
             })
             .expect("single ATAV per RDN must be unique");
             rdns.push(RelativeDistinguishedName::from(set));
