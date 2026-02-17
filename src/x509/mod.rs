@@ -31,6 +31,8 @@ use x509_cert::spki::{AlgorithmIdentifierOwned, SubjectPublicKeyInfoOwned};
 use x509_cert::time::{Time, Validity};
 use x509_parser::extensions::ParsedExtension;
 
+const CERTIFICATE_PEM_LABEL: &str = "CERTIFICATE";
+
 /// OID for CommonName (2.5.4.3).
 pub const OID_CN: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.5.4.3");
 
@@ -365,9 +367,7 @@ pub fn issue_xdsa_cert_pem(
     template: &CertificateTemplate,
 ) -> Result<String, Box<dyn Error>> {
     let der = issue_xdsa_cert_der(subject, issuer, template)?;
-    let pem = der::pem::encode_string("CERTIFICATE", der::pem::LineEnding::LF, &der)
-        .map_err(|e| format!("PEM encoding error: {:?}", e))?;
-    Ok(pem)
+    encode_certificate_pem(&der)
 }
 
 /// Issues an xHPKE subject certificate and returns DER.
@@ -393,9 +393,7 @@ pub fn issue_xhpke_cert_pem(
     template: &CertificateTemplate,
 ) -> Result<String, Box<dyn Error>> {
     let der = issue_xhpke_cert_der(subject, issuer, template)?;
-    let pem = der::pem::encode_string("CERTIFICATE", der::pem::LineEnding::LF, &der)
-        .map_err(|e| format!("PEM encoding error: {:?}", e))?;
-    Ok(pem)
+    encode_certificate_pem(&der)
 }
 
 /// Verifies an xDSA cert from DER and returns key + metadata.
@@ -404,37 +402,9 @@ pub fn verify_xdsa_cert_der(
     issuer: &xdsa::PublicKey,
     policy: &VerifyPolicy,
 ) -> Result<VerifiedCert<xdsa::PublicKey>, Box<dyn Error>> {
-    validate_der_size(der, policy)?;
-    let (rem, cert) = x509_parser::parse_x509_certificate(der)?;
-    ensure_no_trailing_der(rem)?;
-    verify_signature_and_policy(&cert, issuer, policy)?;
-
-    if cert
-        .tbs_certificate
-        .subject_pki
-        .algorithm
-        .algorithm
-        .to_id_string()
-        != xdsa::OID.to_string()
-    {
-        return Err("certificate subject key algorithm is not xDSA".into());
-    }
-    if cert
-        .tbs_certificate
-        .subject_pki
-        .algorithm
-        .parameters
-        .is_some()
-    {
-        return Err("xDSA subjectPublicKeyInfo algorithm parameters must be absent".into());
-    }
-    let key_bytes: [u8; xdsa::PUBLIC_KEY_SIZE] = cert
-        .tbs_certificate
-        .subject_pki
-        .subject_public_key
-        .data
-        .as_ref()
-        .try_into()?;
+    let cert = parse_and_verify_cert(der, issuer, policy)?;
+    validate_subject_public_key_algorithm(&cert, xdsa::OID, "xDSA")?;
+    let key_bytes = subject_public_key_bytes::<{ xdsa::PUBLIC_KEY_SIZE }>(&cert)?;
 
     let meta = extract_meta(&cert, policy)?;
     validate_key_identifier_bindings(&meta, &key_bytes, &issuer.to_bytes(), policy)?;
@@ -452,11 +422,8 @@ pub fn verify_xdsa_cert_pem(
     issuer: &xdsa::PublicKey,
     policy: &VerifyPolicy,
 ) -> Result<VerifiedCert<xdsa::PublicKey>, Box<dyn Error>> {
-    let (label, der) = pem::decode(pem_data.as_bytes())?;
-    if label != "CERTIFICATE" {
-        return Err("PEM block is not a CERTIFICATE".into());
-    }
-    verify_xdsa_cert_der(der.as_slice(), issuer, policy)
+    let der = decode_certificate_pem(pem_data)?;
+    verify_xdsa_cert_der(&der, issuer, policy)
 }
 
 /// Verifies an xDSA cert from DER using an issuer certificate and enforces
@@ -467,9 +434,7 @@ pub fn verify_xdsa_cert_der_with_issuer_cert(
     policy: &VerifyPolicy,
 ) -> Result<VerifiedCert<xdsa::PublicKey>, Box<dyn Error>> {
     let cert = verify_xdsa_cert_der(der, &issuer_cert.public_key, policy)?;
-    validate_issuer_authority(&issuer_cert.meta, cert.meta.is_ca)?;
-    validate_name_chaining(&cert.meta, &issuer_cert.meta, policy)?;
-    Ok(cert)
+    enforce_issuer_chaining(cert, issuer_cert, policy)
 }
 
 /// Verifies an xDSA cert from PEM using an issuer certificate and enforces
@@ -480,9 +445,7 @@ pub fn verify_xdsa_cert_pem_with_issuer_cert(
     policy: &VerifyPolicy,
 ) -> Result<VerifiedCert<xdsa::PublicKey>, Box<dyn Error>> {
     let cert = verify_xdsa_cert_pem(pem_data, &issuer_cert.public_key, policy)?;
-    validate_issuer_authority(&issuer_cert.meta, cert.meta.is_ca)?;
-    validate_name_chaining(&cert.meta, &issuer_cert.meta, policy)?;
-    Ok(cert)
+    enforce_issuer_chaining(cert, issuer_cert, policy)
 }
 
 /// Verifies an xHPKE cert from DER and returns key + metadata.
@@ -492,37 +455,9 @@ pub fn verify_xhpke_cert_der(
     issuer: &xdsa::PublicKey,
     policy: &VerifyPolicy,
 ) -> Result<VerifiedCert<xhpke::PublicKey>, Box<dyn Error>> {
-    validate_der_size(der, policy)?;
-    let (rem, cert) = x509_parser::parse_x509_certificate(der)?;
-    ensure_no_trailing_der(rem)?;
-    verify_signature_and_policy(&cert, issuer, policy)?;
-
-    if cert
-        .tbs_certificate
-        .subject_pki
-        .algorithm
-        .algorithm
-        .to_id_string()
-        != xhpke::OID.to_string()
-    {
-        return Err("certificate subject key algorithm is not xHPKE (X-Wing)".into());
-    }
-    if cert
-        .tbs_certificate
-        .subject_pki
-        .algorithm
-        .parameters
-        .is_some()
-    {
-        return Err("xHPKE subjectPublicKeyInfo algorithm parameters must be absent".into());
-    }
-    let key_bytes: [u8; xhpke::PUBLIC_KEY_SIZE] = cert
-        .tbs_certificate
-        .subject_pki
-        .subject_public_key
-        .data
-        .as_ref()
-        .try_into()?;
+    let cert = parse_and_verify_cert(der, issuer, policy)?;
+    validate_subject_public_key_algorithm(&cert, xhpke::OID, "xHPKE (X-Wing)")?;
+    let key_bytes = subject_public_key_bytes::<{ xhpke::PUBLIC_KEY_SIZE }>(&cert)?;
 
     let meta = extract_meta(&cert, policy)?;
     if meta.is_ca {
@@ -544,11 +479,8 @@ pub fn verify_xhpke_cert_pem(
     issuer: &xdsa::PublicKey,
     policy: &VerifyPolicy,
 ) -> Result<VerifiedCert<xhpke::PublicKey>, Box<dyn Error>> {
-    let (label, der) = pem::decode(pem_data.as_bytes())?;
-    if label != "CERTIFICATE" {
-        return Err("PEM block is not a CERTIFICATE".into());
-    }
-    verify_xhpke_cert_der(der.as_slice(), issuer, policy)
+    let der = decode_certificate_pem(pem_data)?;
+    verify_xhpke_cert_der(&der, issuer, policy)
 }
 
 /// Verifies an xHPKE cert from DER using an issuer certificate and enforces
@@ -560,9 +492,7 @@ pub fn verify_xhpke_cert_der_with_issuer_cert(
     policy: &VerifyPolicy,
 ) -> Result<VerifiedCert<xhpke::PublicKey>, Box<dyn Error>> {
     let cert = verify_xhpke_cert_der(der, &issuer_cert.public_key, policy)?;
-    validate_issuer_authority(&issuer_cert.meta, cert.meta.is_ca)?;
-    validate_name_chaining(&cert.meta, &issuer_cert.meta, policy)?;
-    Ok(cert)
+    enforce_issuer_chaining(cert, issuer_cert, policy)
 }
 
 /// Verifies an xHPKE cert from PEM using an issuer certificate and enforces
@@ -574,6 +504,87 @@ pub fn verify_xhpke_cert_pem_with_issuer_cert(
     policy: &VerifyPolicy,
 ) -> Result<VerifiedCert<xhpke::PublicKey>, Box<dyn Error>> {
     let cert = verify_xhpke_cert_pem(pem_data, &issuer_cert.public_key, policy)?;
+    enforce_issuer_chaining(cert, issuer_cert, policy)
+}
+
+fn encode_certificate_pem(der: &[u8]) -> Result<String, Box<dyn Error>> {
+    let pem = der::pem::encode_string(CERTIFICATE_PEM_LABEL, der::pem::LineEnding::LF, der)
+        .map_err(|e| format!("PEM encoding error: {:?}", e))?;
+    Ok(pem)
+}
+
+fn decode_certificate_pem(pem_data: &str) -> Result<Vec<u8>, Box<dyn Error>> {
+    let (label, der) = pem::decode(pem_data.as_bytes())?;
+    if label != CERTIFICATE_PEM_LABEL {
+        return Err("PEM block is not a CERTIFICATE".into());
+    }
+    Ok(der)
+}
+
+fn parse_and_verify_cert<'a>(
+    der: &'a [u8],
+    issuer: &xdsa::PublicKey,
+    policy: &VerifyPolicy,
+) -> Result<x509_parser::certificate::X509Certificate<'a>, Box<dyn Error>> {
+    validate_der_size(der, policy)?;
+    let (rem, cert) = x509_parser::parse_x509_certificate(der)?;
+    ensure_no_trailing_der(rem)?;
+    verify_signature_and_policy(&cert, issuer, policy)?;
+    Ok(cert)
+}
+
+fn validate_subject_public_key_algorithm(
+    cert: &x509_parser::certificate::X509Certificate<'_>,
+    expected_oid: ObjectIdentifier,
+    algorithm_name: &str,
+) -> Result<(), Box<dyn Error>> {
+    if cert
+        .tbs_certificate
+        .subject_pki
+        .algorithm
+        .algorithm
+        .to_id_string()
+        != expected_oid.to_string()
+    {
+        return Err(format!(
+            "certificate subject key algorithm is not {}",
+            algorithm_name
+        )
+        .into());
+    }
+    if cert
+        .tbs_certificate
+        .subject_pki
+        .algorithm
+        .parameters
+        .is_some()
+    {
+        return Err(format!(
+            "{} subjectPublicKeyInfo algorithm parameters must be absent",
+            algorithm_name
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn subject_public_key_bytes<const N: usize>(
+    cert: &x509_parser::certificate::X509Certificate<'_>,
+) -> Result<[u8; N], Box<dyn Error>> {
+    cert.tbs_certificate
+        .subject_pki
+        .subject_public_key
+        .data
+        .as_ref()
+        .try_into()
+        .map_err(|_| "invalid subject public key length".into())
+}
+
+fn enforce_issuer_chaining<K>(
+    cert: VerifiedCert<K>,
+    issuer_cert: &VerifiedCert<xdsa::PublicKey>,
+    policy: &VerifyPolicy,
+) -> Result<VerifiedCert<K>, Box<dyn Error>> {
     validate_issuer_authority(&issuer_cert.meta, cert.meta.is_ca)?;
     validate_name_chaining(&cert.meta, &issuer_cert.meta, policy)?;
     Ok(cert)
@@ -1038,24 +1049,21 @@ fn make_serial(serial: Option<&[u8]>) -> Result<SerialNumber, Box<dyn Error>> {
         return Ok(SerialNumber::new(serial)?);
     }
     let mut serial_bytes = [0u8; 16];
-    getrandom::fill(&mut serial_bytes).unwrap();
+    getrandom::fill(&mut serial_bytes)
+        .map_err(|e| format!("failed to generate certificate serial: {}", e))?;
     serial_bytes[0] &= 0x7F;
     Ok(SerialNumber::new(&serial_bytes)?)
 }
 
 fn make_ski(public_key: &[u8]) -> SubjectKeyIdentifier {
-    let mut hasher = Sha1::new();
-    hasher.update(public_key);
-    let hash = hasher.finalize();
-    SubjectKeyIdentifier(OctetString::new(&hash[..]).unwrap())
+    let hash = key_identifier(public_key);
+    SubjectKeyIdentifier(OctetString::new(hash).unwrap())
 }
 
 fn make_aki(public_key: &[u8]) -> AuthorityKeyIdentifier {
-    let mut hasher = Sha1::new();
-    hasher.update(public_key);
-    let hash = hasher.finalize();
+    let hash = key_identifier(public_key);
     AuthorityKeyIdentifier {
-        key_identifier: Some(OctetString::new(&hash[..]).unwrap()),
+        key_identifier: Some(OctetString::new(hash).unwrap()),
         authority_cert_issuer: None,
         authority_cert_serial_number: None,
     }
@@ -1950,42 +1958,35 @@ mod test {
         let cert =
             verify_xdsa_cert_der(&der, &issuer.public_key(), &VerifyPolicy::default()).unwrap();
         assert!(cert.meta.ext_key_usage.contains(&"2.5.29.37.0".to_string()));
-        assert!(
-            cert.meta
-                .ext_key_usage
-                .contains(&"1.3.6.1.5.5.7.3.1".to_string())
-        );
-        assert!(
-            cert.meta
-                .ext_key_usage
-                .contains(&"1.3.6.1.5.5.7.3.2".to_string())
-        );
-        assert!(
-            cert.meta
-                .ext_key_usage
-                .contains(&"1.3.6.1.5.5.7.3.3".to_string())
-        );
-        assert!(
-            cert.meta
-                .ext_key_usage
-                .contains(&"1.3.6.1.5.5.7.3.4".to_string())
-        );
-        assert!(
-            cert.meta
-                .ext_key_usage
-                .contains(&"1.3.6.1.5.5.7.3.8".to_string())
-        );
-        assert!(
-            cert.meta
-                .ext_key_usage
-                .contains(&"1.3.6.1.5.5.7.3.9".to_string())
-        );
-        assert!(
-            cert.meta
-                .ext_key_usage
-                .iter()
-                .any(|oid| oid.ends_with("62253.9.1"))
-        );
+        assert!(cert
+            .meta
+            .ext_key_usage
+            .contains(&"1.3.6.1.5.5.7.3.1".to_string()));
+        assert!(cert
+            .meta
+            .ext_key_usage
+            .contains(&"1.3.6.1.5.5.7.3.2".to_string()));
+        assert!(cert
+            .meta
+            .ext_key_usage
+            .contains(&"1.3.6.1.5.5.7.3.3".to_string()));
+        assert!(cert
+            .meta
+            .ext_key_usage
+            .contains(&"1.3.6.1.5.5.7.3.4".to_string()));
+        assert!(cert
+            .meta
+            .ext_key_usage
+            .contains(&"1.3.6.1.5.5.7.3.8".to_string()));
+        assert!(cert
+            .meta
+            .ext_key_usage
+            .contains(&"1.3.6.1.5.5.7.3.9".to_string()));
+        assert!(cert
+            .meta
+            .ext_key_usage
+            .iter()
+            .any(|oid| oid.ends_with("62253.9.1")));
     }
 
     #[test]
