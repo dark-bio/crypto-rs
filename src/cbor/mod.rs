@@ -1552,6 +1552,16 @@ mod tests {
         key_neg1: u64,
     }
 
+    #[derive(Debug, PartialEq, Cbor)]
+    struct TestMapOptional {
+        #[cbor(key = 1)]
+        key1: u64,
+        #[cbor(key = 2)]
+        key2: Option<u64>,
+        #[cbor(key = -1)]
+        key_neg1: u64,
+    }
+
     // Tests that maps encode correctly with deterministic key ordering.
     #[test]
     fn test_map_encoding() {
@@ -1611,6 +1621,65 @@ mod tests {
             0x02, 0x18, 0x43, // 2: 67
             0x20, 0x18, 0x64, // -1: 100
         ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_map_optional_encoding() {
+        let with_optional = TestMapOptional {
+            key1: 42,
+            key2: Some(67),
+            key_neg1: 100,
+        };
+        let encoded = encode(&with_optional);
+        assert_eq!(
+            encoded,
+            vec![0xa3, 0x01, 0x18, 0x2a, 0x02, 0x18, 0x43, 0x20, 0x18, 0x64]
+        );
+
+        let without_optional = TestMapOptional {
+            key1: 42,
+            key2: None,
+            key_neg1: 100,
+        };
+        let encoded = encode(&without_optional);
+        assert_eq!(encoded, vec![0xa2, 0x01, 0x18, 0x2a, 0x20, 0x18, 0x64]);
+    }
+
+    #[test]
+    fn test_map_optional_decoding() {
+        let decoded =
+            decode::<TestMapOptional>(&[0xa2, 0x01, 0x18, 0x2a, 0x20, 0x18, 0x64]).unwrap();
+        assert_eq!(
+            decoded,
+            TestMapOptional {
+                key1: 42,
+                key2: None,
+                key_neg1: 100,
+            }
+        );
+
+        let decoded = decode::<TestMapOptional>(&[
+            0xa3, 0x01, 0x18, 0x2a, 0x02, 0x18, 0x43, 0x20, 0x18, 0x64,
+        ])
+        .unwrap();
+        assert_eq!(
+            decoded,
+            TestMapOptional {
+                key1: 42,
+                key2: Some(67),
+                key_neg1: 100,
+            }
+        );
+    }
+
+    #[test]
+    fn test_map_optional_rejection() {
+        let result =
+            decode::<TestMapOptional>(&[0xa3, 0x01, 0x18, 0x2a, 0x02, 0xf6, 0x20, 0x18, 0x64]);
+        assert!(result.is_err());
+
+        let result = decode::<TestMapOptional>(&[0xa1, 0x01, 0x18, 0x2a]);
         assert!(result.is_err());
     }
 

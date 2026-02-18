@@ -45,7 +45,10 @@ use cbor::cbor_key_bytes;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::{Data, DeriveInput, Expr, Fields, Lit, parse_macro_input};
+use syn::{
+    Data, DeriveInput, Expr, Fields, GenericArgument, Lit, PathArguments, Type, TypePath,
+    parse_macro_input,
+};
 
 /// Derives the CBOR encoder and decoder for structs tagged with #[derive(Cbor)]
 /// and internally fields tagged with #[cbor(...)].
@@ -117,7 +120,23 @@ fn derive_encode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
         ka.cmp(&kb)
     });
 
-    let len = sorted.len();
+    let count_fields: Vec<_> = sorted
+        .iter()
+        .map(|f| {
+            let ident = &f.ident;
+            if f.option_inner.is_some() {
+                quote! {
+                    if self.#ident.is_some() {
+                        len += 1;
+                    }
+                }
+            } else {
+                quote! {
+                    len += 1;
+                }
+            }
+        })
+        .collect();
 
     // Generate code to encode each key-value pair in sorted order
     let encode_fields: Vec<_> = sorted
@@ -125,9 +144,18 @@ fn derive_encode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
         .map(|f| {
             let ident = &f.ident;
             let key = f.key.unwrap();
-            quote! {
-                enc.encode_int(#key);
-                enc.extend(&self.#ident.encode_cbor());
+            if f.option_inner.is_some() {
+                quote! {
+                    if let Some(value) = &self.#ident {
+                        enc.encode_int(#key);
+                        enc.extend(&value.encode_cbor());
+                    }
+                }
+            } else {
+                quote! {
+                    enc.encode_int(#key);
+                    enc.extend(&self.#ident.encode_cbor());
+                }
             }
         })
         .collect();
@@ -136,7 +164,9 @@ fn derive_encode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
         impl #cbor_crate::Encode for #name {
             fn encode_cbor(&self) -> Vec<u8> {
                 let mut enc = #cbor_crate::Encoder::new();
-                enc.encode_map_header(#len);
+                let mut len: usize = 0;
+                #(#count_fields)*
+                enc.encode_map_header(len);
                 #(#encode_fields)*
                 enc.finish()
             }
@@ -215,26 +245,106 @@ fn derive_decode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
     });
 
     let len = sorted.len();
+    let min_len = sorted.iter().filter(|f| f.option_inner.is_none()).count();
 
-    // Generate code to decode each key-value pair, validating key order
-    let decode_fields: Vec<_> = sorted
+    let init_fields: Vec<_> = fields
         .iter()
         .map(|f| {
             let ident = &f.ident;
-            let ty = &f.kind;
-            let key = f.key.unwrap();
-            quote! {
-                let key = dec.decode_int()?;
-                if key != #key {
-                    return Err(#cbor_crate::Error::InvalidMapKeyOrder(key, #key));
-                }
-                let #ident = <#ty as #cbor_crate::Decode>::decode_cbor_notrail(dec)?;
+            if f.option_inner.is_some() {
+                let inner = f.option_inner.as_ref().unwrap();
+                quote! { let mut #ident: Option<#inner> = None; }
+            } else {
+                let ty = &f.kind;
+                quote! { let mut #ident: Option<#ty> = None; }
             }
         })
         .collect();
 
-    // Use original field order for struct construction (not sorted order)
-    let construct_fields: Vec<_> = fields.iter().map(|f| &f.ident).collect();
+    let key_arms: Vec<_> = sorted
+        .iter()
+        .enumerate()
+        .map(|(idx, f)| {
+            let key = f.key.unwrap();
+            let ident = &f.ident;
+            let next_idx = idx + 1;
+            if let Some(inner) = &f.option_inner {
+                quote! {
+                    #key => {
+                        if expected > #idx {
+                            return Err(#cbor_crate::Error::InvalidMapKeyOrder(key, #key));
+                        }
+                        while expected < #idx {
+                            if !optional_flags[expected] {
+                                return Err(#cbor_crate::Error::InvalidMapKeyOrder(key, expected_keys[expected]));
+                            }
+                            expected += 1;
+                        }
+                        let value = <#inner as #cbor_crate::Decode>::decode_cbor_notrail(dec)?;
+                        #ident = Some(value);
+                        expected = #next_idx;
+                    }
+                }
+            } else {
+                let ty = &f.kind;
+                quote! {
+                    #key => {
+                        if expected > #idx {
+                            return Err(#cbor_crate::Error::InvalidMapKeyOrder(key, #key));
+                        }
+                        while expected < #idx {
+                            if !optional_flags[expected] {
+                                return Err(#cbor_crate::Error::InvalidMapKeyOrder(key, expected_keys[expected]));
+                            }
+                            expected += 1;
+                        }
+                        let value = <#ty as #cbor_crate::Decode>::decode_cbor_notrail(dec)?;
+                        #ident = Some(value);
+                        expected = #next_idx;
+                    }
+                }
+            }
+        })
+        .collect();
+
+    let missing_required_checks: Vec<_> = fields
+        .iter()
+        .map(|f| {
+            let ident = &f.ident;
+            let key = f.key.unwrap();
+            if f.option_inner.is_some() {
+                quote! {}
+            } else {
+                quote! {
+                    if #ident.is_none() {
+                        return Err(#cbor_crate::Error::DecodeFailed(
+                            format!("missing required map key: {}", #key)
+                        ));
+                    }
+                }
+            }
+        })
+        .collect();
+
+    let construct_fields: Vec<_> = fields
+        .iter()
+        .map(|f| {
+            let ident = &f.ident;
+            let key = f.key.unwrap();
+            if f.option_inner.is_some() {
+                quote! { #ident: #ident }
+            } else {
+                quote! {
+                    #ident: #ident.ok_or_else(|| {
+                        #cbor_crate::Error::DecodeFailed(format!("missing required map key: {}", #key))
+                    })?
+                }
+            }
+        })
+        .collect();
+
+    let expected_keys: Vec<_> = sorted.iter().map(|f| f.key.unwrap()).collect();
+    let optional_flags: Vec<_> = sorted.iter().map(|f| f.option_inner.is_some()).collect();
 
     Ok(quote! {
         impl #cbor_crate::Decode for #name {
@@ -247,10 +357,30 @@ fn derive_decode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
 
             fn decode_cbor_notrail(dec: &mut #cbor_crate::Decoder) -> Result<Self, #cbor_crate::Error> {
                 let len = dec.decode_map_header()?;
-                if len != #len as u64 {
+                if len < #min_len as u64 || len > #len as u64 {
                     return Err(#cbor_crate::Error::UnexpectedItemCount(len, #len));
                 }
-                #(#decode_fields)*
+                #(#init_fields)*
+                let expected_keys: &[i64] = &[#(#expected_keys),*];
+                let optional_flags: &[bool] = &[#(#optional_flags),*];
+                let mut expected: usize = 0;
+
+                for _ in 0..len {
+                    let key = dec.decode_int()?;
+                    match key {
+                        #(#key_arms)*
+                        _ => {
+                            let want = if expected < expected_keys.len() {
+                                expected_keys[expected]
+                            } else {
+                                expected_keys[expected_keys.len() - 1]
+                            };
+                            return Err(#cbor_crate::Error::InvalidMapKeyOrder(key, want));
+                        }
+                    }
+                }
+
+                #(#missing_required_checks)*
                 Ok(Self { #(#construct_fields),* })
             }
         }
@@ -279,7 +409,8 @@ fn want_array(input: &DeriveInput) -> bool {
 /// Parsed information about a struct field.
 struct FieldInfo {
     ident: syn::Ident,
-    kind: syn::Type,
+    kind: Type,
+    option_inner: Option<Type>,
     key: Option<i64>, // CBOR map key from #[cbor(key = N)], None for array-mode
 }
 
@@ -304,6 +435,7 @@ fn parse_fields(input: &DeriveInput) -> syn::Result<Vec<FieldInfo>> {
     for field in fields {
         let ident = field.ident.clone().unwrap();
         let kind = field.ty.clone();
+        let option_inner = option_inner_type(&kind);
         let mut key = None;
 
         for attr in &field.attrs {
@@ -317,9 +449,35 @@ fn parse_fields(input: &DeriveInput) -> syn::Result<Vec<FieldInfo>> {
                 })?;
             }
         }
-        result.push(FieldInfo { ident, kind, key });
+        result.push(FieldInfo {
+            ident,
+            kind,
+            option_inner,
+            key,
+        });
     }
     Ok(result)
+}
+
+/// If a type is Option<T>, returns T.
+fn option_inner_type(ty: &Type) -> Option<Type> {
+    let Type::Path(TypePath { qself: None, path }) = ty else {
+        return None;
+    };
+    let segment = path.segments.last()?;
+    if segment.ident != "Option" {
+        return None;
+    }
+    let PathArguments::AngleBracketed(args) = &segment.arguments else {
+        return None;
+    };
+    if args.args.len() != 1 {
+        return None;
+    }
+    match args.args.first()? {
+        GenericArgument::Type(inner) => Some(inner.clone()),
+        _ => None,
+    }
 }
 
 /// Parses an integer expression, handling both positive literals and negation.
