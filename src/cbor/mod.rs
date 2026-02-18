@@ -353,6 +353,11 @@ impl<'a> Decoder<'a> {
         self.pos < self.data.len() && self.data[self.pos] == (MAJOR_SIMPLE << 5 | SIMPLE_NULL)
     }
 
+    // peek_int returns the next signed integer value without consuming it.
+    pub fn peek_int(&self) -> Result<i64, Error> {
+        self.clone().decode_int()
+    }
+
     // decode_header extracts the major type for the next field and the integer
     // value embedded as the additional info.
     fn decode_header(&mut self) -> Result<(u8, u64), Error> {
@@ -1610,6 +1615,127 @@ mod tests {
             0x05, 0x18, 0x2a, // 5: 42 (should be 1)
             0x02, 0x18, 0x43, // 2: 67
             0x20, 0x18, 0x64, // -1: 100
+        ]);
+        assert!(result.is_err());
+    }
+
+    // Test struct for map encoding/decoding with optional fields.
+    #[derive(Debug, PartialEq, Cbor)]
+    struct TestMapOptional {
+        #[cbor(key = 1)]
+        required: u64,
+        #[cbor(key = 2)]
+        optional1: Option<String>,
+        #[cbor(key = -1)]
+        optional2: Option<Vec<u8>>,
+    }
+
+    // Tests that optional map fields are omitted when None during encoding.
+    #[test]
+    fn test_map_optional_encoding() {
+        // All fields present
+        let map = TestMapOptional {
+            required: 42,
+            optional1: Some("hello".to_string()),
+            optional2: Some(vec![1, 2, 3]),
+        };
+        let encoded = encode(&map);
+        // Keys in bytewise order: 0x01, 0x02, 0x20 (1, 2, -1)
+        assert_eq!(encoded[0], 0xa3); // map with 3 entries
+        let decoded = decode::<TestMapOptional>(&encoded).unwrap();
+        assert_eq!(decoded, map);
+
+        // Only required field (both optionals None)
+        let map = TestMapOptional {
+            required: 42,
+            optional1: None,
+            optional2: None,
+        };
+        let encoded = encode(&map);
+        assert_eq!(encoded[0], 0xa1); // map with 1 entry
+        assert_eq!(encoded[1], 0x01); // key 1
+        assert_eq!(encoded[2], 0x18);
+        assert_eq!(encoded[3], 42);
+        assert_eq!(encoded.len(), 4); // no optional fields encoded
+        let decoded = decode::<TestMapOptional>(&encoded).unwrap();
+        assert_eq!(decoded, map);
+
+        // One optional present, one absent
+        let map = TestMapOptional {
+            required: 42,
+            optional1: Some("hi".to_string()),
+            optional2: None,
+        };
+        let encoded = encode(&map);
+        assert_eq!(encoded[0], 0xa2); // map with 2 entries
+        let decoded = decode::<TestMapOptional>(&encoded).unwrap();
+        assert_eq!(decoded, map);
+
+        // Other optional present
+        let map = TestMapOptional {
+            required: 42,
+            optional1: None,
+            optional2: Some(vec![0xff]),
+        };
+        let encoded = encode(&map);
+        assert_eq!(encoded[0], 0xa2); // map with 2 entries
+        let decoded = decode::<TestMapOptional>(&encoded).unwrap();
+        assert_eq!(decoded, map);
+    }
+
+    // Tests that optional map fields decode as None when keys are missing.
+    #[test]
+    fn test_map_optional_decoding() {
+        // Decode a map with only the required field
+        let decoded = decode::<TestMapOptional>(&vec![
+            0xa1, // map with 1 entry
+            0x01, 0x18, 0x2a, // 1: 42
+        ])
+        .unwrap();
+        assert_eq!(decoded.required, 42);
+        assert_eq!(decoded.optional1, None);
+        assert_eq!(decoded.optional2, None);
+
+        // Decode a map with required + first optional
+        let decoded = decode::<TestMapOptional>(&vec![
+            0xa2, // map with 2 entries
+            0x01, 0x00, // 1: 0
+            0x02, 0x62, 0x68, 0x69, // 2: "hi"
+        ])
+        .unwrap();
+        assert_eq!(decoded.required, 0);
+        assert_eq!(decoded.optional1, Some("hi".to_string()));
+        assert_eq!(decoded.optional2, None);
+
+        // Decode a map with required + second optional (key -1)
+        let decoded = decode::<TestMapOptional>(&vec![
+            0xa2, // map with 2 entries
+            0x01, 0x05, // 1: 5
+            0x20, 0x41, 0xab, // -1: h'ab'
+        ])
+        .unwrap();
+        assert_eq!(decoded.required, 5);
+        assert_eq!(decoded.optional1, None);
+        assert_eq!(decoded.optional2, Some(vec![0xab]));
+    }
+
+    // Tests that maps with optional fields still reject invalid data.
+    #[test]
+    fn test_map_optional_rejection() {
+        // Too many entries
+        let result = decode::<TestMapOptional>(&vec![
+            0xa4, // map with 4 entries (max is 3)
+            0x01, 0x00, // 1: 0
+            0x02, 0x60, // 2: ""
+            0x03, 0x00, // 3: 0 (unknown key)
+            0x20, 0x40, // -1: h''
+        ]);
+        assert!(result.is_err());
+
+        // Required field missing (map has optional keys but not the required one)
+        let result = decode::<TestMapOptional>(&vec![
+            0xa1, // map with 1 entry
+            0x02, 0x60, // 2: "" (key 1 is required but missing)
         ]);
         assert!(result.is_err());
     }
