@@ -75,6 +75,8 @@ pub enum Error {
     InvalidMapKeyOrder(i64, i64),
     #[error("nesting depth exceeds maximum of {0}")]
     MaxDepthExceeded(usize),
+    #[error("missing required map key: {0}")]
+    MissingMapKey(i64),
     #[error("decode failed: {0}")]
     DecodeFailed(String),
 }
@@ -1612,6 +1614,141 @@ mod tests {
             0x20, 0x18, 0x64, // -1: 100
         ]);
         assert!(result.is_err());
+    }
+
+    // Test struct for map encoding/decoding with optional fields.
+    #[derive(Debug, PartialEq, Cbor)]
+    struct TestMapOptional {
+        #[cbor(key = 1)]
+        required: u64,
+        #[cbor(key = 2)]
+        optional: Option<String>,
+        #[cbor(key = -1)]
+        also_required: Vec<u8>,
+    }
+
+    // Tests that optional map fields are omitted when None.
+    #[test]
+    fn test_map_optional_encoding() {
+        // With Some value: all 3 entries present
+        let map = TestMapOptional {
+            required: 42,
+            optional: Some("hello".to_string()),
+            also_required: vec![1, 2],
+        };
+        let encoded = encode(&map);
+
+        // Keys in bytewise order: 1, 2, -1 -> 3 entries
+        let mut expected = vec![0xa3]; // map with 3 entries
+        expected.extend_from_slice(&encode(&1i64));
+        expected.extend_from_slice(&encode(&42u64));
+        expected.extend_from_slice(&encode(&2i64));
+        expected.extend_from_slice(&encode(&"hello".to_string()));
+        expected.extend_from_slice(&encode(&-1i64));
+        expected.extend_from_slice(&encode(&vec![1u8, 2]));
+        assert_eq!(encoded, expected);
+
+        // With None: only 2 entries, optional field omitted entirely
+        let map = TestMapOptional {
+            required: 42,
+            optional: None,
+            also_required: vec![1, 2],
+        };
+        let encoded = encode(&map);
+
+        let mut expected = vec![0xa2]; // map with 2 entries
+        expected.extend_from_slice(&encode(&1i64));
+        expected.extend_from_slice(&encode(&42u64));
+        expected.extend_from_slice(&encode(&-1i64));
+        expected.extend_from_slice(&encode(&vec![1u8, 2]));
+        assert_eq!(encoded, expected);
+    }
+
+    // Tests that optional map fields decode correctly (present or absent).
+    #[test]
+    fn test_map_optional_decoding() {
+        // With all 3 entries present
+        let mut data = vec![0xa3]; // map with 3 entries
+        data.extend_from_slice(&encode(&1i64));
+        data.extend_from_slice(&encode(&42u64));
+        data.extend_from_slice(&encode(&2i64));
+        data.extend_from_slice(&encode(&"hello".to_string()));
+        data.extend_from_slice(&encode(&-1i64));
+        data.extend_from_slice(&encode(&vec![1u8, 2]));
+
+        let decoded = decode::<TestMapOptional>(&data).unwrap();
+        assert_eq!(decoded.required, 42);
+        assert_eq!(decoded.optional, Some("hello".to_string()));
+        assert_eq!(decoded.also_required, vec![1, 2]);
+
+        // With optional field absent (2 entries)
+        let mut data = vec![0xa2]; // map with 2 entries
+        data.extend_from_slice(&encode(&1i64));
+        data.extend_from_slice(&encode(&42u64));
+        data.extend_from_slice(&encode(&-1i64));
+        data.extend_from_slice(&encode(&vec![3u8, 4]));
+
+        let decoded = decode::<TestMapOptional>(&data).unwrap();
+        assert_eq!(decoded.required, 42);
+        assert_eq!(decoded.optional, None);
+        assert_eq!(decoded.also_required, vec![3, 4]);
+    }
+
+    // Tests that optional map fields reject invalid data.
+    #[test]
+    fn test_map_optional_rejection() {
+        // Missing required field (only optional + one required)
+        let mut data = vec![0xa2]; // map with 2 entries
+        data.extend_from_slice(&encode(&2i64));
+        data.extend_from_slice(&encode(&"hello".to_string()));
+        data.extend_from_slice(&encode(&-1i64));
+        data.extend_from_slice(&encode(&vec![1u8, 2]));
+
+        assert!(decode::<TestMapOptional>(&data).is_err());
+
+        // Too few entries (fewer than required count)
+        let mut data = vec![0xa1]; // map with 1 entry
+        data.extend_from_slice(&encode(&1i64));
+        data.extend_from_slice(&encode(&42u64));
+
+        assert!(decode::<TestMapOptional>(&data).is_err());
+
+        // Too many entries
+        let mut data = vec![0xa4]; // map with 4 entries
+        data.extend_from_slice(&encode(&1i64));
+        data.extend_from_slice(&encode(&42u64));
+        data.extend_from_slice(&encode(&2i64));
+        data.extend_from_slice(&encode(&"hello".to_string()));
+        data.extend_from_slice(&encode(&3i64));
+        data.extend_from_slice(&encode(&99u64));
+        data.extend_from_slice(&encode(&-1i64));
+        data.extend_from_slice(&encode(&vec![1u8, 2]));
+
+        assert!(decode::<TestMapOptional>(&data).is_err());
+    }
+
+    // Tests that optional map fields roundtrip correctly.
+    #[test]
+    fn test_map_optional_roundtrip() {
+        let with_some = TestMapOptional {
+            required: 99,
+            optional: Some("world".to_string()),
+            also_required: vec![5, 6, 7],
+        };
+        assert_eq!(
+            decode::<TestMapOptional>(&encode(&with_some)).unwrap(),
+            with_some
+        );
+
+        let with_none = TestMapOptional {
+            required: 99,
+            optional: None,
+            also_required: vec![5, 6, 7],
+        };
+        assert_eq!(
+            decode::<TestMapOptional>(&encode(&with_none)).unwrap(),
+            with_none
+        );
     }
 
     // Tests that Raw encodes correctly (passthrough of inner bytes).
