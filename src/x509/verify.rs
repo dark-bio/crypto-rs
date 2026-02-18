@@ -11,9 +11,8 @@ use std::collections::HashSet;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use x509_parser::extensions::ParsedExtension;
 
-/// Verifies an xDSA-signed certificate from DER, validates the subject SPKI
-/// against `expected_oid`, and returns the raw subject public key bytes along
-/// with parsed certificate metadata.
+/// Verifies an xDSA-signed certificate from DER and returns the raw subject
+/// public key bytes along with parsed certificate metadata.
 pub(crate) fn verify_cert<const N: usize>(
     der: &[u8],
     issuer: &xdsa::PublicKey,
