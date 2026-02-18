@@ -42,13 +42,19 @@ pub(crate) fn issue_cert(
     if template.not_before >= template.not_after {
         return Err(Error::InvalidValidity);
     }
-    // Hard code xDSA as the signature algorithm
+    // Generate a random serial number
+    let mut serial_bytes = [0u8; 16];
+    getrandom::fill(&mut serial_bytes).unwrap();
+
+    serial_bytes[0] &= 0x7F; // Ensure positive (MSB = 0)
+    let serial_number = SerialNumber::new(&serial_bytes).unwrap();
+
+    // Create the signature algorithm identifier (always xDSA)
     let signature_alg = AlgorithmIdentifierOwned {
         oid: xdsa::OID,
         parameters: None,
     };
 
-    let serial_number = make_serial();
     let subject_name = template.subject.to_x509_name()?;
     let issuer_name = template.issuer.to_x509_name()?;
 
@@ -139,17 +145,6 @@ pub(crate) fn issue_cert(
         signature_algorithm: signature_alg,
         signature: BitString::from_bytes(&signature.to_bytes())?,
     })
-}
-
-/// Generates a random 128-bit serial number.
-fn make_serial() -> SerialNumber {
-    let mut serial_bytes = [0u8; 16];
-    getrandom::fill(&mut serial_bytes).unwrap();
-
-    // Force positive INTEGER encoding (MSB clear) and ensure non-zero.
-    serial_bytes[0] &= 0x7F;
-    serial_bytes[0] |= 0x01;
-    SerialNumber::new(&serial_bytes).unwrap()
 }
 
 /// Builds SubjectKeyIdentifier as SHA-1(subjectPublicKey bytes).
