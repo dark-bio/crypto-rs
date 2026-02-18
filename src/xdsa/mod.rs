@@ -8,7 +8,10 @@
 //!
 //! https://datatracker.ietf.org/doc/html/draft-ietf-lamps-pq-composite-sigs
 
+#[cfg(feature = "x509")]
 mod cert;
+#[cfg(feature = "x509")]
+pub use cert::*;
 
 use crate::pem;
 use crate::{eddsa, mldsa};

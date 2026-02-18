@@ -12,7 +12,11 @@
 // keep our all-caps abbreviations.
 #![allow(clippy::upper_case_acronyms)]
 
-pub mod cert;
+#[cfg(feature = "x509")]
+mod cert;
+#[cfg(feature = "x509")]
+pub use cert::*;
+
 pub mod xwing;
 
 use crate::pem;
@@ -27,6 +31,9 @@ use spki::der::asn1::BitStringRef;
 use spki::der::{AnyRef, Decode, Encode};
 use spki::{AlgorithmIdentifier, ObjectIdentifier, SubjectPublicKeyInfo};
 use std::error::Error;
+
+/// OID is the ASN.1 object identifier for X-Wing.
+pub const OID: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.4.1.62253.25722");
 
 // KEM, AEAD and KDF are the HPKE crypto suite parameters. They are all 256 bit
 // variants, which should be enough for current purposes. Some details:
@@ -83,7 +90,7 @@ impl SecretKey {
             return Err("trailing data in private key".into());
         }
         // Ensure the algorithm OID matches X-Wing and extract the actual private key
-        if info.algorithm.oid.to_string() != "1.3.6.1.4.1.62253.25722" {
+        if info.algorithm.oid != OID {
             return Err("not an X-Wing private key".into());
         }
         let bytes: [u8; 32] = info.private_key.try_into()?;
@@ -112,7 +119,7 @@ impl SecretKey {
 
         // Create the X-Wing algorithm identifier; parameters MUST be absent
         let alg = pkcs8::AlgorithmIdentifierRef {
-            oid: ObjectIdentifier::new_unwrap("1.3.6.1.4.1.62253.25722"),
+            oid: OID,
             parameters: None::<AnyRef>,
         };
         // Per RFC, privateKey contains the raw 32-byte seed directly
@@ -203,7 +210,7 @@ impl PublicKey {
             return Err("trailing data in public key".into());
         }
         // Ensure the algorithm OID matches X-Wing and extract the actual public key
-        if info.algorithm.oid.to_string() != "1.3.6.1.4.1.62253.25722" {
+        if info.algorithm.oid != OID {
             return Err("not an X-Wing public key".into());
         }
         let key = info.subject_public_key.as_bytes().unwrap();
@@ -237,7 +244,7 @@ impl PublicKey {
 
         // Create the X-Wing algorithm identifier; parameters MUST be absent
         let alg = AlgorithmIdentifier::<AnyRef> {
-            oid: ObjectIdentifier::new_unwrap("1.3.6.1.4.1.62253.25722"),
+            oid: OID,
             parameters: None::<AnyRef>,
         };
         // The subject public key is simply the BITSTRING of the pubkey

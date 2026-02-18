@@ -43,17 +43,16 @@ fn main() {
     let alice_xdsa_public = alice_xdsa_secret.public_key();
 
     // Create a certificate for Alice's xDSA key, signed by the root (intermediate CA)
-    let alice_xdsa_params = x509::Params {
-        subject_name: "Alice Identity",
-        issuer_name: "Root",
+    let alice_xdsa_template = x509::Certificate {
+        subject: x509::Name::new().cn("Alice Identity"),
+        issuer: x509::Name::new().cn("Root"),
         not_before: now,
         not_after: end,
-        is_ca: true,
-        path_len: Some(0),
+        role: x509::Role::Authority { path_len: Some(0) },
+        ..Default::default()
     };
-    let alice_xdsa_cert = alice_xdsa_public
-        .to_cert_pem(&root_secret, &alice_xdsa_params)
-        .unwrap();
+    let alice_xdsa_cert =
+        xdsa::issue_cert_pem(&alice_xdsa_public, &root_secret, &alice_xdsa_template).unwrap();
     println!(
         "   Alice xDSA fingerprint: {}",
         hex::encode(alice_xdsa_public.fingerprint().to_bytes())
@@ -67,17 +66,16 @@ fn main() {
     let bob_xdsa_public = bob_xdsa_secret.public_key();
 
     // Create a certificate for Bob's xDSA key, signed by the root (intermediate CA)
-    let bob_xdsa_params = x509::Params {
-        subject_name: "Bob Identity",
-        issuer_name: "Root",
+    let bob_xdsa_template = x509::Certificate {
+        subject: x509::Name::new().cn("Bob Identity"),
+        issuer: x509::Name::new().cn("Root"),
         not_before: now,
         not_after: end,
-        is_ca: true,
-        path_len: Some(0),
+        role: x509::Role::Authority { path_len: Some(0) },
+        ..Default::default()
     };
-    let bob_xdsa_cert = bob_xdsa_public
-        .to_cert_pem(&root_secret, &bob_xdsa_params)
-        .unwrap();
+    let bob_xdsa_cert =
+        xdsa::issue_cert_pem(&bob_xdsa_public, &root_secret, &bob_xdsa_template).unwrap();
     println!(
         "   Bob xDSA fingerprint: {}",
         hex::encode(bob_xdsa_public.fingerprint().to_bytes())
@@ -91,17 +89,20 @@ fn main() {
     let alice_xhpke_public = alice_xhpke_secret.public_key();
 
     // Create a certificate for Alice's HPKE key, signed by her xDSA key
-    let alice_xhpke_params = x509::Params {
-        subject_name: "Alice Encryption",
-        issuer_name: "Alice",
+    let alice_xhpke_template = x509::Certificate {
+        subject: x509::Name::new().cn("Alice Encryption"),
+        issuer: x509::Name::new().cn("Alice Identity"),
         not_before: now,
         not_after: end,
-        is_ca: false,
-        path_len: None,
+        role: x509::Role::Leaf,
+        ..Default::default()
     };
-    let alice_xhpke_cert = alice_xhpke_public
-        .to_cert_pem(&alice_xdsa_secret, &alice_xhpke_params)
-        .unwrap();
+    let alice_xhpke_cert = xhpke::issue_cert_pem(
+        &alice_xhpke_public,
+        &alice_xdsa_secret,
+        &alice_xhpke_template,
+    )
+    .unwrap();
     println!(
         "   Alice xHPKE fingerprint: {}",
         hex::encode(alice_xhpke_public.fingerprint().to_bytes())
@@ -115,17 +116,16 @@ fn main() {
     let bob_xhpke_public = bob_xhpke_secret.public_key();
 
     // Create a certificate for Bob's HPKE key, signed by his xDSA key
-    let bob_xhpke_params = x509::Params {
-        subject_name: "Bob Encryption",
-        issuer_name: "Bob",
+    let bob_xhpke_template = x509::Certificate {
+        subject: x509::Name::new().cn("Bob Encryption"),
+        issuer: x509::Name::new().cn("Bob Identity"),
         not_before: now,
         not_after: end,
-        is_ca: false,
-        path_len: None,
+        role: x509::Role::Leaf,
+        ..Default::default()
     };
-    let bob_xhpke_cert = bob_xhpke_public
-        .to_cert_pem(&bob_xdsa_secret, &bob_xhpke_params)
-        .unwrap();
+    let bob_xhpke_cert =
+        xhpke::issue_cert_pem(&bob_xhpke_public, &bob_xdsa_secret, &bob_xhpke_template).unwrap();
     println!(
         "   Bob xHPKE fingerprint: {}",
         hex::encode(bob_xhpke_public.fingerprint().to_bytes())
@@ -137,15 +137,20 @@ fn main() {
     println!("\n6. Alice verifies Bob's identity chain...");
 
     // Alice verifies Bob's xDSA certificate against the root
-    let (verified_bob_xdsa, _, _) =
-        xdsa::PublicKey::from_cert_pem(&bob_xdsa_cert, root_public.clone())
+    let verified_bob_xdsa =
+        xdsa::verify_cert_pem(&bob_xdsa_cert, &root_public, x509::ValidityCheck::Now)
             .expect("Failed to verify Bob's xDSA cert against root");
     println!("   ✓ Bob's xDSA cert verified against root");
 
-    // Alice verifies Bob's xHPKE certificate against Bob's xDSA key
-    let (verified_bob_xhpke, _, _) =
-        xhpke::PublicKey::from_cert_pem(&bob_xhpke_cert, verified_bob_xdsa.clone())
-            .expect("Failed to verify Bob's xHPKE cert against his xDSA");
+    // Alice verifies Bob's xHPKE certificate against Bob's xDSA certificate
+    // (enforcing issuer authorization semantics: CA + keyCertSign/cRLSign).
+    let verified_bob_xhpke = xhpke::verify_cert_pem_with_issuer(
+        &bob_xhpke_cert,
+        &verified_bob_xdsa,
+        x509::ValidityCheck::Now,
+    )
+    .expect("Failed to verify Bob's xHPKE cert against his xDSA")
+    .public_key;
     println!("   ✓ Bob's xHPKE cert verified against his xDSA");
 
     // =========================================================================
@@ -154,15 +159,20 @@ fn main() {
     println!("\n7. Bob verifies Alice's identity chain...");
 
     // Bob verifies Alice's xDSA certificate against the root
-    let (verified_alice_xdsa, _, _) =
-        xdsa::PublicKey::from_cert_pem(&alice_xdsa_cert, root_public.clone())
+    let verified_alice_xdsa =
+        xdsa::verify_cert_pem(&alice_xdsa_cert, &root_public, x509::ValidityCheck::Now)
             .expect("Failed to verify Alice's xDSA cert against root");
     println!("   ✓ Alice's xDSA cert verified against root");
 
-    // Bob verifies Alice's xHPKE certificate against Alice's xDSA key
-    let (_verified_alice_xhpke, _, _) =
-        xhpke::PublicKey::from_cert_pem(&alice_xhpke_cert, verified_alice_xdsa.clone())
-            .expect("Failed to verify Alice's xHPKE cert against her xDSA");
+    // Bob verifies Alice's xHPKE certificate against Alice's xDSA certificate
+    // (enforcing issuer authorization semantics: CA + keyCertSign/cRLSign).
+    let _verified_alice_xhpke = xhpke::verify_cert_pem_with_issuer(
+        &alice_xhpke_cert,
+        &verified_alice_xdsa,
+        x509::ValidityCheck::Now,
+    )
+    .expect("Failed to verify Alice's xHPKE cert against her xDSA")
+    .public_key;
     println!("   ✓ Alice's xHPKE cert verified against her xDSA");
 
     // =========================================================================
@@ -197,7 +207,7 @@ fn main() {
         &ciphertext,
         &(),
         &bob_xhpke_secret,
-        &verified_alice_xdsa,
+        &verified_alice_xdsa.public_key,
         b"demo-crypto-domain",
         None,
     )
