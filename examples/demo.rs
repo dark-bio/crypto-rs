@@ -43,14 +43,12 @@ fn main() {
     let alice_xdsa_public = alice_xdsa_secret.public_key();
 
     // Create a certificate for Alice's xDSA key, signed by the root (intermediate CA)
-    let alice_xdsa_template = x509::CertificateTemplate {
+    let alice_xdsa_template = x509::Certificate {
         subject: x509::Name::new().cn("Alice Identity"),
         issuer: x509::Name::new().cn("Root"),
-        validity: x509::ValidityWindow {
-            not_before: now,
-            not_after: end,
-        },
-        role: x509::CertificateRole::Authority { path_len: Some(0) },
+        not_before: now,
+        not_after: end,
+        role: x509::Role::Authority { path_len: Some(0) },
         ..Default::default()
     };
     let alice_xdsa_cert =
@@ -68,14 +66,12 @@ fn main() {
     let bob_xdsa_public = bob_xdsa_secret.public_key();
 
     // Create a certificate for Bob's xDSA key, signed by the root (intermediate CA)
-    let bob_xdsa_template = x509::CertificateTemplate {
+    let bob_xdsa_template = x509::Certificate {
         subject: x509::Name::new().cn("Bob Identity"),
         issuer: x509::Name::new().cn("Root"),
-        validity: x509::ValidityWindow {
-            not_before: now,
-            not_after: end,
-        },
-        role: x509::CertificateRole::Authority { path_len: Some(0) },
+        not_before: now,
+        not_after: end,
+        role: x509::Role::Authority { path_len: Some(0) },
         ..Default::default()
     };
     let bob_xdsa_cert =
@@ -93,14 +89,12 @@ fn main() {
     let alice_xhpke_public = alice_xhpke_secret.public_key();
 
     // Create a certificate for Alice's HPKE key, signed by her xDSA key
-    let alice_xhpke_template = x509::CertificateTemplate {
+    let alice_xhpke_template = x509::Certificate {
         subject: x509::Name::new().cn("Alice Encryption"),
         issuer: x509::Name::new().cn("Alice Identity"),
-        validity: x509::ValidityWindow {
-            not_before: now,
-            not_after: end,
-        },
-        role: x509::CertificateRole::Leaf,
+        not_before: now,
+        not_after: end,
+        role: x509::Role::Leaf,
         ..Default::default()
     };
     let alice_xhpke_cert = xhpke::issue_cert_pem(
@@ -122,14 +116,12 @@ fn main() {
     let bob_xhpke_public = bob_xhpke_secret.public_key();
 
     // Create a certificate for Bob's HPKE key, signed by his xDSA key
-    let bob_xhpke_template = x509::CertificateTemplate {
+    let bob_xhpke_template = x509::Certificate {
         subject: x509::Name::new().cn("Bob Encryption"),
         issuer: x509::Name::new().cn("Bob Identity"),
-        validity: x509::ValidityWindow {
-            not_before: now,
-            not_after: end,
-        },
-        role: x509::CertificateRole::Leaf,
+        not_before: now,
+        not_after: end,
+        role: x509::Role::Leaf,
         ..Default::default()
     };
     let bob_xhpke_cert =
@@ -152,7 +144,7 @@ fn main() {
 
     // Alice verifies Bob's xHPKE certificate against Bob's xDSA certificate
     // (enforcing issuer authorization semantics: CA + keyCertSign/cRLSign).
-    let verified_bob_xhpke = xhpke::verify_cert_pem_with_issuer_cert(
+    let verified_bob_xhpke = xhpke::verify_cert_pem_with_issuer(
         &bob_xhpke_cert,
         &verified_bob_xdsa,
         x509::ValidityCheck::Now,
@@ -174,7 +166,7 @@ fn main() {
 
     // Bob verifies Alice's xHPKE certificate against Alice's xDSA certificate
     // (enforcing issuer authorization semantics: CA + keyCertSign/cRLSign).
-    let _verified_alice_xhpke = xhpke::verify_cert_pem_with_issuer_cert(
+    let _verified_alice_xhpke = xhpke::verify_cert_pem_with_issuer(
         &alice_xhpke_cert,
         &verified_alice_xdsa,
         x509::ValidityCheck::Now,

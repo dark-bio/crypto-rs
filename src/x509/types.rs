@@ -6,69 +6,64 @@
 
 use super::Name;
 use const_oid::ObjectIdentifier;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use x509_cert::ext::pkix::KeyUsage;
 
-/// Validity window.
+/// X.509 certificate parameters used for both issuance and verification.
 #[derive(Clone, Debug)]
-pub struct ValidityWindow {
+pub struct Certificate {
+    /// Subject distinguished name.
+    pub subject: Name,
+    /// Issuer distinguished name.
+    pub issuer: Name,
     /// NotBefore UNIX timestamp (seconds).
     pub not_before: u64,
     /// NotAfter UNIX timestamp (seconds).
     pub not_after: u64,
+    /// End-entity or CA role.
+    pub role: Role,
+    /// Non-standard extensions.
+    pub extensions: Vec<Extension>,
 }
 
-/// Role that an issued certificate may fulfil.
+impl Default for Certificate {
+    fn default() -> Self {
+        Self {
+            subject: Name::default(),
+            issuer: Name::default(),
+            not_before: 0,
+            not_after: 0,
+            role: Role::Leaf,
+            extensions: Vec::new(),
+        }
+    }
+}
+
+/// Verified public key with the extracted certificate parameters.
 #[derive(Clone, Debug)]
-pub enum CertificateRole {
+pub struct Verified<K> {
+    /// Subject public key extracted from certificate SPKI.
+    pub public_key: K,
+    /// Parsed certificate parameters.
+    pub cert: Certificate,
+}
+
+/// Role an issued certificate may fulfil.
+#[derive(Clone, Debug)]
+pub enum Role {
     /// End-entity (leaf) certificate.
     Leaf,
     /// Certificate authority, with optional path length constraint.
     Authority { path_len: Option<u8> },
 }
 
-/// Private extension data.
+/// Private extension to include / check in a certificate.
 #[derive(Clone, Debug)]
-pub struct CustomExtension {
+pub struct Extension {
     /// Extension OID.
     pub oid: ObjectIdentifier,
     /// Whether the extension is marked critical.
     pub critical: bool,
     /// DER-encoded extension payload (inside OCTET STRING).
     pub value: Vec<u8>,
-}
-
-/// Certificate issuance template.
-#[derive(Clone, Debug)]
-pub struct CertificateTemplate {
-    /// Subject distinguished name.
-    pub subject: Name,
-    /// Issuer distinguished name.
-    pub issuer: Name,
-    /// Certificate validity window.
-    pub validity: ValidityWindow,
-    /// End-entity or CA role.
-    pub role: CertificateRole,
-    /// Optional serial, ff omitted, a random one is generated.
-    pub serial: Option<Vec<u8>>,
-    /// Non-standard extensions to append.
-    pub extensions: Vec<CustomExtension>,
-}
-
-impl Default for CertificateTemplate {
-    fn default() -> Self {
-        Self {
-            subject: Name::default(),
-            issuer: Name::default(),
-            validity: ValidityWindow {
-                not_before: 0,
-                not_after: 0,
-            },
-            role: CertificateRole::Leaf,
-            serial: None,
-            extensions: Vec::new(),
-        }
-    }
 }
 
 /// Certificate validity check mode.
@@ -80,51 +75,4 @@ pub enum ValidityCheck {
     At(u64),
     /// Skip validity-time checks.
     Disabled,
-}
-
-impl ValidityCheck {
-    pub(super) fn timestamp(&self) -> Option<u64> {
-        match self {
-            ValidityCheck::Now => Some(
-                SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or(Duration::ZERO)
-                    .as_secs(),
-            ),
-            ValidityCheck::At(ts) => Some(*ts),
-            ValidityCheck::Disabled => None,
-        }
-    }
-}
-
-/// Parsed certificate metadata.
-#[derive(Clone, Debug)]
-pub struct CertificateMetadata {
-    /// Parsed serial bytes.
-    pub serial: Vec<u8>,
-    /// Parsed subject DN.
-    pub subject: Name,
-    /// Parsed issuer DN.
-    pub issuer: Name,
-    /// Parsed validity window.
-    pub validity: ValidityWindow,
-    /// Certificate role (leaf or authority).
-    pub role: CertificateRole,
-    /// Parsed keyUsage extension.
-    pub key_usage: KeyUsage,
-    /// Parsed SKI bytes.
-    pub subject_key_id: Vec<u8>,
-    /// Parsed AKI bytes.
-    pub authority_key_id: Vec<u8>,
-    /// Parsed non-standard extensions.
-    pub extensions: Vec<CustomExtension>,
-}
-
-/// A verified certificate with extracted public key and metadata.
-#[derive(Clone, Debug)]
-pub struct VerifiedCertificate<K> {
-    /// Subject public key extracted from certificate SPKI.
-    pub public_key: K,
-    /// Parsed certificate metadata.
-    pub meta: CertificateMetadata,
 }

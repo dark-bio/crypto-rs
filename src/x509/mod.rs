@@ -9,16 +9,15 @@
 //! https://datatracker.ietf.org/doc/html/rfc5280
 
 mod error;
-pub(crate) mod issue;
+mod issue;
 mod name;
 mod types;
 mod utils;
-pub(crate) mod verify;
+mod verify;
+
+pub(crate) use issue::issue_cert;
+pub(crate) use verify::verify_cert;
 
 pub use error::{Error, Result};
 pub use name::{Name, NameAttribute};
-pub use types::{
-    CertificateMetadata, CertificateRole, CertificateTemplate, CustomExtension, ValidityCheck,
-    ValidityWindow, VerifiedCertificate,
-};
-pub use utils::private_enterprise_oid;
+pub use types::{Certificate, Extension, Role, ValidityCheck, Verified};
