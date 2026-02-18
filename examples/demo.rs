@@ -44,8 +44,8 @@ fn main() {
 
     // Create a certificate for Alice's xDSA key, signed by the root (intermediate CA)
     let alice_xdsa_template = x509::CertificateTemplate {
-        subject: x509::DistinguishedName::new().cn("Alice Identity"),
-        issuer: x509::DistinguishedName::new().cn("Root"),
+        subject: x509::Name::new().cn("Alice Identity"),
+        issuer: x509::Name::new().cn("Root"),
         validity: x509::ValidityWindow {
             not_before: now,
             not_after: end,
@@ -69,8 +69,8 @@ fn main() {
 
     // Create a certificate for Bob's xDSA key, signed by the root (intermediate CA)
     let bob_xdsa_template = x509::CertificateTemplate {
-        subject: x509::DistinguishedName::new().cn("Bob Identity"),
-        issuer: x509::DistinguishedName::new().cn("Root"),
+        subject: x509::Name::new().cn("Bob Identity"),
+        issuer: x509::Name::new().cn("Root"),
         validity: x509::ValidityWindow {
             not_before: now,
             not_after: end,
@@ -94,8 +94,8 @@ fn main() {
 
     // Create a certificate for Alice's HPKE key, signed by her xDSA key
     let alice_xhpke_template = x509::CertificateTemplate {
-        subject: x509::DistinguishedName::new().cn("Alice Encryption"),
-        issuer: x509::DistinguishedName::new().cn("Alice Identity"),
+        subject: x509::Name::new().cn("Alice Encryption"),
+        issuer: x509::Name::new().cn("Alice Identity"),
         validity: x509::ValidityWindow {
             not_before: now,
             not_after: end,
@@ -123,8 +123,8 @@ fn main() {
 
     // Create a certificate for Bob's HPKE key, signed by his xDSA key
     let bob_xhpke_template = x509::CertificateTemplate {
-        subject: x509::DistinguishedName::new().cn("Bob Encryption"),
-        issuer: x509::DistinguishedName::new().cn("Bob Identity"),
+        subject: x509::Name::new().cn("Bob Encryption"),
+        issuer: x509::Name::new().cn("Bob Identity"),
         validity: x509::ValidityWindow {
             not_before: now,
             not_after: end,

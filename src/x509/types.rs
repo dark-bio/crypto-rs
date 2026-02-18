@@ -4,7 +4,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use super::DistinguishedName;
+use super::Name;
 use const_oid::ObjectIdentifier;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use x509_cert::ext::pkix::KeyUsage;
@@ -42,9 +42,9 @@ pub struct CustomExtension {
 #[derive(Clone, Debug)]
 pub struct CertificateTemplate {
     /// Subject distinguished name.
-    pub subject: DistinguishedName,
+    pub subject: Name,
     /// Issuer distinguished name.
-    pub issuer: DistinguishedName,
+    pub issuer: Name,
     /// Certificate validity window.
     pub validity: ValidityWindow,
     /// End-entity or CA role.
@@ -58,8 +58,8 @@ pub struct CertificateTemplate {
 impl Default for CertificateTemplate {
     fn default() -> Self {
         Self {
-            subject: DistinguishedName::default(),
-            issuer: DistinguishedName::default(),
+            subject: Name::default(),
+            issuer: Name::default(),
             validity: ValidityWindow {
                 not_before: 0,
                 not_after: 0,
@@ -103,9 +103,9 @@ pub struct CertificateMetadata {
     /// Parsed serial bytes.
     pub serial: Vec<u8>,
     /// Parsed subject DN.
-    pub subject: DistinguishedName,
+    pub subject: Name,
     /// Parsed issuer DN.
-    pub issuer: DistinguishedName,
+    pub issuer: Name,
     /// Parsed validity window.
     pub validity: ValidityWindow,
     /// Certificate role (leaf or authority).

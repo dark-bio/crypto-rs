@@ -279,8 +279,8 @@ mod test {
             .as_secs();
 
         let template = CertificateTemplate {
-            subject: DistinguishedName::new().cn("Alice Identity"),
-            issuer: DistinguishedName::new().cn("Root"),
+            subject: Name::new().cn("Alice Identity"),
+            issuer: Name::new().cn("Root"),
             validity: ValidityWindow {
                 not_before: now,
                 not_after: now + 3600,
@@ -327,8 +327,8 @@ mod test {
             .as_secs();
 
         let template = CertificateTemplate {
-            subject: DistinguishedName::new().cn("Alice Encryption"),
-            issuer: DistinguishedName::new().cn("Alice Identity"),
+            subject: Name::new().cn("Alice Encryption"),
+            issuer: Name::new().cn("Alice Identity"),
             validity: ValidityWindow {
                 not_before: now,
                 not_after: now + 3600,
@@ -363,8 +363,8 @@ mod test {
             .as_secs();
 
         let template = CertificateTemplate {
-            subject: DistinguishedName::new().cn("Alice Encryption"),
-            issuer: DistinguishedName::new().cn("Alice Identity"),
+            subject: Name::new().cn("Alice Encryption"),
+            issuer: Name::new().cn("Alice Identity"),
             validity: ValidityWindow {
                 not_before: now,
                 not_after: now + 3600,
@@ -388,8 +388,8 @@ mod test {
             .as_secs();
 
         let template = CertificateTemplate {
-            subject: DistinguishedName::new().cn("Alice Identity"),
-            issuer: DistinguishedName::new().cn("Root"),
+            subject: Name::new().cn("Alice Identity"),
+            issuer: Name::new().cn("Root"),
             validity: ValidityWindow {
                 not_before: now + 3600,
                 not_after: now,
@@ -413,8 +413,8 @@ mod test {
             .as_secs();
 
         let template = CertificateTemplate {
-            subject: DistinguishedName::new().cn("Alice Identity"),
-            issuer: DistinguishedName::new().cn("Root"),
+            subject: Name::new().cn("Alice Identity"),
+            issuer: Name::new().cn("Root"),
             validity: ValidityWindow {
                 not_before: now,
                 not_after: now + 3600,
@@ -442,14 +442,14 @@ mod test {
             .unwrap_or(Duration::ZERO)
             .as_secs();
 
-        let subject_dn = DistinguishedName::new().cn("Alice-1").push(
+        let subject_dn = Name::new().cn("Alice-1").push(
             private_enterprise_oid(62253, &[42]).unwrap(),
             "alice@example.com",
         );
 
         let template = CertificateTemplate {
             subject: subject_dn,
-            issuer: DistinguishedName::new().cn("Root"),
+            issuer: Name::new().cn("Root"),
             validity: ValidityWindow {
                 not_before: now,
                 not_after: now + 3600,
@@ -474,8 +474,8 @@ mod test {
             .as_secs();
 
         let template = CertificateTemplate {
-            subject: DistinguishedName::new(),
-            issuer: DistinguishedName::new().cn("Issuer"),
+            subject: Name::new(),
+            issuer: Name::new().cn("Issuer"),
             validity: ValidityWindow {
                 not_before: now,
                 not_after: now + 3600,
@@ -498,8 +498,8 @@ mod test {
             .as_secs();
 
         let template = CertificateTemplate {
-            subject: DistinguishedName::new().cn("Subject"),
-            issuer: DistinguishedName::new(),
+            subject: Name::new().cn("Subject"),
+            issuer: Name::new(),
             validity: ValidityWindow {
                 not_before: now,
                 not_after: now + 3600,
@@ -523,8 +523,8 @@ mod test {
         let serial = vec![0x01, 0x23, 0x45, 0x67];
 
         let template = CertificateTemplate {
-            subject: DistinguishedName::new().cn("Alice Identity"),
-            issuer: DistinguishedName::new().cn("Root"),
+            subject: Name::new().cn("Alice Identity"),
+            issuer: Name::new().cn("Root"),
             validity: ValidityWindow {
                 not_before: now,
                 not_after: now + 3600,
@@ -551,8 +551,8 @@ mod test {
         let oid = private_enterprise_oid(62253, &[8, 8]).unwrap();
 
         let template = CertificateTemplate {
-            subject: DistinguishedName::new().cn("Alice Identity"),
-            issuer: DistinguishedName::new().cn("Root"),
+            subject: Name::new().cn("Alice Identity"),
+            issuer: Name::new().cn("Root"),
             validity: ValidityWindow {
                 not_before: now,
                 not_after: now + 3600,
@@ -588,8 +588,8 @@ mod test {
             .as_secs();
 
         let template = CertificateTemplate {
-            subject: DistinguishedName::new().cn("Alice Identity"),
-            issuer: DistinguishedName::new().cn("Root"),
+            subject: Name::new().cn("Alice Identity"),
+            issuer: Name::new().cn("Root"),
             validity: ValidityWindow {
                 not_before: now,
                 not_after: now + 3600,
@@ -614,8 +614,8 @@ mod test {
             .as_secs();
 
         let template = CertificateTemplate {
-            subject: DistinguishedName::new().cn("Alice Identity"),
-            issuer: DistinguishedName::new().cn("Root"),
+            subject: Name::new().cn("Alice Identity"),
+            issuer: Name::new().cn("Root"),
             validity: ValidityWindow {
                 not_before: now,
                 not_after: now,
@@ -639,8 +639,8 @@ mod test {
             .as_secs();
 
         let template = CertificateTemplate {
-            subject: DistinguishedName::new().cn("Alice Identity"),
-            issuer: DistinguishedName::new().cn("Root"),
+            subject: Name::new().cn("Alice Identity"),
+            issuer: Name::new().cn("Root"),
             validity: ValidityWindow {
                 not_before: now,
                 not_after: now + 3600,
@@ -665,8 +665,8 @@ mod test {
             .as_secs();
 
         let template = CertificateTemplate {
-            subject: DistinguishedName::new().cn("Alice Identity"),
-            issuer: DistinguishedName::new().cn("Root"),
+            subject: Name::new().cn("Alice Identity"),
+            issuer: Name::new().cn("Root"),
             validity: ValidityWindow {
                 not_before: now,
                 not_after: now + 3600,

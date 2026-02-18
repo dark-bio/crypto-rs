@@ -16,7 +16,7 @@ mod utils;
 mod verify;
 
 pub use error::{Error, Result};
-pub use name::{DistinguishedName, NameAttribute};
+pub use name::{Name, NameAttribute};
 pub use types::{
     CertificateMetadata, CertificateRole, CertificateTemplate, CustomExtension, ValidityCheck,
     ValidityWindow, VerifiedCertificate,

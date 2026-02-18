@@ -9,7 +9,7 @@ use const_oid::ObjectIdentifier;
 use der::Tag;
 use der::asn1::{Any, SetOfVec};
 use x509_cert::attr::AttributeTypeAndValue;
-use x509_cert::name::{Name, RdnSequence, RelativeDistinguishedName};
+use x509_cert::name::{RdnSequence, RelativeDistinguishedName};
 
 /// OID for CommonName (2.5.4.3).
 pub(super) const OID_CN: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.5.4.3");
@@ -35,14 +35,14 @@ pub struct NameAttribute {
     pub value: String,
 }
 
-/// Distinguished Name represented as ordered attributes.
+/// Represented as ordered attributes.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct DistinguishedName {
+pub struct Name {
     /// Ordered list of RDN attributes.
     pub attrs: Vec<NameAttribute>,
 }
 
-impl DistinguishedName {
+impl Name {
     /// Creates an empty DN.
     pub fn new() -> Self {
         Self { attrs: Vec::new() }
@@ -120,7 +120,8 @@ impl DistinguishedName {
         self
     }
 
-    pub(super) fn to_x509_name(&self) -> Result<Name> {
+    /// Converts the name to x509 format.
+    pub(super) fn to_x509_name(&self) -> Result<x509_cert::name::Name> {
         let mut rdns = Vec::with_capacity(self.attrs.len());
         for attr in &self.attrs {
             let mut set = SetOfVec::new();
