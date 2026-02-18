@@ -15,11 +15,11 @@ pub use cert::*;
 
 use crate::pem;
 use crate::{eddsa, mldsa};
-use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use der::asn1::BitStringRef;
 use der::{AnyRef, Decode, Encode};
-use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use sha2::Digest;
 use spki::{AlgorithmIdentifier, ObjectIdentifier, SubjectPublicKeyInfo};
 use std::error::Error;
