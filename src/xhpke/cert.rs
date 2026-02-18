@@ -61,11 +61,11 @@ pub fn verify_cert_der(
 ) -> x509::Result<x509::Verified<PublicKey>> {
     let (key_bytes, cert, key_usage) = x509::verify_cert::<PUBLIC_KEY_SIZE>(der, issuer, validity)?;
 
-    // Enforce strict key usage profile based on certificate role
+    // Enforce key usage profile (check required bits are set)
     if matches!(cert.role, x509::Role::Authority { .. }) {
         return Err(x509::Error::MustBeLeaf);
     }
-    if key_usage != 1 << 4 {
+    if key_usage & (1 << 4) == 0 {
         // keyAgreement
         return Err(x509::Error::InvalidKeyUsage {
             details: "xHPKE requires keyAgreement",

@@ -540,9 +540,10 @@ mod test {
         assert!(result.is_err());
     }
 
-    /// Verifies that an xDSA end-entity certificate with mixed key usage flags is rejected.
+    /// Verifies that an xDSA end-entity certificate with extra key usage flags is accepted
+    /// as long as the required bits are set.
     #[test]
-    fn test_verify_xdsa_ee_rejects_mixed_key_usage_flags() {
+    fn test_verify_xdsa_ee_accepts_extra_key_usage_flags() {
         let subject = xdsa::SecretKey::generate();
         let issuer = xdsa::SecretKey::generate();
         let now = SystemTime::now()
@@ -560,10 +561,10 @@ mod test {
         };
 
         let mut cert = build_xdsa_cert(&subject.public_key(), &issuer, &template).unwrap();
-        let wrong_ku = KeyUsage(KeyUsages::DigitalSignature | KeyUsages::KeyCertSign);
+        let mixed_ku = KeyUsage(KeyUsages::DigitalSignature | KeyUsages::KeyCertSign);
         for ext in cert.tbs_certificate.extensions.as_mut().unwrap() {
             if ext.extn_id == ObjectIdentifier::new_unwrap("2.5.29.15") {
-                ext.extn_value = OctetString::new(wrong_ku.to_der().unwrap()).unwrap();
+                ext.extn_value = OctetString::new(mixed_ku.to_der().unwrap()).unwrap();
                 break;
             }
         }
@@ -572,7 +573,7 @@ mod test {
 
         let der = cert.to_der().unwrap();
         let result = xdsa::verify_cert_der(&der, &issuer.public_key(), ValidityCheck::Now);
-        assert!(result.is_err());
+        assert!(result.is_ok());
     }
 
     /// Verifies that a certificate without basicConstraints is parsed as end-entity.

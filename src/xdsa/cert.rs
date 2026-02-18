@@ -53,12 +53,12 @@ pub fn verify_cert_der(
 ) -> x509::Result<x509::Verified<PublicKey>> {
     let (key_bytes, cert, key_usage) = x509::verify_cert::<PUBLIC_KEY_SIZE>(der, issuer, validity)?;
 
-    // Enforce strict key usage profile based on certificate role
-    let expected: u16 = match cert.role {
+    // Enforce key usage profile based on certificate role (check required bits are set)
+    let required: u16 = match cert.role {
         x509::Role::Authority { .. } => (1 << 5) | (1 << 6), // keyCertSign | cRLSign
         x509::Role::Leaf => 1 << 0,                          // digitalSignature
     };
-    if key_usage != expected {
+    if key_usage & required != required {
         return Err(x509::Error::InvalidKeyUsage {
             details: "xDSA key usage does not match certificate role",
         });
