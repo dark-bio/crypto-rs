@@ -12,6 +12,11 @@
 // keep our all-caps abbreviations.
 #![allow(clippy::upper_case_acronyms)]
 
+#[cfg(feature = "x509")]
+mod cert;
+#[cfg(feature = "x509")]
+pub use cert::*;
+
 pub mod xwing;
 
 use crate::pem;

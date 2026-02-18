@@ -10,8 +10,8 @@ use crate::xdsa;
 #[cfg(feature = "xhpke")]
 use crate::xhpke;
 use const_oid::ObjectIdentifier;
-use der::Encode;
 use der::asn1::{BitString, OctetString, UtcTime};
+use der::Encode;
 use std::collections::HashSet;
 use std::time::Duration;
 use x509_cert::certificate::{CertificateInner, TbsCertificateInner, Version};
@@ -261,6 +261,9 @@ fn make_aki(public_key: &[u8]) -> AuthorityKeyIdentifier {
 mod test {
     use super::super::*;
     use super::*;
+    use crate::x509::verify::{verify_xdsa_cert_der, verify_xdsa_cert_pem};
+    #[cfg(feature = "xhpke")]
+    use crate::x509::verify::{verify_xhpke_cert_der, verify_xhpke_cert_pem};
     use crate::xdsa;
     #[cfg(feature = "xhpke")]
     use crate::xhpke;

@@ -54,7 +54,7 @@ fn main() {
         ..Default::default()
     };
     let alice_xdsa_cert =
-        x509::issue_xdsa_cert_pem(&alice_xdsa_public, &root_secret, &alice_xdsa_template).unwrap();
+        xdsa::issue_cert_pem(&alice_xdsa_public, &root_secret, &alice_xdsa_template).unwrap();
     println!(
         "   Alice xDSA fingerprint: {}",
         hex::encode(alice_xdsa_public.fingerprint().to_bytes())
@@ -79,7 +79,7 @@ fn main() {
         ..Default::default()
     };
     let bob_xdsa_cert =
-        x509::issue_xdsa_cert_pem(&bob_xdsa_public, &root_secret, &bob_xdsa_template).unwrap();
+        xdsa::issue_cert_pem(&bob_xdsa_public, &root_secret, &bob_xdsa_template).unwrap();
     println!(
         "   Bob xDSA fingerprint: {}",
         hex::encode(bob_xdsa_public.fingerprint().to_bytes())
@@ -103,7 +103,7 @@ fn main() {
         role: x509::CertificateRole::Leaf,
         ..Default::default()
     };
-    let alice_xhpke_cert = x509::issue_xhpke_cert_pem(
+    let alice_xhpke_cert = xhpke::issue_cert_pem(
         &alice_xhpke_public,
         &alice_xdsa_secret,
         &alice_xhpke_template,
@@ -133,8 +133,7 @@ fn main() {
         ..Default::default()
     };
     let bob_xhpke_cert =
-        x509::issue_xhpke_cert_pem(&bob_xhpke_public, &bob_xdsa_secret, &bob_xhpke_template)
-            .unwrap();
+        xhpke::issue_cert_pem(&bob_xhpke_public, &bob_xdsa_secret, &bob_xhpke_template).unwrap();
     println!(
         "   Bob xHPKE fingerprint: {}",
         hex::encode(bob_xhpke_public.fingerprint().to_bytes())
@@ -147,13 +146,13 @@ fn main() {
 
     // Alice verifies Bob's xDSA certificate against the root
     let verified_bob_xdsa =
-        x509::verify_xdsa_cert_pem(&bob_xdsa_cert, &root_public, x509::ValidityCheck::Now)
+        xdsa::verify_cert_pem(&bob_xdsa_cert, &root_public, x509::ValidityCheck::Now)
             .expect("Failed to verify Bob's xDSA cert against root");
     println!("   ✓ Bob's xDSA cert verified against root");
 
     // Alice verifies Bob's xHPKE certificate against Bob's xDSA certificate
     // (enforcing issuer authorization semantics: CA + keyCertSign/cRLSign).
-    let verified_bob_xhpke = x509::verify_xhpke_cert_pem_with_issuer_cert(
+    let verified_bob_xhpke = xhpke::verify_cert_pem_with_issuer_cert(
         &bob_xhpke_cert,
         &verified_bob_xdsa,
         x509::ValidityCheck::Now,
@@ -169,13 +168,13 @@ fn main() {
 
     // Bob verifies Alice's xDSA certificate against the root
     let verified_alice_xdsa =
-        x509::verify_xdsa_cert_pem(&alice_xdsa_cert, &root_public, x509::ValidityCheck::Now)
+        xdsa::verify_cert_pem(&alice_xdsa_cert, &root_public, x509::ValidityCheck::Now)
             .expect("Failed to verify Alice's xDSA cert against root");
     println!("   ✓ Alice's xDSA cert verified against root");
 
     // Bob verifies Alice's xHPKE certificate against Alice's xDSA certificate
     // (enforcing issuer authorization semantics: CA + keyCertSign/cRLSign).
-    let _verified_alice_xhpke = x509::verify_xhpke_cert_pem_with_issuer_cert(
+    let _verified_alice_xhpke = xhpke::verify_cert_pem_with_issuer_cert(
         &alice_xhpke_cert,
         &verified_alice_xdsa,
         x509::ValidityCheck::Now,

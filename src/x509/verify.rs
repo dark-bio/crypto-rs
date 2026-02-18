@@ -594,12 +594,10 @@ fn parse_name(name: &x509_parser::x509::X509Name<'_>) -> Result<Name> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::x509::issue::issue_cert;
-    use crate::x509::{
-        CertificateTemplate, issue_xdsa_cert_der, issue_xdsa_cert_pem, name, private_enterprise_oid,
-    };
+    use crate::x509::issue::{issue_cert, issue_xdsa_cert_der, issue_xdsa_cert_pem};
     #[cfg(feature = "xhpke")]
-    use crate::x509::{issue_xhpke_cert_der, issue_xhpke_cert_pem};
+    use crate::x509::issue::{issue_xhpke_cert_der, issue_xhpke_cert_pem};
+    use crate::x509::{CertificateTemplate, name, private_enterprise_oid};
     use crate::xdsa;
     #[cfg(feature = "xhpke")]
     use crate::xhpke;
