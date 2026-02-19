@@ -215,8 +215,8 @@ impl<'de> Deserialize<'de> for PublicKey {
 
 #[cfg(feature = "cbor")]
 impl crate::cbor::Encode for PublicKey {
-    fn encode_cbor(&self) -> Result<Vec<u8>, crate::cbor::Error> {
-        self.to_bytes().encode_cbor()
+    fn encode_cbor_to(&self, buf: &mut Vec<u8>) -> Result<(), crate::cbor::Error> {
+        self.to_bytes().encode_cbor_to(buf)
     }
 }
 
@@ -270,8 +270,8 @@ impl<'de> Deserialize<'de> for Signature {
 
 #[cfg(feature = "cbor")]
 impl crate::cbor::Encode for Signature {
-    fn encode_cbor(&self) -> Result<Vec<u8>, crate::cbor::Error> {
-        self.to_bytes().encode_cbor()
+    fn encode_cbor_to(&self, buf: &mut Vec<u8>) -> Result<(), crate::cbor::Error> {
+        self.to_bytes().encode_cbor_to(buf)
     }
 }
 
@@ -325,8 +325,8 @@ impl<'de> Deserialize<'de> for Fingerprint {
 
 #[cfg(feature = "cbor")]
 impl crate::cbor::Encode for Fingerprint {
-    fn encode_cbor(&self) -> Result<Vec<u8>, crate::cbor::Error> {
-        self.to_bytes().encode_cbor()
+    fn encode_cbor_to(&self, buf: &mut Vec<u8>) -> Result<(), crate::cbor::Error> {
+        self.to_bytes().encode_cbor_to(buf)
     }
 }
 

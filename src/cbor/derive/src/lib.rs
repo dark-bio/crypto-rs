@@ -89,17 +89,16 @@ fn derive_encode_array(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<T
         .iter()
         .map(|f| {
             let ident = &f.ident;
-            quote! { enc.encode_field(&self.#ident)?; }
+            quote! { self.#ident.encode_cbor_to(buf)?; }
         })
         .collect();
 
     Ok(quote! {
         impl #cbor_crate::Encode for #name {
-            fn encode_cbor(&self) -> Result<Vec<u8>, #cbor_crate::Error> {
-                let mut enc = #cbor_crate::Encoder::new();
-                enc.encode_array_header(#len);
+            fn encode_cbor_to(&self, buf: &mut Vec<u8>) -> Result<(), #cbor_crate::Error> {
+                #cbor_crate::encode_array_header_to(buf, #len);
                 #(#encode_fields)*
-                Ok(enc.finish())
+                Ok(())
             }
         }
     })
@@ -203,7 +202,7 @@ fn derive_encode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
 
         return Ok(quote! {
             impl #cbor_crate::Encode for #name {
-                fn encode_cbor(&self) -> Result<Vec<u8>, #cbor_crate::Error> {
+                fn encode_cbor_to(&self, buf: &mut Vec<u8>) -> Result<(), #cbor_crate::Error> {
                     static SCHEMA: std::sync::OnceLock<Result<usize, i64>> = std::sync::OnceLock::new();
                     let estimated_entries = match SCHEMA.get_or_init(|| {
                         let dk: &[i64] = &[#(#direct_key_lits),*];
@@ -218,7 +217,7 @@ fn derive_encode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
 
                     let mut enc = #cbor_crate::MapEncodeBuffer::new(estimated_entries);
                     <Self as #cbor_crate::MapEncode>::encode_map(self, &mut enc)?;
-                    enc.finish()
+                    enc.finish_to(buf)
                 }
             }
 
@@ -268,14 +267,14 @@ fn derive_encode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
             if extract_option_inner(&f.kind).is_some() {
                 quote! {
                     if let Some(ref v) = self.#ident {
-                        enc.encode_int(#key);
-                        enc.encode_field(v)?;
+                        #cbor_crate::encode_int_to(buf, #key);
+                        v.encode_cbor_to(buf)?;
                     }
                 }
             } else {
                 quote! {
-                    enc.encode_int(#key);
-                    enc.encode_field(&self.#ident)?;
+                    #cbor_crate::encode_int_to(buf, #key);
+                    self.#ident.encode_cbor_to(buf)?;
                 }
             }
         })
@@ -303,13 +302,12 @@ fn derive_encode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
     if has_optional {
         Ok(quote! {
             impl #cbor_crate::Encode for #name {
-                fn encode_cbor(&self) -> Result<Vec<u8>, #cbor_crate::Error> {
-                    let mut enc = #cbor_crate::Encoder::new();
+                fn encode_cbor_to(&self, buf: &mut Vec<u8>) -> Result<(), #cbor_crate::Error> {
                     let mut count: usize = 0;
                     #(#count_fields)*
-                    enc.encode_map_header(count);
+                    #cbor_crate::encode_map_header_to(buf, count);
                     #(#encode_fields)*
-                    Ok(enc.finish())
+                    Ok(())
                 }
             }
 
@@ -324,11 +322,10 @@ fn derive_encode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
         let len = sorted.len();
         Ok(quote! {
             impl #cbor_crate::Encode for #name {
-                fn encode_cbor(&self) -> Result<Vec<u8>, #cbor_crate::Error> {
-                    let mut enc = #cbor_crate::Encoder::new();
-                    enc.encode_map_header(#len);
+                fn encode_cbor_to(&self, buf: &mut Vec<u8>) -> Result<(), #cbor_crate::Error> {
+                    #cbor_crate::encode_map_header_to(buf, #len);
                     #(#encode_fields)*
-                    Ok(enc.finish())
+                    Ok(())
                 }
             }
 

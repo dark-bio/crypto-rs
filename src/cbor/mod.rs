@@ -82,7 +82,9 @@ pub enum Error {
 /// encode attempts to encode a generic Rust value to CBOR using the tiny, strict
 /// subset of types permitted by this package.
 pub fn encode<T: Encode>(value: T) -> Result<Vec<u8>, Error> {
-    value.encode_cbor()
+    let mut buf = Vec::with_capacity(128);
+    value.encode_cbor_to(&mut buf)?;
+    Ok(buf)
 }
 
 /// decode attempts to decode a CBOR blob into a generic Rust type using the tiny,
@@ -176,8 +178,7 @@ impl Encoder {
         self.buf.push(MAJOR_SIMPLE << 5 | SIMPLE_NULL);
     }
 
-    /// encode_field encodes a value directly into this encoder's buffer,
-    /// bypassing the per-field allocation of `encode_cbor()`.
+    /// encode_field encodes a value directly into this encoder's buffer.
     pub fn encode_field<T: Encode + ?Sized>(&mut self, value: &T) -> Result<(), Error> {
         value.encode_cbor_to(&mut self.buf)
     }
@@ -222,6 +223,16 @@ pub fn encode_int_to(buf: &mut Vec<u8>, value: i64) {
     } else {
         encode_length_to(buf, MAJOR_NINT, (-1 - value) as u64);
     }
+}
+
+// encode_array_header_to writes a CBOR array header directly into a buffer.
+pub fn encode_array_header_to(buf: &mut Vec<u8>, len: usize) {
+    encode_length_to(buf, MAJOR_ARRAY, len as u64);
+}
+
+// encode_map_header_to writes a CBOR map header directly into a buffer.
+pub fn encode_map_header_to(buf: &mut Vec<u8>, len: usize) {
+    encode_length_to(buf, MAJOR_MAP, len as u64);
 }
 
 // Decoder is the low level implementation of the CBOR decoder with only the
@@ -467,20 +478,8 @@ impl<'a> Decoder<'a> {
 
 /// Encode is the interface needed to encode a type to CBOR.
 pub trait Encode {
-    // encode_cbor converts the type to CBOR.
-    fn encode_cbor(&self) -> Result<Vec<u8>, Error> {
-        let mut buf = Vec::new();
-        self.encode_cbor_to(&mut buf)?;
-        Ok(buf)
-    }
-
-    // encode_cbor_to writes the CBOR encoding directly into an existing buffer,
-    // avoiding the allocation overhead of encode_cbor(). Primitive types override
-    // this for zero-allocation encoding; the default falls back to encode_cbor().
-    fn encode_cbor_to(&self, buf: &mut Vec<u8>) -> Result<(), Error> {
-        buf.extend_from_slice(&self.encode_cbor()?);
-        Ok(())
-    }
+    // encode_cbor_to writes the CBOR encoding directly into an existing buffer.
+    fn encode_cbor_to(&self, buf: &mut Vec<u8>) -> Result<(), Error>;
 }
 
 /// Decode is the interface needed to decode a type from CBOR.
@@ -738,10 +737,6 @@ mod tuple_impls {
 
 // Blanket encoder for references.
 impl<T: Encode> Encode for &T {
-    fn encode_cbor(&self) -> Result<Vec<u8>, Error> {
-        (*self).encode_cbor()
-    }
-
     fn encode_cbor_to(&self, buf: &mut Vec<u8>) -> Result<(), Error> {
         (*self).encode_cbor_to(buf)
     }
@@ -777,13 +772,6 @@ impl Decode for Null {
 
 // Encoder and decoder implementation for Option<T> (None encodes as null).
 impl<T: Encode> Encode for Option<T> {
-    fn encode_cbor(&self) -> Result<Vec<u8>, Error> {
-        match self {
-            Some(value) => value.encode_cbor(),
-            None => Ok(vec![MAJOR_SIMPLE << 5 | SIMPLE_NULL]),
-        }
-    }
-
     fn encode_cbor_to(&self, buf: &mut Vec<u8>) -> Result<(), Error> {
         match self {
             Some(value) => value.encode_cbor_to(buf),
@@ -824,7 +812,7 @@ pub trait MapEncode {
 /// all encoded values are written contiguously into `data`.
 pub struct MapEncodeBuffer {
     pub data: Vec<u8>,
-    pub entries: Vec<(i64, u32, u32)>,
+    pub entries: Vec<(i64, usize, usize)>,
 }
 
 impl MapEncodeBuffer {
@@ -838,9 +826,9 @@ impl MapEncodeBuffer {
 
     /// Encodes a required field directly into the shared buffer.
     pub fn push<T: Encode>(&mut self, key: i64, value: &T) -> Result<(), Error> {
-        let start = self.data.len() as u32;
+        let start = self.data.len();
         value.encode_cbor_to(&mut self.data)?;
-        let end = self.data.len() as u32;
+        let end = self.data.len();
         self.entries.push((key, start, end));
         Ok(())
     }
@@ -853,9 +841,9 @@ impl MapEncodeBuffer {
         Ok(())
     }
 
-    /// Assembles the final CBOR map bytes. Sorts entries by CBOR key order
-    /// if not already sorted, then verifies no duplicate keys.
-    pub fn finish(mut self) -> Result<Vec<u8>, Error> {
+    /// Assembles the final CBOR map into the provided buffer. Sorts entries
+    /// by CBOR key order if not already sorted, then verifies no duplicate keys.
+    pub fn finish_to(mut self, out: &mut Vec<u8>) -> Result<(), Error> {
         // Check if already in order (common case: keys from embeds interleave nicely)
         let ordered = self
             .entries
@@ -872,13 +860,13 @@ impl MapEncodeBuffer {
             }
         }
         // Assemble output: map header + sorted key-value pairs
-        let mut out = Vec::with_capacity(self.data.len() + self.entries.len() * 10 + 5);
-        encode_length_to(&mut out, MAJOR_MAP, self.entries.len() as u64);
+        out.reserve(self.data.len() + self.entries.len() * 10 + 5);
+        encode_length_to(out, MAJOR_MAP, self.entries.len() as u64);
         for &(key, start, end) in &self.entries {
-            encode_int_to(&mut out, key);
-            out.extend_from_slice(&self.data[start as usize..end as usize]);
+            encode_int_to(out, key);
+            out.extend_from_slice(&self.data[start..end]);
         }
-        Ok(out)
+        Ok(())
     }
 }
 
@@ -985,13 +973,7 @@ impl<'a, 'b, E: MapEntryAccess<'a>> MapEntriesScoped<'a, 'b, E> {
     }
 
     fn key_allowed(&self, key: i64) -> bool {
-        if self.keys.len() <= 8 {
-            self.keys.contains(&key)
-        } else {
-            self.keys
-                .binary_search_by(|k| cbor_key_cmp(*k, key))
-                .is_ok()
-        }
+        self.keys.contains(&key)
     }
 }
 
@@ -1041,10 +1023,6 @@ impl std::ops::DerefMut for Raw {
 }
 
 impl Encode for Raw {
-    fn encode_cbor(&self) -> Result<Vec<u8>, Error> {
-        Ok(self.0.clone())
-    }
-
     fn encode_cbor_to(&self, buf: &mut Vec<u8>) -> Result<(), Error> {
         buf.extend_from_slice(&self.0);
         Ok(())
@@ -1237,11 +1215,15 @@ fn verify_object(decoder: &mut Decoder, depth: usize) -> Result<(), Error> {
                 // Decode and verify the key is an integer
                 let key = decoder.decode_int()?;
 
-                // Verify deterministic ordering
+                // Verify deterministic ordering and no duplicate keys
                 if let Some(prev) = prev_key
                     && cbor_key_cmp(prev, key) != Ordering::Less
                 {
-                    return Err(Error::InvalidMapKeyOrder(key, prev));
+                    return Err(if prev == key {
+                        Error::DuplicateMapKey(key)
+                    } else {
+                        Error::InvalidMapKeyOrder(key, prev)
+                    });
                 }
                 prev_key = Some(key);
 
@@ -2511,7 +2493,7 @@ mod tests {
         enc.encode_int(1);
         enc.encode_uint(99);
         enc.encode_int(2);
-        enc.extend(&"hi".to_string().encode_cbor().unwrap());
+        enc.extend(&encode(&"hi".to_string()).unwrap());
         let data = enc.finish();
         match decode::<Clash>(&data) {
             Err(Error::DuplicateMapKey(1)) => {}
@@ -2683,7 +2665,7 @@ mod tests {
         enc.encode_int(1);
         enc.encode_uint(1);
         enc.encode_int(2);
-        enc.extend(&"two".to_string().encode_cbor().unwrap());
+        enc.extend(&encode(&"two".to_string()).unwrap());
         enc.encode_int(3);
         enc.encode_uint(3);
         enc.encode_int(99);
@@ -2709,7 +2691,7 @@ mod tests {
         let mut enc = Encoder::new();
         enc.encode_map_header(3);
         enc.encode_int(2);
-        enc.extend(&"x".to_string().encode_cbor().unwrap());
+        enc.extend(&encode(&"x".to_string()).unwrap());
         enc.encode_int(1);
         enc.encode_uint(1);
         enc.encode_int(3);
@@ -2739,7 +2721,7 @@ mod tests {
         enc.encode_int(1);
         enc.encode_uint(2);
         enc.encode_int(2);
-        enc.extend(&"x".to_string().encode_cbor().unwrap());
+        enc.extend(&encode(&"x".to_string()).unwrap());
         enc.encode_int(3);
         enc.encode_uint(3);
         let data = enc.finish();

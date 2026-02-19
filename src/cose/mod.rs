@@ -13,7 +13,7 @@ mod types;
 
 pub use types::{
     CoseEncrypt0, CoseSign1, CritHeader, EmptyHeader, EncProtectedHeader, EncStructure,
-    EncapKeyHeader, HEADER_TIMESTAMP, SigProtectedHeader, SigStructure,
+    EncapKeyHeader, SigProtectedHeader, SigStructure, HEADER_TIMESTAMP,
 };
 
 // Use an indirect time package that mostly defers to sts::time on most platforms,
@@ -137,15 +137,12 @@ pub fn sign_detached_at<A: Encode>(
         timestamp,
     })?;
     // Build and sign Sig_structure with empty payload for detached mode
-    let signature = signer.sign(
-        &SigStructure {
-            context: "Signature1",
-            protected: &protected,
-            external_aad: &aad,
-            payload: &[],
-        }
-        .encode_cbor()?,
-    );
+    let signature = signer.sign(&cbor::encode(SigStructure {
+        context: "Signature1",
+        protected: &protected,
+        external_aad: &aad,
+        payload: &[],
+    })?);
     // Build and encode COSE_Sign1 with null payload
     Ok(cbor::encode(&CoseSign1 {
         protected,
@@ -187,15 +184,12 @@ pub fn sign_at<E: Encode, A: Encode>(
         timestamp,
     })?;
     // Build and sign Sig_structure
-    let signature = signer.sign(
-        &SigStructure {
-            context: "Signature1",
-            protected: &protected,
-            external_aad: &aad,
-            payload: &msg_to_embed,
-        }
-        .encode_cbor()?,
-    );
+    let signature = signer.sign(&cbor::encode(SigStructure {
+        context: "Signature1",
+        protected: &protected,
+        external_aad: &aad,
+        payload: &msg_to_embed,
+    })?);
     // Build and encode COSE_Sign1
     Ok(cbor::encode(&CoseSign1 {
         protected,
@@ -268,13 +262,12 @@ pub fn verify_detached_at<A: Encode>(
         }
     }
     // Reconstruct Sig_structure to verify (empty payload for detached mode)
-    let blob = SigStructure {
+    let blob = cbor::encode(SigStructure {
         context: "Signature1",
         protected: &sign1.protected,
         external_aad: &aad,
         payload: &[],
-    }
-    .encode_cbor()?;
+    })?;
 
     // Verify signature
     verifier
@@ -350,13 +343,12 @@ pub fn verify_at<E: Decode, A: Encode>(
         }
     }
     // Reconstruct Sig_structure to verify
-    let blob = SigStructure {
+    let blob = cbor::encode(SigStructure {
         context: "Signature1",
         protected: &sign1.protected,
         external_aad: &aad,
         payload: &payload,
-    }
-    .encode_cbor()?;
+    })?;
 
     // Verify signature
     verifier
@@ -498,12 +490,11 @@ pub fn encrypt<A: Encode>(
     let (encap_key, ciphertext) = recipient
         .seal(
             sign1,
-            &EncStructure {
+            &cbor::encode(EncStructure {
                 context: "Encrypt0",
                 protected: &protected,
                 external_aad: &msg_to_auth,
-            }
-            .encode_cbor()?,
+            })?,
             &info,
         )
         .map_err(|e| Error::DecryptionFailed(e.to_string()))?;
@@ -627,12 +618,11 @@ pub fn decrypt<A: Encode>(
         .open(
             encap_key,
             &encrypt0.ciphertext,
-            &EncStructure {
+            &cbor::encode(EncStructure {
                 context: "Encrypt0",
                 protected: &encrypt0.protected,
                 external_aad: &msg_to_auth,
-            }
-            .encode_cbor()?,
+            })?,
             &info,
         )
         .map_err(|e| Error::DecryptionFailed(e.to_string()))?;
