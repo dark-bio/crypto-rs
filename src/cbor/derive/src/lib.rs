@@ -216,6 +216,22 @@ fn derive_encode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
                     #(#direct_entries)*
                     #(#embed_entries)*
                     __entries.sort_by(|a, b| #cbor_crate::cbor_key_cmp(a.0, b.0));
+                    // Validate the actual merged entries too, not just schema-level
+                    // key sets. This defends against custom MapKeys impls that don't
+                    // match the bytes returned by Encode.
+                    let mut __prev_key: Option<i64> = None;
+                    for (__key, _) in __entries.iter() {
+                        if let Some(__prev) = __prev_key {
+                            if #cbor_crate::cbor_key_cmp(__prev, *__key) != std::cmp::Ordering::Less {
+                                return Err(if __prev == *__key {
+                                    #cbor_crate::Error::DuplicateMapKey(*__key)
+                                } else {
+                                    #cbor_crate::Error::InvalidMapKeyOrder(*__key, __prev)
+                                });
+                            }
+                        }
+                        __prev_key = Some(*__key);
+                    }
                     Ok(#cbor_crate::encode_map_entries(&__entries))
                 }
             }
@@ -397,7 +413,7 @@ fn derive_decode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
         // Direct key literals for building the runtime set
         let direct_key_lits: Vec<i64> = direct.iter().map(|f| f.key.unwrap()).collect();
 
-        // Extract each direct field by key, removing consumed entries from __remaining.
+        // Extract each direct field by key from __remaining.
         let extract_direct: Vec<_> = direct
             .iter()
             .map(|f| {
@@ -408,8 +424,7 @@ fn derive_decode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
                 if let Some(inner_ty) = extract_option_inner(ty) {
                     // Optional (omittable): None if key not present
                     quote! {
-                        let #ident: #ty = if let Some(__pos) = __remaining.iter().position(|(k, _)| *k == #key) {
-                            let (_, __raw) = __remaining.remove(__pos);
+                        let #ident: #ty = if let Some(__raw) = __remaining.remove(&#key) {
                             Some(<#inner_ty as #cbor_crate::Decode>::decode_cbor(&__raw.0)?)
                         } else {
                             None
@@ -418,30 +433,24 @@ fn derive_decode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
                 } else if let Some(inner_ty) = extract_nullable_inner(ty) {
                     // Nullable (Option<Option<T>>): key must be present
                     quote! {
-                        let __pos = __remaining.iter()
-                            .position(|(k, _)| *k == #key)
-                            .ok_or(#cbor_crate::Error::DecodeFailed(
-                                format!("missing required key {}", #key)
-                            ))?;
-                        let (_, __raw) = __remaining.remove(__pos);
+                        let __raw = __remaining.remove(&#key).ok_or(#cbor_crate::Error::DecodeFailed(
+                            format!("missing required key {}", #key)
+                        ))?;
                         let #ident: #ty = Some(<#inner_ty as #cbor_crate::Decode>::decode_cbor(&__raw.0)?);
                     }
                 } else {
                     // Required: key must be present
                     quote! {
-                        let __pos = __remaining.iter()
-                            .position(|(k, _)| *k == #key)
-                            .ok_or(#cbor_crate::Error::DecodeFailed(
-                                format!("missing required key {}", #key)
-                            ))?;
-                        let (_, __raw) = __remaining.remove(__pos);
+                        let __raw = __remaining.remove(&#key).ok_or(#cbor_crate::Error::DecodeFailed(
+                            format!("missing required key {}", #key)
+                        ))?;
                         let #ident: #ty = <#ty as #cbor_crate::Decode>::decode_cbor(&__raw.0)?;
                     }
                 }
             })
             .collect();
 
-        // Partition remaining entries to each embed via MapKeys, checking for
+        // Build each embed subset from remaining entries via MapKeys, checking
         // collisions between embed key sets and between embeds and direct keys.
         let extract_embeds: Vec<_> = embeds
             .iter()
@@ -470,21 +479,16 @@ fn derive_decode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
                             return Err(#cbor_crate::Error::DuplicateMapKey(*__k));
                         }
                     }
-                    // Partition: entries whose key belongs to this embed go into __subset,
-                    // everything else stays in __remaining for the next embed.
                     let mut __subset: Vec<(i64, #cbor_crate::Raw)> = Vec::new();
-                    let mut __next_remaining: Vec<(i64, #cbor_crate::Raw)> = Vec::new();
-                    for (__k, __v) in __remaining.into_iter() {
-                        if __embed_keys.contains(&__k) {
-                            __subset.push((__k, __v));
-                        } else {
-                            __next_remaining.push((__k, __v));
+                    for __k in __embed_keys.iter() {
+                        if let Some(__raw) = __remaining.remove(__k) {
+                            __subset.push((*__k, __raw));
                         }
                     }
+                    __subset.sort_by(|a, b| #cbor_crate::cbor_key_cmp(a.0, b.0));
                     let #ident = <#ty as #cbor_crate::Decode>::decode_cbor(
                         &#cbor_crate::encode_map_entries(&__subset)
                     )?;
-                    __remaining = __next_remaining;
                 }
             })
             .collect();
@@ -524,17 +528,18 @@ fn derive_decode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
                     // Build sets for collision detection between direct and embed keys.
                     let __direct_keys: std::collections::BTreeSet<i64> = [#(#direct_key_lits),*].into_iter().collect();
                     let mut __seen_embed_keys: std::collections::BTreeSet<i64> = std::collections::BTreeSet::new();
-                    let mut __remaining = __entries;
+                    let mut __remaining: std::collections::BTreeMap<i64, #cbor_crate::Raw> =
+                        __entries.into_iter().collect();
 
-                    // Extract direct fields (removes consumed entries from __remaining).
+                    // Extract direct fields.
                     #(#extract_direct)*
 
-                    // Extract embed fields (partitions __remaining by MapKeys).
+                    // Extract embed fields.
                     #(#extract_embeds)*
 
                     // Reject unknown keys: everything should have been consumed.
                     if !__remaining.is_empty() {
-                        let __unknown: Vec<i64> = __remaining.iter().map(|(k, _)| *k).collect();
+                        let __unknown: Vec<i64> = __remaining.keys().copied().collect();
                         return Err(#cbor_crate::Error::DecodeFailed(
                             format!("unknown CBOR map keys: {:?}", __unknown)
                         ));

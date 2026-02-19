@@ -885,8 +885,19 @@ pub fn decode_map_entries(data: &[u8]) -> Result<Vec<(i64, Raw)>, Error> {
     let mut dec = Decoder::new(data);
     let len = dec.decode_map_header()?;
     let mut entries = Vec::with_capacity(len as usize);
+    let mut prev_key: Option<i64> = None;
     for _ in 0..len {
         let key = dec.decode_int()?;
+        if let Some(prev) = prev_key
+            && cbor_key_cmp(prev, key) != Ordering::Less
+        {
+            return Err(if prev == key {
+                Error::DuplicateMapKey(key)
+            } else {
+                Error::InvalidMapKeyOrder(key, prev)
+            });
+        }
+        prev_key = Some(key);
         let raw = Raw::decode_cbor_notrail(&mut dec)?;
         entries.push((key, raw));
     }
@@ -2465,6 +2476,61 @@ mod tests {
         }
     }
 
+    // Tests that embed encoding validates actual merged keys too, not only
+    // the key set reported by MapKeys.
+    #[test]
+    fn test_map_embed_runtime_key_mismatch_rejected() {
+        #[derive(Debug, Clone, PartialEq)]
+        struct RogueEmbed;
+
+        impl MapKeys for RogueEmbed {
+            fn cbor_map_keys() -> Vec<i64> {
+                // Intentionally dishonest: claims key 2
+                vec![2]
+            }
+        }
+
+        impl Encode for RogueEmbed {
+            fn encode_cbor(&self) -> Result<Vec<u8>, Error> {
+                // Intentionally emits key 1 to collide with the parent direct field.
+                let mut enc = Encoder::new();
+                enc.encode_map_header(1);
+                enc.encode_int(1);
+                enc.encode_uint(7);
+                Ok(enc.finish())
+            }
+        }
+
+        impl Decode for RogueEmbed {
+            fn decode_cbor(data: &[u8]) -> Result<Self, Error> {
+                let _ = decode_map_entries(data)?;
+                Ok(Self)
+            }
+
+            fn decode_cbor_notrail(dec: &mut Decoder<'_>) -> Result<Self, Error> {
+                let raw = <Raw as Decode>::decode_cbor_notrail(dec)?;
+                let _ = decode_map_entries(&raw.0)?;
+                Ok(Self)
+            }
+        }
+
+        #[derive(Debug, PartialEq, Cbor)]
+        struct Parent {
+            #[cbor(key = 1)]
+            x: u64,
+            #[cbor(embed)]
+            rogue: RogueEmbed,
+        }
+
+        match encode(&Parent {
+            x: 42,
+            rogue: RogueEmbed,
+        }) {
+            Err(Error::DuplicateMapKey(1)) => {}
+            other => panic!("expected Err(DuplicateMapKey(1)), got {:?}", other),
+        }
+    }
+
     // Tests the entry helper functions round-trip correctly.
     #[test]
     fn test_map_entries_roundtrip() {
@@ -2482,6 +2548,34 @@ mod tests {
 
         let re_encoded = encode_map_entries(&entries);
         assert_eq!(data, re_encoded);
+    }
+
+    // Tests that decode_map_entries rejects out-of-order and duplicate keys.
+    #[test]
+    fn test_map_entries_rejection() {
+        // Out-of-order keys: 2 before 1.
+        let mut enc = Encoder::new();
+        enc.encode_map_header(2);
+        enc.encode_int(2);
+        enc.encode_uint(67);
+        enc.encode_int(1);
+        enc.encode_uint(42);
+        match decode_map_entries(&enc.finish()) {
+            Err(Error::InvalidMapKeyOrder(1, 2)) => {}
+            other => panic!("expected InvalidMapKeyOrder(1, 2), got {:?}", other),
+        }
+
+        // Duplicate keys: 1 appears twice.
+        let mut enc = Encoder::new();
+        enc.encode_map_header(2);
+        enc.encode_int(1);
+        enc.encode_uint(1);
+        enc.encode_int(1);
+        enc.encode_uint(2);
+        match decode_map_entries(&enc.finish()) {
+            Err(Error::DuplicateMapKey(1)) => {}
+            other => panic!("expected DuplicateMapKey(1), got {:?}", other),
+        }
     }
 
     // Tests that deeply nested CBOR structures are rejected with an error
