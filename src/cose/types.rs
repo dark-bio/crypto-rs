@@ -123,14 +123,14 @@ pub struct SigStructure<'a> {
 }
 
 impl crate::cbor::Encode for SigStructure<'_> {
-    fn encode_cbor(&self) -> Vec<u8> {
+    fn encode_cbor(&self) -> Result<Vec<u8>, crate::cbor::Error> {
         let mut encoder = crate::cbor::Encoder::new();
         encoder.encode_array_header(4);
         encoder.encode_text(self.context);
         encoder.encode_bytes(self.protected);
         encoder.encode_bytes(self.external_aad);
         encoder.encode_bytes(self.payload);
-        encoder.finish()
+        Ok(encoder.finish())
     }
 }
 
@@ -151,12 +151,12 @@ pub struct EncStructure<'a> {
 }
 
 impl crate::cbor::Encode for EncStructure<'_> {
-    fn encode_cbor(&self) -> Vec<u8> {
+    fn encode_cbor(&self) -> Result<Vec<u8>, crate::cbor::Error> {
         let mut encoder = crate::cbor::Encoder::new();
         encoder.encode_array_header(3);
         encoder.encode_text(self.context);
         encoder.encode_bytes(self.protected);
         encoder.encode_bytes(self.external_aad);
-        encoder.finish()
+        Ok(encoder.finish())
     }
 }

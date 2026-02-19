@@ -77,7 +77,7 @@ pub fn sign_detached<A: Encode>(
     msg_to_auth: A,
     signer: &xdsa::SecretKey,
     domain: &[u8],
-) -> Vec<u8> {
+) -> Result<Vec<u8>, Error> {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("system time before Unix epoch")
@@ -101,7 +101,7 @@ pub fn sign<E: Encode, A: Encode>(
     msg_to_auth: A,
     signer: &xdsa::SecretKey,
     domain: &[u8],
-) -> Vec<u8> {
+) -> Result<Vec<u8>, Error> {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("system time before Unix epoch")
@@ -123,10 +123,10 @@ pub fn sign_detached_at<A: Encode>(
     signer: &xdsa::SecretKey,
     domain: &[u8],
     timestamp: i64,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, Error> {
     // Restrict the user's domain to the context of this library
     let info = [DOMAIN_PREFIX, domain].concat();
-    let aad = cbor::encode(&(&info, msg_to_auth));
+    let aad = cbor::encode(&(&info, msg_to_auth))?;
 
     let protected = cbor::encode(&SigProtectedHeader {
         algorithm: ALGORITHM_ID_XDSA,
@@ -135,7 +135,7 @@ pub fn sign_detached_at<A: Encode>(
         },
         kid: signer.fingerprint(),
         timestamp,
-    });
+    })?;
     // Build and sign Sig_structure with empty payload for detached mode
     let signature = signer.sign(
         &SigStructure {
@@ -144,15 +144,15 @@ pub fn sign_detached_at<A: Encode>(
             external_aad: &aad,
             payload: &[],
         }
-        .encode_cbor(),
+        .encode_cbor()?,
     );
     // Build and encode COSE_Sign1 with null payload
-    cbor::encode(&CoseSign1 {
+    Ok(cbor::encode(&CoseSign1 {
         protected,
         unprotected: EmptyHeader {},
         payload: None,
         signature,
-    })
+    })?)
 }
 
 /// sign_at creates a COSE_Sign1 digital signature with an embedded payload
@@ -171,12 +171,12 @@ pub fn sign_at<E: Encode, A: Encode>(
     signer: &xdsa::SecretKey,
     domain: &[u8],
     timestamp: i64,
-) -> Vec<u8> {
-    let msg_to_embed = cbor::encode(msg_to_embed);
+) -> Result<Vec<u8>, Error> {
+    let msg_to_embed = cbor::encode(msg_to_embed)?;
 
     // Restrict the user's domain to the context of this library
     let info = [DOMAIN_PREFIX, domain].concat();
-    let aad = cbor::encode(&(&info, msg_to_auth));
+    let aad = cbor::encode(&(&info, msg_to_auth))?;
 
     let protected = cbor::encode(&SigProtectedHeader {
         algorithm: ALGORITHM_ID_XDSA,
@@ -185,7 +185,7 @@ pub fn sign_at<E: Encode, A: Encode>(
         },
         kid: signer.fingerprint(),
         timestamp,
-    });
+    })?;
     // Build and sign Sig_structure
     let signature = signer.sign(
         &SigStructure {
@@ -194,15 +194,15 @@ pub fn sign_at<E: Encode, A: Encode>(
             external_aad: &aad,
             payload: &msg_to_embed,
         }
-        .encode_cbor(),
+        .encode_cbor()?,
     );
     // Build and encode COSE_Sign1
-    cbor::encode(&CoseSign1 {
+    Ok(cbor::encode(&CoseSign1 {
         protected,
         unprotected: EmptyHeader {},
         payload: Some(msg_to_embed),
         signature,
-    })
+    })?)
 }
 
 /// verify_detached validates a COSE_Sign1 digital signature with a detached payload.
@@ -248,7 +248,7 @@ pub fn verify_detached_at<A: Encode>(
 ) -> Result<(), Error> {
     // Restrict the user's domain to the context of this library
     let info = [DOMAIN_PREFIX, domain].concat();
-    let aad = cbor::encode(&(&info, msg_to_auth));
+    let aad = cbor::encode(&(&info, msg_to_auth))?;
 
     // Parse COSE_Sign1
     let sign1: CoseSign1 = cbor::decode(msg_to_check)?;
@@ -274,7 +274,7 @@ pub fn verify_detached_at<A: Encode>(
         external_aad: &aad,
         payload: &[],
     }
-    .encode_cbor();
+    .encode_cbor()?;
 
     // Verify signature
     verifier
@@ -331,7 +331,7 @@ pub fn verify_at<E: Decode, A: Encode>(
 ) -> Result<E, Error> {
     // Restrict the user's domain to the context of this library
     let info = [DOMAIN_PREFIX, domain].concat();
-    let aad = cbor::encode(&(&info, msg_to_auth));
+    let aad = cbor::encode(&(&info, msg_to_auth))?;
 
     // Parse COSE_Sign1
     let sign1: CoseSign1 = cbor::decode(msg_to_check)?;
@@ -356,7 +356,7 @@ pub fn verify_at<E: Decode, A: Encode>(
         external_aad: &aad,
         payload: &payload,
     }
-    .encode_cbor();
+    .encode_cbor()?;
 
     // Verify signature
     verifier
@@ -450,8 +450,8 @@ pub fn seal_at<E: Encode, A: Encode>(
     timestamp: i64,
 ) -> Result<Vec<u8>, Error> {
     // Pre-encode for EncStructure (which needs raw bytes for external_aad)
-    let msg_to_seal = cbor::encode(msg_to_seal);
-    let msg_to_auth = cbor::encode(msg_to_auth);
+    let msg_to_seal = cbor::encode(msg_to_seal)?;
+    let msg_to_auth = cbor::encode(msg_to_auth)?;
 
     // Create a COSE_Sign1 with the payload, binding the AAD (use Raw to avoid re-encoding)
     let signed = sign_at(
@@ -460,7 +460,7 @@ pub fn seal_at<E: Encode, A: Encode>(
         signer,
         domain,
         timestamp,
-    );
+    )?;
     // Encrypt the signed message to the recipient
     encrypt(&signed, Raw(msg_to_auth), recipient, domain)
 }
@@ -484,13 +484,13 @@ pub fn encrypt<A: Encode>(
     domain: &[u8],
 ) -> Result<Vec<u8>, Error> {
     // Pre-encode for EncStructure (which needs raw bytes for external_aad)
-    let msg_to_auth = cbor::encode(msg_to_auth);
+    let msg_to_auth = cbor::encode(msg_to_auth)?;
 
     // Build protected header with recipient's fingerprint
     let protected = cbor::encode(&EncProtectedHeader {
         algorithm: ALGORITHM_ID_XHPKE,
         kid: recipient.fingerprint(),
-    });
+    })?;
     // Restrict the user's domain to the context of this library
     let info = [DOMAIN_PREFIX, domain].concat();
 
@@ -503,7 +503,7 @@ pub fn encrypt<A: Encode>(
                 protected: &protected,
                 external_aad: &msg_to_auth,
             }
-            .encode_cbor(),
+            .encode_cbor()?,
             &info,
         )
         .map_err(|e| Error::DecryptionFailed(e.to_string()))?;
@@ -515,7 +515,7 @@ pub fn encrypt<A: Encode>(
             encap_key: encap_key.to_vec(),
         },
         ciphertext,
-    }))
+    })?)
 }
 
 /// open decrypts and verifies a sealed message.
@@ -601,7 +601,7 @@ pub fn decrypt<A: Encode>(
     domain: &[u8],
 ) -> Result<Vec<u8>, Error> {
     // Pre-encode for EncStructure (which needs raw bytes for external_aad)
-    let msg_to_auth = cbor::encode(msg_to_auth);
+    let msg_to_auth = cbor::encode(msg_to_auth)?;
 
     // Restrict the user's domain to the context of this library
     let info = [DOMAIN_PREFIX, domain].concat();
@@ -632,7 +632,7 @@ pub fn decrypt<A: Encode>(
                 protected: &encrypt0.protected,
                 external_aad: &msg_to_auth,
             }
-            .encode_cbor(),
+            .encode_cbor()?,
             &info,
         )
         .map_err(|e| Error::DecryptionFailed(e.to_string()))?;
@@ -860,7 +860,7 @@ mod tests {
                 alice.public_key()
             };
             let result: Result<Vec<u8>, _> = verify(
-                &signed,
+                &signed.unwrap(),
                 &test.verifier_msg_to_auth.to_vec(),
                 &verifier,
                 test.verifier_domain,
@@ -1063,7 +1063,7 @@ mod tests {
         let payload = (42u64, "foo".to_string());
         let aad = ("bar".to_string(),);
 
-        let signed = sign(&payload, &aad, &alice, b"baz");
+        let signed = sign(&payload, &aad, &alice, b"baz").unwrap();
         let recovered: (u64, String) =
             verify(&signed, &aad, &alice.public_key(), b"baz", None).unwrap();
 
