@@ -13,7 +13,7 @@ mod types;
 
 pub use types::{
     CoseEncrypt0, CoseSign1, CritHeader, EmptyHeader, EncProtectedHeader, EncStructure,
-    EncapKeyHeader, SigProtectedHeader, SigStructure, HEADER_TIMESTAMP,
+    EncapKeyHeader, HEADER_TIMESTAMP, SigProtectedHeader, SigStructure,
 };
 
 // Use an indirect time package that mostly defers to sts::time on most platforms,

@@ -4,21 +4,72 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//! Tiny CBOR encoder and decoder.
+//! Tiny, security-focused CBOR encoder/decoder.
 //!
-//! https://datatracker.ietf.org/doc/html/rfc8949
+//! <https://datatracker.ietf.org/doc/html/rfc8949>
 //!
-//! This is an implementation of the CBOR spec with an extremely reduced type
-//! system, focusing on security rather than flexibility or completeness. The
-//! following types are supported:
-//! - Booleans:                bool
-//! - Null:                    Option<T>::None, cbor::Null
-//! - 64bit positive integers: u64
-//! - 64bit signed integers:   i64
-//! - UTF-8 text strings:      String, &str
-//! - Byte strings:            Vec<u8>, &[u8], [u8; N]
-//! - Arrays:                  (), (X,), (X,Y), ... tuples, or structs with #[cbor(array)]
-//! - Maps:                    structs with #[cbor(key = N)] fields, Option<T>::None omitted
+//! # Type system
+//!
+//! Only a minimal subset of CBOR is supported:
+//!
+//! - **Booleans:**  `bool`
+//! - **Integers:**  `u64`, `i64`
+//! - **Text:**      `String`, `&str`
+//! - **Bytes:**     `Vec<u8>`, `&[u8]`, `[u8; N]`
+//! - **Null:**      `Option<T>::None`, `cbor::Null`
+//! - **Arrays:**    `()`, `(X,)`, `(X, Y)`, ... tuples, or structs with `#[cbor(array)]`
+//! - **Maps:**      structs with `#[cbor(key = N)]` fields (integer keys, deterministic order)
+//! - **Raw:**       `cbor::Raw` (opaque CBOR bytes, passed through without parsing)
+//!
+//! # Derive macros
+//!
+//! Array mode — fields encode positionally:
+//!
+//! ```ignore
+//! #[derive(Cbor)]
+//! #[cbor(array)]
+//! struct Foo {
+//!     a: u64,
+//!     b: String,
+//! }
+//! ```
+//!
+//! Map mode — fields encode as key-value pairs sorted by CBOR key bytes:
+//!
+//! ```ignore
+//! #[derive(Cbor)]
+//! struct Bar {
+//!     #[cbor(key = 1)]
+//!     x: u64,                      // required
+//!     #[cbor(key = 2)]
+//!     y: Option<Vec<u8>>,          // optional: omitted when None
+//!     #[cbor(key = 3)]
+//!     z: Option<Option<u64>>,      // nullable: always present, value or null
+//! }
+//! ```
+//!
+//! # Embedding
+//!
+//! Fields marked `#[cbor(embed)]` are flattened into the parent map. The embedded
+//! type must itself be a map-mode struct. Keys across all embeds and direct fields
+//! must not overlap.
+//!
+//! ```ignore
+//! #[derive(Cbor)]
+//! struct Token {
+//!     #[cbor(embed)]
+//!     identity: Identity,           // keys from Identity merge into Token
+//!     #[cbor(key = 3)]
+//!     aud: String,
+//! }
+//! ```
+//!
+//! # Encoding rules
+//!
+//! All output is deterministic (RFC 8949 Section 4.2.1): canonical shortest-form
+//! integers, map keys sorted by encoded bytes, no indefinite lengths, no floats,
+//! no tags. Decoders reject non-canonical input, duplicate keys, and out-of-order
+//! keys.
 
 pub use darkbio_crypto_cbor_derive::Cbor;
 
