@@ -786,8 +786,139 @@ pub trait MapEncode {
 /// MapDecode exposes direct map-entry decoding for derive-generated map-mode
 /// structs. Implementations consume claimed keys from `entries`.
 pub trait MapDecode: Sized {
-    fn cbor_map_keys() -> Vec<i64>;
-    fn decode_map(entries: &mut std::collections::BTreeMap<i64, Raw>) -> Result<Self, Error>;
+    fn cbor_map_keys() -> &'static [i64];
+    fn decode_map<'a, E: MapEntryAccess<'a>>(entries: &mut E) -> Result<Self, Error>;
+}
+
+/// MapEntryAccess provides key-based access to encoded CBOR map values.
+pub trait MapEntryAccess<'a> {
+    fn take(&mut self, key: i64) -> Option<&'a [u8]>;
+    fn contains(&self, key: i64) -> bool;
+    fn is_empty(&self) -> bool;
+    fn remaining_keys(&self) -> Vec<i64>;
+}
+
+/// MapEntries stores a deterministic CBOR map as key/value slots and supports
+/// efficient key-based extraction without rebuilding tree maps.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MapEntries<'a> {
+    entries: Vec<(i64, Option<&'a [u8]>)>,
+    remaining: usize,
+}
+
+impl<'a> MapEntries<'a> {
+    pub fn new(entries: Vec<(i64, &'a [u8])>) -> Self {
+        let mut entries: Vec<(i64, Option<&'a [u8]>)> =
+            entries.into_iter().map(|(k, v)| (k, Some(v))).collect();
+        entries.sort_by_key(|(k, _)| *k);
+        Self::from_sorted_slots(entries)
+    }
+
+    pub fn new_sorted(entries: Vec<(i64, &'a [u8])>) -> Self {
+        let entries: Vec<(i64, Option<&'a [u8]>)> =
+            entries.into_iter().map(|(k, v)| (k, Some(v))).collect();
+        Self::from_sorted_slots(entries)
+    }
+
+    fn from_sorted_slots(entries: Vec<(i64, Option<&'a [u8]>)>) -> Self {
+        Self {
+            remaining: entries.len(),
+            entries,
+        }
+    }
+
+    pub fn take(&mut self, key: i64) -> Option<&'a [u8]> {
+        let index = self.entries.binary_search_by_key(&key, |(k, _)| *k).ok()?;
+        let value = self.entries[index].1.take();
+        if value.is_some() {
+            self.remaining -= 1;
+        }
+        value
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.remaining == 0
+    }
+
+    pub fn contains(&self, key: i64) -> bool {
+        self.entries
+            .binary_search_by_key(&key, |(k, _)| *k)
+            .ok()
+            .and_then(|index| self.entries[index].1.as_ref())
+            .is_some()
+    }
+
+    pub fn remaining_keys(&self) -> Vec<i64> {
+        self.entries
+            .iter()
+            .filter_map(|(k, v)| v.as_ref().map(|_| *k))
+            .collect()
+    }
+}
+
+impl<'a> MapEntryAccess<'a> for MapEntries<'a> {
+    fn take(&mut self, key: i64) -> Option<&'a [u8]> {
+        MapEntries::take(self, key)
+    }
+
+    fn contains(&self, key: i64) -> bool {
+        MapEntries::contains(self, key)
+    }
+
+    fn is_empty(&self) -> bool {
+        MapEntries::is_empty(self)
+    }
+
+    fn remaining_keys(&self) -> Vec<i64> {
+        MapEntries::remaining_keys(self)
+    }
+}
+
+/// MapEntriesScoped is a view into `MapEntries` restricted to a fixed key set.
+pub struct MapEntriesScoped<'a, 'b, E: MapEntryAccess<'a>> {
+    entries: &'b mut E,
+    keys: &'b [i64],
+    marker: std::marker::PhantomData<&'a ()>,
+}
+
+impl<'a, 'b, E: MapEntryAccess<'a>> MapEntriesScoped<'a, 'b, E> {
+    pub fn new(entries: &'b mut E, keys: &'b [i64]) -> Self {
+        Self {
+            entries,
+            keys,
+            marker: std::marker::PhantomData,
+        }
+    }
+
+    fn key_allowed(&self, key: i64) -> bool {
+        self.keys.binary_search(&key).is_ok()
+    }
+}
+
+impl<'a, 'b, E: MapEntryAccess<'a>> MapEntryAccess<'a> for MapEntriesScoped<'a, 'b, E> {
+    fn take(&mut self, key: i64) -> Option<&'a [u8]> {
+        if self.key_allowed(key) {
+            self.entries.take(key)
+        } else {
+            None
+        }
+    }
+
+    fn contains(&self, key: i64) -> bool {
+        self.key_allowed(key) && self.entries.contains(key)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.keys.iter().all(|k| !self.contains(*k))
+    }
+
+    fn remaining_keys(&self) -> Vec<i64> {
+        self.keys
+            .iter()
+            .copied()
+            .filter(|k| self.entries.contains(*k))
+            .collect()
+    }
 }
 
 /// Raw is a placeholder type to allow only partially parsing CBOR objects when
@@ -888,6 +1019,18 @@ pub fn cbor_key_cmp(a: i64, b: i64) -> Ordering {
 /// decode_map_entries_notrail reads a CBOR map from the decoder and returns its
 /// entries as (key, raw_value) pairs.
 pub fn decode_map_entries_notrail(dec: &mut Decoder<'_>) -> Result<Vec<(i64, Raw)>, Error> {
+    let entries = decode_map_entries_slices_notrail(dec)?;
+    Ok(entries
+        .into_iter()
+        .map(|(k, v)| (k, Raw(v.to_vec())))
+        .collect())
+}
+
+/// decode_map_entries_slices_notrail reads a CBOR map from the decoder and
+/// returns borrowed slices for each value.
+pub fn decode_map_entries_slices_notrail<'a>(
+    dec: &mut Decoder<'a>,
+) -> Result<Vec<(i64, &'a [u8])>, Error> {
     let len = dec.decode_map_header()?;
     let mut entries = Vec::with_capacity(len as usize);
     let mut prev_key: Option<i64> = None;
@@ -903,8 +1046,10 @@ pub fn decode_map_entries_notrail(dec: &mut Decoder<'_>) -> Result<Vec<(i64, Raw
             });
         }
         prev_key = Some(key);
-        let raw = Raw::decode_cbor_notrail(dec)?;
-        entries.push((key, raw));
+        let start = dec.pos;
+        skip_object(dec, MAX_DEPTH)?;
+        let end = dec.pos;
+        entries.push((key, &dec.data[start..end]));
     }
     Ok(entries)
 }
@@ -2500,15 +2645,13 @@ mod tests {
         }
 
         impl MapDecode for RogueEmbed {
-            fn cbor_map_keys() -> Vec<i64> {
+            fn cbor_map_keys() -> &'static [i64] {
                 // Intentionally dishonest: claims key 2.
-                vec![2]
+                &[2]
             }
 
-            fn decode_map(
-                entries: &mut std::collections::BTreeMap<i64, Raw>,
-            ) -> Result<Self, Error> {
-                let _ = entries.remove(&2);
+            fn decode_map<'a, E: MapEntryAccess<'a>>(entries: &mut E) -> Result<Self, Error> {
+                let _ = entries.take(2);
                 Ok(Self)
             }
         }

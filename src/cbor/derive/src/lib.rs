@@ -141,22 +141,24 @@ fn derive_encode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
         let embeds: Vec<_> = fields.iter().filter(|f| f.embed).collect();
 
         let direct_key_lits: Vec<i64> = direct.iter().map(|f| f.key.unwrap()).collect();
+        let direct_field_count = direct.len();
 
-        let schema_checks: Vec<_> = embeds
+        let schema_eval: Vec<_> = embeds
             .iter()
             .map(|f| {
                 let ty = &f.kind;
                 quote! {
                     {
-                        let ek: std::collections::BTreeSet<i64> =
-                            <#ty as #cbor_crate::MapDecode>::cbor_map_keys().into_iter().collect();
-                        for k in ek.iter() {
-                            if dk.contains(k) {
-                                return Err(#cbor_crate::Error::DuplicateMapKey(*k));
+                        let embed_keys = <#ty as #cbor_crate::MapDecode>::cbor_map_keys();
+                        estimated_entries += embed_keys.len();
+                        for k in embed_keys.iter().copied() {
+                            if dk.contains(&k) {
+                                return Err(k);
                             }
-                            if !sek.insert(*k) {
-                                return Err(#cbor_crate::Error::DuplicateMapKey(*k));
+                            if sek.contains(&k) {
+                                return Err(k);
                             }
+                            sek.push(k);
                         }
                     }
                 }
@@ -196,11 +198,19 @@ fn derive_encode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
         return Ok(quote! {
             impl #cbor_crate::Encode for #name {
                 fn encode_cbor(&self) -> Result<Vec<u8>, #cbor_crate::Error> {
-                    let dk: std::collections::BTreeSet<i64> = [#(#direct_key_lits),*].into_iter().collect();
-                    let mut sek: std::collections::BTreeSet<i64> = std::collections::BTreeSet::new();
-                    #(#schema_checks)*
+                    static SCHEMA: std::sync::OnceLock<Result<usize, i64>> = std::sync::OnceLock::new();
+                    let estimated_entries = match SCHEMA.get_or_init(|| {
+                        let dk: &[i64] = &[#(#direct_key_lits),*];
+                        let mut sek: Vec<i64> = Vec::new();
+                        let mut estimated_entries: usize = #direct_field_count;
+                        #(#schema_eval)*
+                        Ok(estimated_entries)
+                    }) {
+                        Ok(v) => *v,
+                        Err(k) => return Err(#cbor_crate::Error::DuplicateMapKey(*k)),
+                    };
 
-                    let mut entries: Vec<(i64, #cbor_crate::Raw)> = Vec::new();
+                    let mut entries: Vec<(i64, #cbor_crate::Raw)> = Vec::with_capacity(estimated_entries);
                     <Self as #cbor_crate::MapEncode>::encode_map(self, &mut entries)?;
                     entries.sort_by(|a, b| #cbor_crate::cbor_key_cmp(a.0, b.0));
 
@@ -438,7 +448,7 @@ fn derive_decode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
         .map(|f| {
             if f.embed {
                 let ty = &f.kind;
-                quote! { keys.extend(<#ty as #cbor_crate::MapDecode>::cbor_map_keys()); }
+                quote! { keys.extend_from_slice(<#ty as #cbor_crate::MapDecode>::cbor_map_keys()); }
             } else {
                 let key = f.key.unwrap();
                 quote! { keys.push(#key); }
@@ -454,25 +464,25 @@ fn derive_decode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
             let key = f.key.unwrap();
             if let Some(inner_ty) = extract_option_inner(ty) {
                 quote! {
-                    let #ident: #ty = if let Some(raw) = entries.remove(&#key) {
-                        Some(<#inner_ty as #cbor_crate::Decode>::decode_cbor(&raw.0)?)
+                    let #ident: #ty = if let Some(raw) = entries.take(#key) {
+                        Some(<#inner_ty as #cbor_crate::Decode>::decode_cbor(raw)?)
                     } else {
                         None
                     };
                 }
             } else if let Some(inner_ty) = extract_nullable_inner(ty) {
                 quote! {
-                    let raw = entries.remove(&#key).ok_or(#cbor_crate::Error::DecodeFailed(
+                    let raw = entries.take(#key).ok_or(#cbor_crate::Error::DecodeFailed(
                         format!("missing required key {}", #key)
                     ))?;
-                    let #ident: #ty = Some(<#inner_ty as #cbor_crate::Decode>::decode_cbor(&raw.0)?);
+                    let #ident: #ty = Some(<#inner_ty as #cbor_crate::Decode>::decode_cbor(raw)?);
                 }
             } else {
                 quote! {
-                    let raw = entries.remove(&#key).ok_or(#cbor_crate::Error::DecodeFailed(
+                    let raw = entries.take(#key).ok_or(#cbor_crate::Error::DecodeFailed(
                         format!("missing required key {}", #key)
                     ))?;
-                    let #ident: #ty = <#ty as #cbor_crate::Decode>::decode_cbor(&raw.0)?;
+                    let #ident: #ty = <#ty as #cbor_crate::Decode>::decode_cbor(raw)?;
                 }
             }
         })
@@ -484,31 +494,26 @@ fn derive_decode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
             let ident = &f.ident;
             let ty = &f.kind;
             quote! {
-                let embed_keys: std::collections::BTreeSet<i64> =
-                    <#ty as #cbor_crate::MapDecode>::cbor_map_keys().into_iter().collect();
+                let embed_keys: &[i64] = <#ty as #cbor_crate::MapDecode>::cbor_map_keys();
                 if embed_keys.is_empty() {
                     return Err(#cbor_crate::Error::DecodeFailed(format!(
                         "embedded field `{}` has no CBOR map keys", stringify!(#ident)
                     )));
                 }
-                for k in embed_keys.iter() {
-                    if direct_keys.contains(k) {
-                        return Err(#cbor_crate::Error::DuplicateMapKey(*k));
+                for k in embed_keys.iter().copied() {
+                    if direct_keys.contains(&k) {
+                        return Err(#cbor_crate::Error::DuplicateMapKey(k));
                     }
-                    if !seen_embed_keys.insert(*k) {
-                        return Err(#cbor_crate::Error::DuplicateMapKey(*k));
+                    if seen_embed_keys.contains(&k) {
+                        return Err(#cbor_crate::Error::DuplicateMapKey(k));
                     }
+                    seen_embed_keys.push(k);
                 }
 
-                let mut subset: std::collections::BTreeMap<i64, #cbor_crate::Raw> = std::collections::BTreeMap::new();
-                for k in embed_keys {
-                    if let Some(raw) = entries.remove(&k) {
-                        subset.insert(k, raw);
-                    }
-                }
+                let mut subset = #cbor_crate::MapEntriesScoped::new(entries, embed_keys);
                 let #ident = <#ty as #cbor_crate::MapDecode>::decode_map(&mut subset)?;
-                if !subset.is_empty() {
-                    let unknown: Vec<i64> = subset.keys().copied().collect();
+                if !#cbor_crate::MapEntryAccess::is_empty(&subset) {
+                    let unknown: Vec<i64> = #cbor_crate::MapEntryAccess::remaining_keys(&subset);
                     return Err(#cbor_crate::Error::DecodeFailed(
                         format!("unknown CBOR map keys: {:?}", unknown)
                     ));
@@ -521,8 +526,8 @@ fn derive_decode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
         quote! {}
     } else {
         quote! {
-            let direct_keys: std::collections::BTreeSet<i64> = [#(#direct_key_lits),*].into_iter().collect();
-            let mut seen_embed_keys: std::collections::BTreeSet<i64> = std::collections::BTreeSet::new();
+            let direct_keys: &[i64] = &[#(#direct_key_lits),*];
+            let mut seen_embed_keys: Vec<i64> = Vec::new();
         }
     };
 
@@ -530,14 +535,17 @@ fn derive_decode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
 
     let map_decode_impl = quote! {
         impl #cbor_crate::MapDecode for #name {
-            fn cbor_map_keys() -> Vec<i64> {
-                let mut keys = Vec::new();
-                #(#map_key_pushes)*
-                keys.sort_by(|a, b| #cbor_crate::cbor_key_cmp(*a, *b));
-                keys
+            fn cbor_map_keys() -> &'static [i64] {
+                static KEYS: std::sync::OnceLock<Vec<i64>> = std::sync::OnceLock::new();
+                KEYS.get_or_init(|| {
+                    let mut keys = Vec::new();
+                    #(#map_key_pushes)*
+                    keys.sort_by(|a, b| #cbor_crate::cbor_key_cmp(*a, *b));
+                    keys
+                }).as_slice()
             }
 
-            fn decode_map(entries: &mut std::collections::BTreeMap<i64, #cbor_crate::Raw>) -> Result<Self, #cbor_crate::Error> {
+            fn decode_map<'a, E: #cbor_crate::MapEntryAccess<'a>>(entries: &mut E) -> Result<Self, #cbor_crate::Error> {
                 #embed_state_setup
 
                 #(#extract_direct)*
@@ -679,14 +687,13 @@ fn derive_decode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
             }
 
             fn decode_cbor_notrail(dec: &mut #cbor_crate::Decoder) -> Result<Self, #cbor_crate::Error> {
-                let entries = #cbor_crate::decode_map_entries_notrail(dec)?;
-                let mut remaining: std::collections::BTreeMap<i64, #cbor_crate::Raw> =
-                    entries.into_iter().collect();
+                let entries = #cbor_crate::decode_map_entries_slices_notrail(dec)?;
+                let mut remaining = #cbor_crate::MapEntries::new(entries);
 
                 let value = <Self as #cbor_crate::MapDecode>::decode_map(&mut remaining)?;
 
                 if !remaining.is_empty() {
-                    let unknown: Vec<i64> = remaining.keys().copied().collect();
+                    let unknown: Vec<i64> = remaining.remaining_keys();
                     return Err(#cbor_crate::Error::DecodeFailed(
                         format!("unknown CBOR map keys: {:?}", unknown)
                     ));
