@@ -814,12 +814,6 @@ impl<'a> MapEntries<'a> {
         Self::from_sorted_slots(entries)
     }
 
-    pub fn new_sorted(entries: Vec<(i64, &'a [u8])>) -> Self {
-        let entries: Vec<(i64, Option<&'a [u8]>)> =
-            entries.into_iter().map(|(k, v)| (k, Some(v))).collect();
-        Self::from_sorted_slots(entries)
-    }
-
     fn from_sorted_slots(entries: Vec<(i64, Option<&'a [u8]>)>) -> Self {
         Self {
             remaining: entries.len(),
@@ -891,7 +885,13 @@ impl<'a, 'b, E: MapEntryAccess<'a>> MapEntriesScoped<'a, 'b, E> {
     }
 
     fn key_allowed(&self, key: i64) -> bool {
-        self.keys.binary_search(&key).is_ok()
+        if self.keys.len() <= 8 {
+            self.keys.contains(&key)
+        } else {
+            self.keys
+                .binary_search_by(|k| cbor_key_cmp(*k, key))
+                .is_ok()
+        }
     }
 }
 
@@ -2478,6 +2478,32 @@ mod tests {
         let data = encode(&val).unwrap();
         assert_eq!(data[0], 0xa3); // 3 entries
         let decoded = decode::<Top>(&data).unwrap();
+        assert_eq!(decoded, val);
+    }
+
+    // Tests mixed positive/negative embed keys decode correctly.
+    #[test]
+    fn test_map_embed_mixed_sign_keys_decode() {
+        #[derive(Debug, Clone, PartialEq, Cbor)]
+        struct SignedInner {
+            #[cbor(key = 1)]
+            pos: u64,
+            #[cbor(key = -1)]
+            neg: u64,
+        }
+        #[derive(Debug, PartialEq, Cbor)]
+        struct SignedOuter {
+            #[cbor(embed)]
+            inner: SignedInner,
+            #[cbor(key = 2)]
+            c: u64,
+        }
+        let val = SignedOuter {
+            inner: SignedInner { pos: 11, neg: 22 },
+            c: 33,
+        };
+        let data = encode(&val).unwrap();
+        let decoded = decode::<SignedOuter>(&data).unwrap();
         assert_eq!(decoded, val);
     }
 

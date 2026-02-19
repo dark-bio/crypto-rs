@@ -74,6 +74,14 @@ fn derive_encode(input: &DeriveInput) -> syn::Result<TokenStream2> {
 /// Generates array-mode `Encode` impl: fields encoded in declaration order.
 fn derive_encode_array(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<TokenStream2> {
     let cbor_crate = quote! { darkbio_crypto::cbor };
+    for field in fields {
+        if field.embed {
+            return Err(syn::Error::new_spanned(
+                &field.ident,
+                "#[cbor(embed)] is not supported on #[cbor(array)] structs",
+            ));
+        }
+    }
     let len = fields.len();
 
     // Generate code to encode each field in declaration order
@@ -212,7 +220,21 @@ fn derive_encode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
 
                     let mut entries: Vec<(i64, #cbor_crate::Raw)> = Vec::with_capacity(estimated_entries);
                     <Self as #cbor_crate::MapEncode>::encode_map(self, &mut entries)?;
-                    entries.sort_by(|a, b| #cbor_crate::cbor_key_cmp(a.0, b.0));
+
+                    let mut ordered = true;
+                    let mut prev_key: Option<i64> = None;
+                    for (key, _) in entries.iter() {
+                        if let Some(prev) = prev_key {
+                            if #cbor_crate::cbor_key_cmp(prev, *key) != std::cmp::Ordering::Less {
+                                ordered = false;
+                                break;
+                            }
+                        }
+                        prev_key = Some(*key);
+                    }
+                    if !ordered {
+                        entries.sort_unstable_by(|a, b| #cbor_crate::cbor_key_cmp(a.0, b.0));
+                    }
 
                     let mut prev_key: Option<i64> = None;
                     for (key, _) in entries.iter() {
@@ -366,6 +388,14 @@ fn derive_decode(input: &DeriveInput) -> syn::Result<TokenStream2> {
 /// Generates array-mode `Decode` impl: fields decoded in declaration order.
 fn derive_decode_array(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<TokenStream2> {
     let cbor_crate = quote! { darkbio_crypto::cbor };
+    for field in fields {
+        if field.embed {
+            return Err(syn::Error::new_spanned(
+                &field.ident,
+                "#[cbor(embed)] is not supported on #[cbor(array)] structs",
+            ));
+        }
+    }
     let len = fields.len();
     let field_idents: Vec<_> = fields.iter().map(|f| &f.ident).collect();
 
