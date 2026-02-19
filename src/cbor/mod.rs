@@ -780,11 +780,7 @@ impl<T: Encode> Encode for Option<T> {
     fn encode_cbor(&self) -> Result<Vec<u8>, Error> {
         match self {
             Some(value) => value.encode_cbor(),
-            None => {
-                let mut buf = Vec::new();
-                buf.push(MAJOR_SIMPLE << 5 | SIMPLE_NULL);
-                Ok(buf)
-            }
+            None => Ok(vec![MAJOR_SIMPLE << 5 | SIMPLE_NULL]),
         }
     }
 
@@ -867,8 +863,7 @@ impl MapEncodeBuffer {
             .all(|w| cbor_key_cmp(w[0].0, w[1].0) == Ordering::Less);
 
         if !ordered {
-            self.entries
-                .sort_unstable_by(|a, b| cbor_key_cmp(a.0, b.0));
+            self.entries.sort_unstable_by(|a, b| cbor_key_cmp(a.0, b.0));
         }
         // Verify no duplicates after sorting
         for w in self.entries.windows(2) {
