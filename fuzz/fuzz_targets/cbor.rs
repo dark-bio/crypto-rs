@@ -43,7 +43,8 @@ macro_rules! roundtrip {
     ($data:expr, $( $typ:ty ),+ $(,)?) => {
         $(
             if let Ok(decoded) = decode::<$typ>($data) {
-                let encoded = encode(&decoded);
+                let encoded = encode(&decoded)
+                    .expect(concat!("Failed to encode decoded data for ", stringify!($typ)));
                 let decoded2 = decode::<$typ>(&encoded)
                     .expect(concat!("Failed to decode re-encoded data for ", stringify!($typ)));
                 assert_eq!(decoded, decoded2, "Roundtrip failed for type: {}", stringify!($typ));

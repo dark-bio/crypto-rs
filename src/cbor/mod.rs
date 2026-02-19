@@ -4,21 +4,72 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//! Tiny CBOR encoder and decoder.
+//! Tiny, security-focused CBOR encoder/decoder.
 //!
-//! https://datatracker.ietf.org/doc/html/rfc8949
+//! <https://datatracker.ietf.org/doc/html/rfc8949>
 //!
-//! This is an implementation of the CBOR spec with an extremely reduced type
-//! system, focusing on security rather than flexibility or completeness. The
-//! following types are supported:
-//! - Booleans:                bool
-//! - Null:                    Option<T>::None, cbor::Null
-//! - 64bit positive integers: u64
-//! - 64bit signed integers:   i64
-//! - UTF-8 text strings:      String, &str
-//! - Byte strings:            Vec<u8>, &[u8], [u8; N]
-//! - Arrays:                  (), (X,), (X,Y), ... tuples, or structs with #[cbor(array)]
-//! - Maps:                    structs with #[cbor(key = N)] fields, Option<T>::None omitted
+//! # Type system
+//!
+//! Only a minimal subset of CBOR is supported:
+//!
+//! - **Booleans:**  `bool`
+//! - **Integers:**  `u64`, `i64`
+//! - **Text:**      `String`, `&str`
+//! - **Bytes:**     `Vec<u8>`, `&[u8]`, `[u8; N]`
+//! - **Null:**      `Option<T>::None`, `cbor::Null`
+//! - **Arrays:**    `()`, `(X,)`, `(X, Y)`, ... tuples, or structs with `#[cbor(array)]`
+//! - **Maps:**      structs with `#[cbor(key = N)]` fields (integer keys, deterministic order)
+//! - **Raw:**       `cbor::Raw` (opaque CBOR bytes, passed through without parsing)
+//!
+//! # Derive macros
+//!
+//! Array mode — fields encode positionally:
+//!
+//! ```ignore
+//! #[derive(Cbor)]
+//! #[cbor(array)]
+//! struct Foo {
+//!     a: u64,
+//!     b: String,
+//! }
+//! ```
+//!
+//! Map mode — fields encode as key-value pairs sorted by CBOR key bytes:
+//!
+//! ```ignore
+//! #[derive(Cbor)]
+//! struct Bar {
+//!     #[cbor(key = 1)]
+//!     x: u64,                      // required
+//!     #[cbor(key = 2)]
+//!     y: Option<Vec<u8>>,          // optional: omitted when None
+//!     #[cbor(key = 3)]
+//!     z: Option<Option<u64>>,      // nullable: always present, value or null
+//! }
+//! ```
+//!
+//! # Embedding
+//!
+//! Fields marked `#[cbor(embed)]` are flattened into the parent map. The embedded
+//! type must itself be a map-mode struct. Keys across all embeds and direct fields
+//! must not overlap.
+//!
+//! ```ignore
+//! #[derive(Cbor)]
+//! struct Token {
+//!     #[cbor(embed)]
+//!     identity: Identity,           // keys from Identity merge into Token
+//!     #[cbor(key = 3)]
+//!     aud: String,
+//! }
+//! ```
+//!
+//! # Encoding rules
+//!
+//! All output is deterministic (RFC 8949 Section 4.2.1): canonical shortest-form
+//! integers, map keys sorted by encoded bytes, no indefinite lengths, no floats,
+//! no tags. Decoders reject non-canonical input, duplicate keys, and out-of-order
+//! keys.
 
 pub use darkbio_crypto_cbor_derive::Cbor;
 
@@ -81,8 +132,10 @@ pub enum Error {
 
 /// encode attempts to encode a generic Rust value to CBOR using the tiny, strict
 /// subset of types permitted by this package.
-pub fn encode<T: Encode>(value: T) -> Vec<u8> {
-    value.encode_cbor()
+pub fn encode<T: Encode>(value: T) -> Result<Vec<u8>, Error> {
+    let mut buf = Vec::with_capacity(128);
+    value.encode_cbor_to(&mut buf)?;
+    Ok(buf)
 }
 
 /// decode attempts to decode a CBOR blob into a generic Rust type using the tiny,
@@ -176,24 +229,15 @@ impl Encoder {
         self.buf.push(MAJOR_SIMPLE << 5 | SIMPLE_NULL);
     }
 
+    /// encode_field encodes a value directly into this encoder's buffer.
+    pub fn encode_field<T: Encode + ?Sized>(&mut self, value: &T) -> Result<(), Error> {
+        value.encode_cbor_to(&mut self.buf)
+    }
+
     // encodeLength encodes a major type with an unsigned integer, which defines
     // the length for most types, or the value itself for integers.
     fn encode_length(&mut self, major_type: u8, len: u64) {
-        if len < 24 {
-            self.buf.push(major_type << 5 | len as u8);
-        } else if len <= u8::MAX as u64 {
-            self.buf.push(major_type << 5 | INFO_UINT8);
-            self.buf.push(len as u8);
-        } else if len <= u16::MAX as u64 {
-            self.buf.push(major_type << 5 | INFO_UINT16);
-            self.buf.extend_from_slice(&(len as u16).to_be_bytes());
-        } else if len <= u32::MAX as u64 {
-            self.buf.push(major_type << 5 | INFO_UINT32);
-            self.buf.extend_from_slice(&(len as u32).to_be_bytes());
-        } else {
-            self.buf.push(major_type << 5 | INFO_UINT64);
-            self.buf.extend_from_slice(&len.to_be_bytes());
-        }
+        encode_length_to(&mut self.buf, major_type, len);
     }
 }
 
@@ -201,6 +245,45 @@ impl Default for Encoder {
     fn default() -> Self {
         Self::new()
     }
+}
+
+// encode_length_to writes a CBOR major-type + length header directly into a
+// buffer, matching the canonical shortest-form encoding.
+fn encode_length_to(buf: &mut Vec<u8>, major_type: u8, len: u64) {
+    if len < 24 {
+        buf.push(major_type << 5 | len as u8);
+    } else if len <= u8::MAX as u64 {
+        buf.push(major_type << 5 | INFO_UINT8);
+        buf.push(len as u8);
+    } else if len <= u16::MAX as u64 {
+        buf.push(major_type << 5 | INFO_UINT16);
+        buf.extend_from_slice(&(len as u16).to_be_bytes());
+    } else if len <= u32::MAX as u64 {
+        buf.push(major_type << 5 | INFO_UINT32);
+        buf.extend_from_slice(&(len as u32).to_be_bytes());
+    } else {
+        buf.push(major_type << 5 | INFO_UINT64);
+        buf.extend_from_slice(&len.to_be_bytes());
+    }
+}
+
+// encode_int_to encodes a signed integer directly into a buffer.
+pub fn encode_int_to(buf: &mut Vec<u8>, value: i64) {
+    if value >= 0 {
+        encode_length_to(buf, MAJOR_UINT, value as u64);
+    } else {
+        encode_length_to(buf, MAJOR_NINT, (-1 - value) as u64);
+    }
+}
+
+// encode_array_header_to writes a CBOR array header directly into a buffer.
+pub fn encode_array_header_to(buf: &mut Vec<u8>, len: usize) {
+    encode_length_to(buf, MAJOR_ARRAY, len as u64);
+}
+
+// encode_map_header_to writes a CBOR map header directly into a buffer.
+pub fn encode_map_header_to(buf: &mut Vec<u8>, len: usize) {
+    encode_length_to(buf, MAJOR_MAP, len as u64);
 }
 
 // Decoder is the low level implementation of the CBOR decoder with only the
@@ -303,6 +386,11 @@ impl<'a> Decoder<'a> {
         if major != MAJOR_ARRAY {
             return Err(Error::InvalidMajorType(major, MAJOR_ARRAY));
         }
+        // Sanity check: each element needs at least 1 byte
+        let remaining = (self.data.len() - self.pos) as u64;
+        if len > remaining {
+            return Err(Error::UnexpectedEof);
+        }
         Ok(len)
     }
 
@@ -312,6 +400,11 @@ impl<'a> Decoder<'a> {
         let (major, len) = self.decode_header()?;
         if major != MAJOR_MAP {
             return Err(Error::InvalidMajorType(major, MAJOR_MAP));
+        }
+        // Sanity check: each key-value pair needs at least 2 bytes
+        let remaining = (self.data.len() - self.pos) as u64;
+        if len > remaining / 2 {
+            return Err(Error::UnexpectedEof);
         }
         Ok(len)
     }
@@ -436,8 +529,8 @@ impl<'a> Decoder<'a> {
 
 /// Encode is the interface needed to encode a type to CBOR.
 pub trait Encode {
-    // encode_cbor converts the type to CBOR.
-    fn encode_cbor(&self) -> Vec<u8>;
+    // encode_cbor_to writes the CBOR encoding directly into an existing buffer.
+    fn encode_cbor_to(&self, buf: &mut Vec<u8>) -> Result<(), Error>;
 }
 
 /// Decode is the interface needed to decode a type from CBOR.
@@ -451,10 +544,9 @@ pub trait Decode: Sized {
 
 // Encoder and decoder implementation for booleans.
 impl Encode for bool {
-    fn encode_cbor(&self) -> Vec<u8> {
-        let mut encoder = Encoder::new();
-        encoder.encode_bool(*self);
-        encoder.finish()
+    fn encode_cbor_to(&self, buf: &mut Vec<u8>) -> Result<(), Error> {
+        buf.push(MAJOR_SIMPLE << 5 | if *self { SIMPLE_TRUE } else { SIMPLE_FALSE });
+        Ok(())
     }
 }
 
@@ -473,10 +565,9 @@ impl Decode for bool {
 
 // Encoder and decoder implementation for positive integers.
 impl Encode for u64 {
-    fn encode_cbor(&self) -> Vec<u8> {
-        let mut encoder = Encoder::new();
-        encoder.encode_uint(*self);
-        encoder.finish()
+    fn encode_cbor_to(&self, buf: &mut Vec<u8>) -> Result<(), Error> {
+        encode_length_to(buf, MAJOR_UINT, *self);
+        Ok(())
     }
 }
 
@@ -495,10 +586,9 @@ impl Decode for u64 {
 
 // Encoder and decoder implementation for signed integers.
 impl Encode for i64 {
-    fn encode_cbor(&self) -> Vec<u8> {
-        let mut encoder = Encoder::new();
-        encoder.encode_int(*self);
-        encoder.finish()
+    fn encode_cbor_to(&self, buf: &mut Vec<u8>) -> Result<(), Error> {
+        encode_int_to(buf, *self);
+        Ok(())
     }
 }
 
@@ -517,18 +607,18 @@ impl Decode for i64 {
 
 // Encoder and decoder implementation for dynamic byte blobs.
 impl Encode for Vec<u8> {
-    fn encode_cbor(&self) -> Vec<u8> {
-        let mut encoder = Encoder::new();
-        encoder.encode_bytes(self);
-        encoder.finish()
+    fn encode_cbor_to(&self, buf: &mut Vec<u8>) -> Result<(), Error> {
+        encode_length_to(buf, MAJOR_BYTES, self.len() as u64);
+        buf.extend_from_slice(self);
+        Ok(())
     }
 }
 
 impl Encode for &[u8] {
-    fn encode_cbor(&self) -> Vec<u8> {
-        let mut encoder = Encoder::new();
-        encoder.encode_bytes(self);
-        encoder.finish()
+    fn encode_cbor_to(&self, buf: &mut Vec<u8>) -> Result<(), Error> {
+        encode_length_to(buf, MAJOR_BYTES, self.len() as u64);
+        buf.extend_from_slice(self);
+        Ok(())
     }
 }
 
@@ -547,10 +637,10 @@ impl Decode for Vec<u8> {
 
 // Encoder and decoder implementation for fixed byte blobs.
 impl<const N: usize> Encode for [u8; N] {
-    fn encode_cbor(&self) -> Vec<u8> {
-        let mut encoder = Encoder::new();
-        encoder.encode_bytes(self);
-        encoder.finish()
+    fn encode_cbor_to(&self, buf: &mut Vec<u8>) -> Result<(), Error> {
+        encode_length_to(buf, MAJOR_BYTES, N as u64);
+        buf.extend_from_slice(self);
+        Ok(())
     }
 }
 
@@ -569,18 +659,18 @@ impl<const N: usize> Decode for [u8; N] {
 
 // Encoder and decoder implementation for UTF-8 strings.
 impl Encode for String {
-    fn encode_cbor(&self) -> Vec<u8> {
-        let mut encoder = Encoder::new();
-        encoder.encode_text(self);
-        encoder.finish()
+    fn encode_cbor_to(&self, buf: &mut Vec<u8>) -> Result<(), Error> {
+        encode_length_to(buf, MAJOR_TEXT, self.len() as u64);
+        buf.extend_from_slice(self.as_bytes());
+        Ok(())
     }
 }
 
 impl Encode for &str {
-    fn encode_cbor(&self) -> Vec<u8> {
-        let mut encoder = Encoder::new();
-        encoder.encode_text(self);
-        encoder.finish()
+    fn encode_cbor_to(&self, buf: &mut Vec<u8>) -> Result<(), Error> {
+        encode_length_to(buf, MAJOR_TEXT, self.len() as u64);
+        buf.extend_from_slice(self.as_bytes());
+        Ok(())
     }
 }
 
@@ -599,10 +689,9 @@ impl Decode for String {
 
 // Encoder and decoder implementation for the empty tuple.
 impl Encode for () {
-    fn encode_cbor(&self) -> Vec<u8> {
-        let mut encoder = Encoder::new();
-        encoder.encode_empty_tuple();
-        encoder.finish()
+    fn encode_cbor_to(&self, buf: &mut Vec<u8>) -> Result<(), Error> {
+        encode_length_to(buf, MAJOR_ARRAY, 0);
+        Ok(())
     }
 }
 
@@ -630,17 +719,15 @@ impl Decode for () {
 macro_rules! impl_tuple {
     ($($t:ident),+) => {
         impl<$($t: Encode),+> Encode for ($($t,)+) {
-            fn encode_cbor(&self) -> Vec<u8> {
-                let mut encoder = Encoder::new();
-
+            fn encode_cbor_to(&self, buf: &mut Vec<u8>) -> Result<(), Error> {
                 // Encode the length of the tuple
                 let len = args!($($t),+);
-                encoder.encode_array_header(len);
+                encode_length_to(buf, MAJOR_ARRAY, len as u64);
 
                 // Encode all the tuple elements individually
                 let ($($t,)+) = self;
-                $(encoder.buf.extend_from_slice(&$t.encode_cbor());)+
-                encoder.finish()
+                $($t.encode_cbor_to(buf)?;)+
+                Ok(())
             }
         }
 
@@ -701,8 +788,8 @@ mod tuple_impls {
 
 // Blanket encoder for references.
 impl<T: Encode> Encode for &T {
-    fn encode_cbor(&self) -> Vec<u8> {
-        (*self).encode_cbor()
+    fn encode_cbor_to(&self, buf: &mut Vec<u8>) -> Result<(), Error> {
+        (*self).encode_cbor_to(buf)
     }
 }
 
@@ -714,10 +801,9 @@ pub const NULL: Null = Null;
 pub struct Null;
 
 impl Encode for Null {
-    fn encode_cbor(&self) -> Vec<u8> {
-        let mut encoder = Encoder::new();
-        encoder.encode_null();
-        encoder.finish()
+    fn encode_cbor_to(&self, buf: &mut Vec<u8>) -> Result<(), Error> {
+        buf.push(MAJOR_SIMPLE << 5 | SIMPLE_NULL);
+        Ok(())
     }
 }
 
@@ -737,13 +823,12 @@ impl Decode for Null {
 
 // Encoder and decoder implementation for Option<T> (None encodes as null).
 impl<T: Encode> Encode for Option<T> {
-    fn encode_cbor(&self) -> Vec<u8> {
+    fn encode_cbor_to(&self, buf: &mut Vec<u8>) -> Result<(), Error> {
         match self {
-            Some(value) => value.encode_cbor(),
+            Some(value) => value.encode_cbor_to(buf),
             None => {
-                let mut encoder = Encoder::new();
-                encoder.encode_null();
-                encoder.finish()
+                buf.push(MAJOR_SIMPLE << 5 | SIMPLE_NULL);
+                Ok(())
             }
         }
     }
@@ -767,6 +852,208 @@ impl<T: Decode> Decode for Option<T> {
     }
 }
 
+/// MapEncode exposes direct map-entry encoding for derive-generated map-mode
+/// structs. This avoids map encode/decode roundtrips when flattening embeds.
+pub trait MapEncode {
+    fn encode_map(&self, enc: &mut MapEncodeBuffer) -> Result<(), Error>;
+}
+
+/// MapEncodeBuffer collects CBOR map entries into a single shared buffer,
+/// recording (key, start, end) offsets. This avoids per-field allocation:
+/// all encoded values are written contiguously into `data`.
+pub struct MapEncodeBuffer {
+    pub data: Vec<u8>,
+    pub entries: Vec<(i64, usize, usize)>,
+}
+
+impl MapEncodeBuffer {
+    /// Creates a new buffer pre-sized for the expected number of entries.
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            data: Vec::with_capacity(capacity * 9), // ~9 bytes per field
+            entries: Vec::with_capacity(capacity),
+        }
+    }
+
+    /// Encodes a required field directly into the shared buffer.
+    pub fn push<T: Encode>(&mut self, key: i64, value: &T) -> Result<(), Error> {
+        let start = self.data.len();
+        value.encode_cbor_to(&mut self.data)?;
+        let end = self.data.len();
+        self.entries.push((key, start, end));
+        Ok(())
+    }
+
+    /// Encodes an optional field; omits the entry entirely when None.
+    pub fn push_optional<T: Encode>(&mut self, key: i64, value: &Option<T>) -> Result<(), Error> {
+        if let Some(v) = value {
+            self.push(key, v)?;
+        }
+        Ok(())
+    }
+
+    /// Assembles the final CBOR map into the provided buffer. Sorts entries
+    /// by CBOR key order if not already sorted, then verifies no duplicate keys.
+    pub fn finish_to(mut self, out: &mut Vec<u8>) -> Result<(), Error> {
+        // Check if already in order (common case: keys from embeds interleave nicely)
+        let ordered = self
+            .entries
+            .windows(2)
+            .all(|w| cbor_key_cmp(w[0].0, w[1].0) == Ordering::Less);
+
+        if !ordered {
+            self.entries.sort_unstable_by(|a, b| cbor_key_cmp(a.0, b.0));
+        }
+        // Verify no duplicates after sorting
+        for w in self.entries.windows(2) {
+            if w[0].0 == w[1].0 {
+                return Err(Error::DuplicateMapKey(w[0].0));
+            }
+        }
+        // Assemble output: map header + sorted key-value pairs
+        out.reserve(self.data.len() + self.entries.len() * 10 + 5);
+        encode_length_to(out, MAJOR_MAP, self.entries.len() as u64);
+        for &(key, start, end) in &self.entries {
+            encode_int_to(out, key);
+            out.extend_from_slice(&self.data[start..end]);
+        }
+        Ok(())
+    }
+}
+
+/// MapDecode exposes direct map-entry decoding for derive-generated map-mode
+/// structs. Implementations consume claimed keys from `entries`.
+pub trait MapDecode: Sized {
+    fn cbor_map_keys() -> &'static [i64];
+    fn decode_map<'a, E: MapEntryAccess<'a>>(entries: &mut E) -> Result<Self, Error>;
+}
+
+/// MapEntryAccess provides key-based access to encoded CBOR map values.
+pub trait MapEntryAccess<'a> {
+    fn take(&mut self, key: i64) -> Option<&'a [u8]>;
+    fn contains(&self, key: i64) -> bool;
+    fn is_empty(&self) -> bool;
+    fn remaining_keys(&self) -> Vec<i64>;
+}
+
+/// MapEntries stores a deterministic CBOR map as key/value slots and supports
+/// efficient key-based extraction without rebuilding tree maps.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MapEntries<'a> {
+    entries: Vec<(i64, Option<&'a [u8]>)>,
+    remaining: usize,
+}
+
+impl<'a> MapEntries<'a> {
+    /// Creates from entries that are already in CBOR deterministic key order
+    /// (as validated by `decode_map_entries_slices_notrail`). Skips re-sorting.
+    pub fn new(entries: Vec<(i64, &'a [u8])>) -> Self {
+        let len = entries.len();
+        let entries: Vec<(i64, Option<&'a [u8]>)> =
+            entries.into_iter().map(|(k, v)| (k, Some(v))).collect();
+        Self {
+            remaining: len,
+            entries,
+        }
+    }
+
+    pub fn take(&mut self, key: i64) -> Option<&'a [u8]> {
+        let index = self
+            .entries
+            .binary_search_by(|(k, _)| cbor_key_cmp(*k, key))
+            .ok()?;
+        let value = self.entries[index].1.take();
+        if value.is_some() {
+            self.remaining -= 1;
+        }
+        value
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.remaining == 0
+    }
+
+    pub fn contains(&self, key: i64) -> bool {
+        self.entries
+            .binary_search_by(|(k, _)| cbor_key_cmp(*k, key))
+            .ok()
+            .and_then(|index| self.entries[index].1.as_ref())
+            .is_some()
+    }
+
+    pub fn remaining_keys(&self) -> Vec<i64> {
+        self.entries
+            .iter()
+            .filter_map(|(k, v)| v.as_ref().map(|_| *k))
+            .collect()
+    }
+}
+
+impl<'a> MapEntryAccess<'a> for MapEntries<'a> {
+    fn take(&mut self, key: i64) -> Option<&'a [u8]> {
+        MapEntries::take(self, key)
+    }
+
+    fn contains(&self, key: i64) -> bool {
+        MapEntries::contains(self, key)
+    }
+
+    fn is_empty(&self) -> bool {
+        MapEntries::is_empty(self)
+    }
+
+    fn remaining_keys(&self) -> Vec<i64> {
+        MapEntries::remaining_keys(self)
+    }
+}
+
+/// MapEntriesScoped is a view into `MapEntries` restricted to a fixed key set.
+pub struct MapEntriesScoped<'a, 'b, E: MapEntryAccess<'a>> {
+    entries: &'b mut E,
+    keys: &'b [i64],
+    marker: std::marker::PhantomData<&'a ()>,
+}
+
+impl<'a, 'b, E: MapEntryAccess<'a>> MapEntriesScoped<'a, 'b, E> {
+    pub fn new(entries: &'b mut E, keys: &'b [i64]) -> Self {
+        Self {
+            entries,
+            keys,
+            marker: std::marker::PhantomData,
+        }
+    }
+
+    fn key_allowed(&self, key: i64) -> bool {
+        self.keys.contains(&key)
+    }
+}
+
+impl<'a, 'b, E: MapEntryAccess<'a>> MapEntryAccess<'a> for MapEntriesScoped<'a, 'b, E> {
+    fn take(&mut self, key: i64) -> Option<&'a [u8]> {
+        if self.key_allowed(key) {
+            self.entries.take(key)
+        } else {
+            None
+        }
+    }
+
+    fn contains(&self, key: i64) -> bool {
+        self.key_allowed(key) && self.entries.contains(key)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.keys.iter().all(|k| !self.contains(*k))
+    }
+
+    fn remaining_keys(&self) -> Vec<i64> {
+        self.keys
+            .iter()
+            .copied()
+            .filter(|k| self.entries.contains(*k))
+            .collect()
+    }
+}
+
 /// Raw is a placeholder type to allow only partially parsing CBOR objects when
 /// some part might depend on another (e.g. version tag, method in an RPC, etc).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -787,8 +1074,9 @@ impl std::ops::DerefMut for Raw {
 }
 
 impl Encode for Raw {
-    fn encode_cbor(&self) -> Vec<u8> {
-        self.0.clone()
+    fn encode_cbor_to(&self, buf: &mut Vec<u8>) -> Result<(), Error> {
+        buf.extend_from_slice(&self.0);
+        Ok(())
     }
 }
 
@@ -847,19 +1135,91 @@ fn skip_object(decoder: &mut Decoder<'_>, depth: usize) -> Result<(), Error> {
     }
 }
 
-// map_key_cmp compares two i64 keys according to CBOR deterministic encoding
-// order (RFC 8949 Section 4.2.1): bytewise lexicographic order of encoded keys.
-//
-// For integers this means: positive integers (0, 1, 2, ...) come before negative
-// integers (-1, -2, -3, ...), and within each category they're ordered by their
-// encoded length first, then by value.
-fn map_key_cmp(a: i64, b: i64) -> Ordering {
-    fn encode_key(k: i64) -> Vec<u8> {
-        let mut enc = Encoder::new();
-        enc.encode_int(k);
-        enc.finish()
+/// cbor_key_cmp compares two i64 keys according to CBOR deterministic encoding
+/// order (RFC 8949 Section 4.2.1): bytewise lexicographic order of encoded keys.
+///
+/// For integers this means: positive integers (0, 1, 2, ...) come before negative
+/// integers (-1, -2, -3, ...), and within each category they're ordered by their
+/// encoded length first, then by value.
+pub fn cbor_key_cmp(a: i64, b: i64) -> Ordering {
+    // CBOR deterministic encoding of integer keys:
+    //   - Major type 0 (non-negative) encodes as 0x00..0x1b; shorter forms sort first.
+    //   - Major type 1 (negative)     encodes as 0x20..0x3b; shorter forms sort first.
+    //   - Major 0 bytes always < Major 1 bytes, so all non-negatives sort before negatives.
+    //
+    // Within each sign category, CBOR uses canonical shortest-form encoding,
+    // so smaller absolute values get shorter encodings which sort first; equal
+    // lengths are ordered by value. This matches plain unsigned comparison of
+    // the wire value (the value itself for non-negative, (-1 - n) for negative n).
+    match (a >= 0, b >= 0) {
+        (true, true) => (a as u64).cmp(&(b as u64)),
+        (false, false) => {
+            // Wire value for negative n is (-1 - n) as u64.
+            // -1 → wire 0, -2 → wire 1, … so smaller absolute value sorts first.
+            ((-1 - a) as u64).cmp(&((-1 - b) as u64))
+        }
+        (true, false) => Ordering::Less,
+        (false, true) => Ordering::Greater,
     }
-    encode_key(a).cmp(&encode_key(b))
+}
+
+/// decode_map_entries_notrail reads a CBOR map from the decoder and returns its
+/// entries as (key, raw_value) pairs.
+pub fn decode_map_entries_notrail(dec: &mut Decoder<'_>) -> Result<Vec<(i64, Raw)>, Error> {
+    let entries = decode_map_entries_slices_notrail(dec)?;
+    Ok(entries
+        .into_iter()
+        .map(|(k, v)| (k, Raw(v.to_vec())))
+        .collect())
+}
+
+/// decode_map_entries_slices_notrail reads a CBOR map from the decoder and
+/// returns borrowed slices for each value.
+pub fn decode_map_entries_slices_notrail<'a>(
+    dec: &mut Decoder<'a>,
+) -> Result<Vec<(i64, &'a [u8])>, Error> {
+    let len = dec.decode_map_header()?;
+    let mut entries = Vec::with_capacity(len as usize);
+    let mut prev_key: Option<i64> = None;
+    for _ in 0..len {
+        let key = dec.decode_int()?;
+        if let Some(prev) = prev_key
+            && cbor_key_cmp(prev, key) != Ordering::Less
+        {
+            return Err(if prev == key {
+                Error::DuplicateMapKey(key)
+            } else {
+                Error::InvalidMapKeyOrder(key, prev)
+            });
+        }
+        prev_key = Some(key);
+        let start = dec.pos;
+        skip_object(dec, MAX_DEPTH)?;
+        let end = dec.pos;
+        entries.push((key, &dec.data[start..end]));
+    }
+    Ok(entries)
+}
+
+/// decode_map_entries reads a CBOR map from raw bytes and returns its entries
+/// as (key, raw_value) pairs.
+pub fn decode_map_entries(data: &[u8]) -> Result<Vec<(i64, Raw)>, Error> {
+    let mut dec = Decoder::new(data);
+    let entries = decode_map_entries_notrail(&mut dec)?;
+    dec.finish()?;
+    Ok(entries)
+}
+
+/// encode_map_entries encodes a list of (key, raw_value) pairs as a CBOR map.
+/// The entries must already be sorted by CBOR key order.
+pub fn encode_map_entries(entries: &[(i64, Raw)]) -> Vec<u8> {
+    let mut enc = Encoder::new();
+    enc.encode_map_header(entries.len());
+    for (key, value) in entries {
+        enc.encode_int(*key);
+        enc.extend(&value.0);
+    }
+    enc.finish()
 }
 
 // verify_object is an internal function to verify a single CBOR item without
@@ -906,11 +1266,15 @@ fn verify_object(decoder: &mut Decoder, depth: usize) -> Result<(), Error> {
                 // Decode and verify the key is an integer
                 let key = decoder.decode_int()?;
 
-                // Verify deterministic ordering
+                // Verify deterministic ordering and no duplicate keys
                 if let Some(prev) = prev_key
-                    && map_key_cmp(prev, key) != Ordering::Less
+                    && cbor_key_cmp(prev, key) != Ordering::Less
                 {
-                    return Err(Error::InvalidMapKeyOrder(key, prev));
+                    return Err(if prev == key {
+                        Error::DuplicateMapKey(key)
+                    } else {
+                        Error::InvalidMapKeyOrder(key, prev)
+                    });
                 }
                 prev_key = Some(key);
 
@@ -941,8 +1305,8 @@ mod tests {
     // Tests that booleans encode correctly.
     #[test]
     fn test_bool_encoding() {
-        assert_eq!(encode(&false), vec![0xf4]);
-        assert_eq!(encode(&true), vec![0xf5]);
+        assert_eq!(encode(&false).unwrap(), vec![0xf4]);
+        assert_eq!(encode(&true).unwrap(), vec![0xf5]);
     }
 
     // Tests that booleans decode correctly.
@@ -959,15 +1323,18 @@ mod tests {
     // Tests that null encodes correctly.
     #[test]
     fn test_null_encoding() {
-        assert_eq!(encode(&None::<u64>), vec![0xf6]);
-        assert_eq!(encode(&Some(42u64)), encode(&42u64));
+        assert_eq!(encode(&None::<u64>).unwrap(), vec![0xf6]);
+        assert_eq!(encode(&Some(42u64)).unwrap(), encode(&42u64).unwrap());
     }
 
     // Tests that null decodes correctly.
     #[test]
     fn test_null_decoding() {
         assert_eq!(decode::<Option<u64>>(&[0xf6]).unwrap(), None);
-        assert_eq!(decode::<Option<u64>>(&encode(&42u64)).unwrap(), Some(42));
+        assert_eq!(
+            decode::<Option<u64>>(&encode(&42u64).unwrap()).unwrap(),
+            Some(42)
+        );
 
         // Nested options
         assert_eq!(decode::<Option<bool>>(&[0xf4]).unwrap(), Some(false));
@@ -1005,7 +1372,7 @@ mod tests {
 
         for (value, expected) in cases {
             assert_eq!(
-                encode(&value),
+                encode(&value).unwrap(),
                 expected,
                 "encoding failed for value {}",
                 value
@@ -1138,7 +1505,7 @@ mod tests {
 
         for (value, expected) in cases {
             assert_eq!(
-                encode(&value),
+                encode(&value).unwrap(),
                 expected,
                 "encoding failed for value {}",
                 value
@@ -1226,38 +1593,38 @@ mod tests {
     fn test_bytes_encoding() {
         // Empty bytes
         let empty: Vec<u8> = vec![];
-        let encoded = encode(&empty);
+        let encoded = encode(&empty).unwrap();
         assert_eq!(encoded, vec![0x40]); // major 2, length 0
 
         // 1 byte
         let one_byte = vec![0xaa];
-        let encoded = encode(&one_byte);
+        let encoded = encode(&one_byte).unwrap();
         assert_eq!(encoded, vec![0x41, 0xaa]); // major 2, length 1, data
 
         // Longer bytes
         let long_bytes = vec![0xde, 0xad, 0xbe, 0xef];
-        let encoded = encode(&long_bytes);
+        let encoded = encode(&long_bytes).unwrap();
         assert_eq!(encoded, vec![0x44, 0xde, 0xad, 0xbe, 0xef]); // major 2, length 4, data
 
         // Test &Vec<u8> reference
         let bytes_vec = vec![1, 2, 3];
         let bytes_vec_ref = &bytes_vec;
-        let encoded = encode(&bytes_vec_ref);
+        let encoded = encode(&bytes_vec_ref).unwrap();
         assert_eq!(encoded, vec![0x43, 1, 2, 3]);
 
         // Test &[u8] slice reference
         let bytes_slice: &[u8] = &[4, 5, 6];
-        let encoded = encode(&bytes_slice);
+        let encoded = encode(&bytes_slice).unwrap();
         assert_eq!(encoded, vec![0x43, 4, 5, 6]);
 
         // Test [u8; N] fixed-size array
         let bytes_array: [u8; 3] = [7, 8, 9];
-        let encoded = encode(&bytes_array);
+        let encoded = encode(&bytes_array).unwrap();
         assert_eq!(encoded, vec![0x43, 7, 8, 9]);
 
         // Test &[u8; N] fixed-size array reference
         let bytes_array_ref = &[10u8, 11, 12];
-        let encoded = encode(&bytes_array_ref);
+        let encoded = encode(&bytes_array_ref).unwrap();
         assert_eq!(encoded, vec![0x43, 10, 11, 12]);
     }
 
@@ -1319,29 +1686,29 @@ mod tests {
     fn test_string_encoding() {
         // Empty string
         let empty = "";
-        let encoded = encode(&empty);
+        let encoded = encode(&empty).unwrap();
         assert_eq!(encoded, vec![0x60]); // major 3, length 0
 
         // 1 character
         let one_char = "a";
-        let encoded = encode(&one_char);
+        let encoded = encode(&one_char).unwrap();
         assert_eq!(encoded, vec![0x61, 0x61]); // major 3, length 1, 'a'
 
         // Longer string
         let long_string = "Peter says hi!";
-        let encoded = encode(&long_string);
+        let encoded = encode(&long_string).unwrap();
         assert_eq!(encoded[0], 0x60 | long_string.len() as u8); // major 3, length embedded
         assert_eq!(&encoded[1..], long_string.as_bytes());
 
         // Test String type
         let string_type = "Peter says hi!".to_string();
-        let encoded = encode(&string_type);
+        let encoded = encode(&string_type).unwrap();
         assert_eq!(encoded[0], 0x60 | string_type.len() as u8); // major 3, length embedded
         assert_eq!(&encoded[1..], string_type.as_bytes());
 
         // Test &String type
         let string_ref = &"Peter says hi!".to_string();
-        let encoded = encode(&string_ref);
+        let encoded = encode(&string_ref).unwrap();
         assert_eq!(encoded[0], 0x60 | string_ref.len() as u8); // major 3, length embedded
         assert_eq!(&encoded[1..], string_ref.as_bytes());
     }
@@ -1396,19 +1763,19 @@ mod tests {
     fn test_tuple_encoding() {
         // 0-tuple
         let empty = ();
-        let encoded = encode(&empty);
+        let encoded = encode(&empty).unwrap();
         assert_eq!(encoded, vec![0x80]); // major 4, length 0 (empty array)
 
         // 1-tuple (wonky Rust syntax)
         let one_tuple = (42u64,);
-        let encoded = encode(&one_tuple);
+        let encoded = encode(&one_tuple).unwrap();
         assert_eq!(encoded[0], 0x81); // major 4, length 1 (array with 1 element)
         assert_eq!(encoded[1], 0x18); // major 0, INFO_UINT8
         assert_eq!(encoded[2], 42);
 
         // 2-tuple
         let t = ("hello".to_string(), 42u64);
-        let encoded = encode(&t);
+        let encoded = encode(&t).unwrap();
         assert_eq!(encoded[0], 0x82); // major 4, length 2 (array with 2 elements)
         // First element: "hello" -> 0x65 + "hello" bytes
         assert_eq!(encoded[1], 0x65); // major 3, length 5
@@ -1428,14 +1795,14 @@ mod tests {
 
         // 1-tuple (wonky Rust syntax)
         let mut encoded = vec![0x81]; // array length 1
-        encoded.extend_from_slice(&encode(&42u64)); // single element
+        encoded.extend_from_slice(&encode(&42u64).unwrap()); // single element
         let decoded = decode::<(u64,)>(&encoded).unwrap();
         assert_eq!(decoded, (42u64,));
 
         // 2-tuple
         let mut encoded = vec![0x82]; // array length 2
-        encoded.extend_from_slice(&encode(&"hello".to_string())); // first element
-        encoded.extend_from_slice(&encode(&42u64)); // second element
+        encoded.extend_from_slice(&encode(&"hello".to_string()).unwrap()); // first element
+        encoded.extend_from_slice(&encode(&42u64).unwrap()); // second element
         let decoded = decode::<(String, u64)>(&encoded).unwrap();
         assert_eq!(decoded, ("hello".to_string(), 42u64));
     }
@@ -1446,7 +1813,7 @@ mod tests {
     fn test_tuple_rejection() {
         // Try to decode array with 1 element as 2-tuple
         let mut encoded = vec![0x81]; // array length 1
-        encoded.extend_from_slice(&encode(&42u64)); // single element
+        encoded.extend_from_slice(&encode(&42u64).unwrap()); // single element
         let result = decode::<(u64, u64)>(&encoded);
         assert!(result.is_err());
         match result.unwrap_err() {
@@ -1456,9 +1823,9 @@ mod tests {
 
         // Try to decode array with 3 elements as 2-tuple
         let mut encoded = vec![0x83]; // array length 3
-        encoded.extend_from_slice(&encode(&42u64));
-        encoded.extend_from_slice(&encode(&"test".to_string()));
-        encoded.extend_from_slice(&encode(&vec![1u8, 2]));
+        encoded.extend_from_slice(&encode(&42u64).unwrap());
+        encoded.extend_from_slice(&encode(&"test".to_string()).unwrap());
+        encoded.extend_from_slice(&encode(&vec![1u8, 2]).unwrap());
         let result = decode::<(u64, String)>(&encoded);
         assert!(result.is_err());
         match result.unwrap_err() {
@@ -1468,7 +1835,7 @@ mod tests {
 
         // Try to decode array with 1 element as empty tuple
         let mut encoded = vec![0x81]; // array length 1
-        encoded.extend_from_slice(&encode(&42u64));
+        encoded.extend_from_slice(&encode(&42u64).unwrap());
         let result = decode::<()>(&encoded);
         assert!(result.is_err());
         match result.unwrap_err() {
@@ -1494,13 +1861,13 @@ mod tests {
             second: "hello".to_string(),
             third: vec![1, 2, 3],
         };
-        let encoded = encode(&arr);
+        let encoded = encode(&arr).unwrap();
 
         // Should be: [42, "hello", h'010203']
         let mut expected = vec![0x83]; // array with 3 elements
-        expected.extend_from_slice(&encode(&42u64));
-        expected.extend_from_slice(&encode(&"hello".to_string()));
-        expected.extend_from_slice(&encode(&vec![1u8, 2, 3]));
+        expected.extend_from_slice(&encode(&42u64).unwrap());
+        expected.extend_from_slice(&encode(&"hello".to_string()).unwrap());
+        expected.extend_from_slice(&encode(&vec![1u8, 2, 3]).unwrap());
 
         assert_eq!(encoded, expected);
     }
@@ -1509,9 +1876,9 @@ mod tests {
     #[test]
     fn test_array_decoding() {
         let mut data = vec![0x83]; // array with 3 elements
-        data.extend_from_slice(&encode(&100u64));
-        data.extend_from_slice(&encode(&"world".to_string()));
-        data.extend_from_slice(&encode(&vec![4u8, 5, 6]));
+        data.extend_from_slice(&encode(&100u64).unwrap());
+        data.extend_from_slice(&encode(&"world".to_string()).unwrap());
+        data.extend_from_slice(&encode(&vec![4u8, 5, 6]).unwrap());
 
         let decoded = decode::<TestArray>(&data).unwrap();
         assert_eq!(decoded.first, 100);
@@ -1524,8 +1891,8 @@ mod tests {
     fn test_array_rejection() {
         // Too few elements (2 instead of 3)
         let mut data = vec![0x82]; // array with 2 elements
-        data.extend_from_slice(&encode(&42u64));
-        data.extend_from_slice(&encode(&"test".to_string()));
+        data.extend_from_slice(&encode(&42u64).unwrap());
+        data.extend_from_slice(&encode(&"test".to_string()).unwrap());
         let result = decode::<TestArray>(&data);
         assert!(result.is_err());
         match result.unwrap_err() {
@@ -1534,10 +1901,10 @@ mod tests {
         }
         // Too many elements (4 instead of 3)
         let mut data = vec![0x84]; // array with 4 elements
-        data.extend_from_slice(&encode(&42u64));
-        data.extend_from_slice(&encode(&"test".to_string()));
-        data.extend_from_slice(&encode(&vec![1u8]));
-        data.extend_from_slice(&encode(&42u64));
+        data.extend_from_slice(&encode(&42u64).unwrap());
+        data.extend_from_slice(&encode(&"test".to_string()).unwrap());
+        data.extend_from_slice(&encode(&vec![1u8]).unwrap());
+        data.extend_from_slice(&encode(&42u64).unwrap());
         let result = decode::<TestArray>(&data);
         assert!(result.is_err());
         match result.unwrap_err() {
@@ -1566,7 +1933,7 @@ mod tests {
             key2: 67,
             key_neg1: 100,
         };
-        let encoded = encode(&map);
+        let encoded = encode(&map).unwrap();
 
         // Keys in bytewise order: 0x01, 0x02, 0x20 (1, 2, -1)
         assert_eq!(encoded[0], 0xa3); // map with 3 entries
@@ -1643,7 +2010,7 @@ mod tests {
             nullable: Some(Some(1)),
             optional2: Some(vec![1, 2, 3]),
         };
-        let encoded = encode(&map);
+        let encoded = encode(&map).unwrap();
         // Keys in bytewise order: 0x01, 0x02, 0x03, 0x20 (1, 2, 3, -1)
         assert_eq!(encoded[0], 0xa4); // map with 4 entries
         let decoded = decode::<TestMapOptional>(&encoded).unwrap();
@@ -1656,7 +2023,7 @@ mod tests {
             nullable: Some(None),
             optional2: None,
         };
-        let encoded = encode(&map);
+        let encoded = encode(&map).unwrap();
         assert_eq!(encoded[0], 0xa2); // map with 2 entries (required + nullable)
         assert_eq!(encoded, vec![0xa2, 0x01, 0x18, 42, 0x03, 0xf6]);
         let decoded = decode::<TestMapOptional>(&encoded).unwrap();
@@ -1675,9 +2042,9 @@ mod tests {
             nullable: Some(None),
             optional2: None,
         };
-        assert_eq!(encode(&map_none), encode(&map_some_none));
+        assert_eq!(encode(&map_none).unwrap(), encode(&map_some_none).unwrap());
         // Both decode back as Some(None) since the key is always present
-        let decoded = decode::<TestMapOptional>(&encode(&map_none)).unwrap();
+        let decoded = decode::<TestMapOptional>(&encode(&map_none).unwrap()).unwrap();
         assert_eq!(decoded.nullable, Some(None));
 
         // One optional present, one absent (nullable always present as null)
@@ -1687,7 +2054,7 @@ mod tests {
             nullable: Some(None),
             optional2: None,
         };
-        let encoded = encode(&map);
+        let encoded = encode(&map).unwrap();
         assert_eq!(encoded[0], 0xa3); // map with 3 entries
         let decoded = decode::<TestMapOptional>(&encoded).unwrap();
         assert_eq!(decoded, map);
@@ -1699,7 +2066,7 @@ mod tests {
             nullable: Some(None),
             optional2: Some(vec![0xff]),
         };
-        let encoded = encode(&map);
+        let encoded = encode(&map).unwrap();
         assert_eq!(encoded[0], 0xa3); // map with 3 entries
         let decoded = decode::<TestMapOptional>(&encoded).unwrap();
         assert_eq!(decoded, map);
@@ -1789,15 +2156,18 @@ mod tests {
     fn test_raw_encoding() {
         // Unsigned integer (42)
         let raw = Raw(vec![0x18, 0x2a]);
-        assert_eq!(encode(&raw), vec![0x18, 0x2a]);
+        assert_eq!(encode(&raw).unwrap(), vec![0x18, 0x2a]);
 
         // String "hello"
         let raw = Raw(vec![0x65, 0x68, 0x65, 0x6c, 0x6c, 0x6f]);
-        assert_eq!(encode(&raw), vec![0x65, 0x68, 0x65, 0x6c, 0x6c, 0x6f]);
+        assert_eq!(
+            encode(&raw).unwrap(),
+            vec![0x65, 0x68, 0x65, 0x6c, 0x6c, 0x6f]
+        );
 
         // Tuple with Raw inside: ("method", <raw bytes for u64 1>)
         let raw = Raw(vec![0x01]);
-        let encoded = encode(&("method", raw));
+        let encoded = encode(&("method", raw)).unwrap();
         assert_eq!(
             encoded,
             vec![
@@ -1862,19 +2232,22 @@ mod tests {
     #[test]
     fn test_verify() {
         // Valid types should pass
-        assert!(verify(&encode(&42u64)).is_ok());
-        assert!(verify(&encode(&-42i64)).is_ok());
-        assert!(verify(&encode(&"hello")).is_ok());
-        assert!(verify(&encode(&vec![1u8, 2, 3])).is_ok());
-        assert!(verify(&encode(&())).is_ok());
-        assert!(verify(&encode(&(42u64, "test"))).is_ok());
-        assert!(verify(&encode(&(-42i64, "test"))).is_ok());
+        assert!(verify(&encode(&42u64).unwrap()).is_ok());
+        assert!(verify(&encode(&-42i64).unwrap()).is_ok());
+        assert!(verify(&encode(&"hello").unwrap()).is_ok());
+        assert!(verify(&encode(&vec![1u8, 2, 3]).unwrap()).is_ok());
+        assert!(verify(&encode(&()).unwrap()).is_ok());
+        assert!(verify(&encode(&(42u64, "test")).unwrap()).is_ok());
+        assert!(verify(&encode(&(-42i64, "test")).unwrap()).is_ok());
         assert!(
-            verify(&encode(&TestMap {
-                key1: 1,
-                key2: 2,
-                key_neg1: 3,
-            }))
+            verify(
+                &encode(&TestMap {
+                    key1: 1,
+                    key2: 2,
+                    key_neg1: 3,
+                })
+                .unwrap()
+            )
             .is_ok()
         );
 
@@ -1888,7 +2261,7 @@ mod tests {
         assert!(verify(&large_nint).is_ok());
 
         // Trailing bytes
-        let mut bad_data = encode(&42u64);
+        let mut bad_data = encode(&42u64).unwrap();
         bad_data.push(0x00);
         assert!(verify(&bad_data).is_err());
         match verify(&bad_data).unwrap_err() {
@@ -1919,9 +2292,9 @@ mod tests {
         }
 
         // Booleans and null are now supported
-        assert!(verify(&encode(&false)).is_ok());
-        assert!(verify(&encode(&true)).is_ok());
-        assert!(verify(&encode(&None::<u64>)).is_ok());
+        assert!(verify(&encode(&false).unwrap()).is_ok());
+        assert!(verify(&encode(&true).unwrap()).is_ok());
+        assert!(verify(&encode(&None::<u64>).unwrap()).is_ok());
 
         // undefined (0xf7) is still unsupported
         let undefined_val = vec![0xf7];
@@ -2007,6 +2380,521 @@ mod tests {
         let encoded = vec![123, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255];
         let result = decode::<String>(&encoded);
         assert!(result.is_err());
+    }
+
+    // Inner struct used for embed tests.
+    #[derive(Debug, Clone, PartialEq, Cbor)]
+    struct Inner {
+        #[cbor(key = 1)]
+        a: u64,
+        #[cbor(key = 2)]
+        b: String,
+    }
+
+    // Flat equivalent of embedded struct for byte-identity comparison.
+    #[derive(Debug, PartialEq, Cbor)]
+    struct Flat {
+        #[cbor(key = 1)]
+        a: u64,
+        #[cbor(key = 2)]
+        b: String,
+        #[cbor(key = 3)]
+        c: u64,
+    }
+
+    // Tests that an embedded struct produces identical CBOR to a flat struct
+    // with the same fields and keys.
+    #[test]
+    fn test_map_embed_flat() {
+        #[derive(Debug, PartialEq, Cbor)]
+        struct Embedded {
+            #[cbor(embed)]
+            inner: Inner,
+            #[cbor(key = 3)]
+            c: u64,
+        }
+        let embedded = Embedded {
+            inner: Inner {
+                a: 1,
+                b: "two".to_string(),
+            },
+            c: 3,
+        };
+        let flat = Flat {
+            a: 1,
+            b: "two".to_string(),
+            c: 3,
+        };
+        assert_eq!(encode(&embedded).unwrap(), encode(&flat).unwrap());
+
+        // Decode back
+        let decoded = decode::<Embedded>(&encode(&embedded).unwrap()).unwrap();
+        assert_eq!(decoded, embedded);
+    }
+
+    // Tests that embedded fields are correctly sorted with direct fields.
+    #[test]
+    fn test_map_embed_key_order() {
+        // Embed field has keys 1,2 and direct field has key -1 (sorts after positives)
+        #[derive(Debug, PartialEq, Cbor)]
+        struct WithNeg {
+            #[cbor(embed)]
+            inner: Inner,
+            #[cbor(key = -1)]
+            neg: u64,
+        }
+        let val = WithNeg {
+            inner: Inner {
+                a: 10,
+                b: "hi".to_string(),
+            },
+            neg: 99,
+        };
+        let data = encode(&val).unwrap();
+        // Keys should be sorted: 1, 2, -1
+        assert_eq!(data[0], 0xa3); // map with 3 entries
+        let decoded = decode::<WithNeg>(&data).unwrap();
+        assert_eq!(decoded, val);
+    }
+
+    // Tests that an embedded struct with optional fields works correctly.
+    #[test]
+    fn test_map_embed_optional() {
+        #[derive(Debug, Clone, PartialEq, Cbor)]
+        struct OptInner {
+            #[cbor(key = 1)]
+            id: u64,
+            #[cbor(key = 2)]
+            extra: Option<Vec<u8>>,
+        }
+        #[derive(Debug, PartialEq, Cbor)]
+        struct Outer {
+            #[cbor(embed)]
+            base: OptInner,
+            #[cbor(key = 3)]
+            name: String,
+        }
+        // With optional present
+        let val = Outer {
+            base: OptInner {
+                id: 42,
+                extra: Some(vec![0xab]),
+            },
+            name: "test".to_string(),
+        };
+        let data = encode(&val).unwrap();
+        assert_eq!(data[0], 0xa3); // 3 entries
+        let decoded = decode::<Outer>(&data).unwrap();
+        assert_eq!(decoded, val);
+
+        // Without optional
+        let val = Outer {
+            base: OptInner {
+                id: 42,
+                extra: None,
+            },
+            name: "test".to_string(),
+        };
+        let data = encode(&val).unwrap();
+        assert_eq!(data[0], 0xa2); // 2 entries
+        let decoded = decode::<Outer>(&data).unwrap();
+        assert_eq!(decoded, val);
+    }
+
+    // Tests that duplicate keys between direct and embed fields are detected
+    // during encoding (the embed merge returns an error on collision).
+    #[test]
+    fn test_map_embed_duplicate_key_encode() {
+        #[derive(Debug, PartialEq, Cbor)]
+        struct Clash {
+            #[cbor(key = 1)] // same key as Inner.a
+            x: u64,
+            #[cbor(embed)]
+            inner: Inner,
+        }
+        let val = Clash {
+            x: 99,
+            inner: Inner {
+                a: 1,
+                b: "hi".to_string(),
+            },
+        };
+        // Encoding a struct with overlapping direct + embed keys returns an error.
+        match encode(&val) {
+            Err(Error::DuplicateMapKey(1)) => {}
+            other => panic!("expected Err(DuplicateMapKey(1)), got {:?}", other),
+        }
+    }
+
+    // Tests that duplicate keys between direct and embed fields are detected
+    // during decoding when receiving hand-crafted CBOR with a collision.
+    #[test]
+    fn test_map_embed_duplicate_key_decode() {
+        #[derive(Debug, PartialEq, Cbor)]
+        struct Clash {
+            #[cbor(key = 1)] // same key as Inner.a
+            x: u64,
+            #[cbor(embed)]
+            inner: Inner,
+        }
+        // Hand-craft CBOR: {1: 99, 2: "hi"} — key 1 collides between direct
+        // field x and embed field inner.a. Decode must reject with DuplicateMapKey.
+        let mut enc = Encoder::new();
+        enc.encode_map_header(2);
+        enc.encode_int(1);
+        enc.encode_uint(99);
+        enc.encode_int(2);
+        enc.extend(&encode(&"hi".to_string()).unwrap());
+        let data = enc.finish();
+        match decode::<Clash>(&data) {
+            Err(Error::DuplicateMapKey(1)) => {}
+            other => panic!("expected DuplicateMapKey(1), got {:?}", other),
+        }
+    }
+
+    // Tests that multiple embedded structs round-trip correctly: two embeds
+    // with non-overlapping key ranges plus a direct field.
+    #[test]
+    fn test_map_embed_multiple() {
+        #[derive(Debug, Clone, PartialEq, Cbor)]
+        struct EmbedA {
+            #[cbor(key = 1)]
+            a: u64,
+            #[cbor(key = 2)]
+            b: String,
+        }
+        #[derive(Debug, Clone, PartialEq, Cbor)]
+        struct EmbedB {
+            #[cbor(key = 3)]
+            c: Vec<u8>,
+            #[cbor(key = 4)]
+            d: u64,
+        }
+        #[derive(Debug, PartialEq, Cbor)]
+        struct Multi {
+            #[cbor(embed)]
+            first: EmbedA,
+            #[cbor(embed)]
+            second: EmbedB,
+            #[cbor(key = -1)]
+            extra: String,
+        }
+        let val = Multi {
+            first: EmbedA {
+                a: 10,
+                b: "hello".to_string(),
+            },
+            second: EmbedB {
+                c: vec![0xDE, 0xAD],
+                d: 42,
+            },
+            extra: "world".to_string(),
+        };
+        let data = encode(&val).unwrap();
+        // All 5 keys should be present: 1, 2, 3, 4, -1
+        assert_eq!(data[0], 0xa5); // map with 5 entries
+        let decoded = decode::<Multi>(&data).unwrap();
+        assert_eq!(decoded, val);
+    }
+
+    // Tests that nested embeds (an embed containing another embed) work.
+    #[test]
+    fn test_map_embed_nested() {
+        #[derive(Debug, Clone, PartialEq, Cbor)]
+        struct Base {
+            #[cbor(key = 1)]
+            x: u64,
+        }
+        #[derive(Debug, Clone, PartialEq, Cbor)]
+        struct Mid {
+            #[cbor(embed)]
+            base: Base,
+            #[cbor(key = 2)]
+            y: String,
+        }
+        #[derive(Debug, PartialEq, Cbor)]
+        struct Top {
+            #[cbor(embed)]
+            mid: Mid,
+            #[cbor(key = 3)]
+            z: u64,
+        }
+        let val = Top {
+            mid: Mid {
+                base: Base { x: 1 },
+                y: "two".to_string(),
+            },
+            z: 3,
+        };
+        let data = encode(&val).unwrap();
+        assert_eq!(data[0], 0xa3); // 3 entries
+        let decoded = decode::<Top>(&data).unwrap();
+        assert_eq!(decoded, val);
+    }
+
+    // Tests mixed positive/negative embed keys decode correctly.
+    #[test]
+    fn test_map_embed_mixed_sign_keys_decode() {
+        #[derive(Debug, Clone, PartialEq, Cbor)]
+        struct SignedInner {
+            #[cbor(key = 1)]
+            pos: u64,
+            #[cbor(key = -1)]
+            neg: u64,
+        }
+        #[derive(Debug, PartialEq, Cbor)]
+        struct SignedOuter {
+            #[cbor(embed)]
+            inner: SignedInner,
+            #[cbor(key = 2)]
+            c: u64,
+        }
+        let val = SignedOuter {
+            inner: SignedInner { pos: 11, neg: 22 },
+            c: 33,
+        };
+        let data = encode(&val).unwrap();
+        let decoded = decode::<SignedOuter>(&data).unwrap();
+        assert_eq!(decoded, val);
+    }
+
+    // Tests that overlapping keys between two embeds are detected on decode.
+    #[test]
+    fn test_map_embed_embed_collision() {
+        #[derive(Debug, Clone, PartialEq, Cbor)]
+        struct Left {
+            #[cbor(key = 1)]
+            a: u64,
+            #[cbor(key = 2)]
+            b: u64,
+        }
+        #[derive(Debug, Clone, PartialEq, Cbor)]
+        struct Right {
+            #[cbor(key = 2)] // collides with Left.b
+            c: u64,
+            #[cbor(key = 3)]
+            d: u64,
+        }
+        #[derive(Debug, PartialEq, Cbor)]
+        struct Both {
+            #[cbor(embed)]
+            left: Left,
+            #[cbor(embed)]
+            right: Right,
+        }
+        // Hand-craft CBOR with keys 1, 2, 3 (no wire-level duplicate, but
+        // embeds Left and Right both claim key 2).
+        let mut enc = Encoder::new();
+        enc.encode_map_header(3);
+        enc.encode_int(1);
+        enc.encode_uint(10);
+        enc.encode_int(2);
+        enc.encode_uint(20);
+        enc.encode_int(3);
+        enc.encode_uint(30);
+        let data = enc.finish();
+        match decode::<Both>(&data) {
+            Err(Error::DuplicateMapKey(2)) => {}
+            other => panic!("expected DuplicateMapKey(2), got {:?}", other),
+        }
+    }
+
+    // Tests that unknown keys in the wire data are rejected during decode.
+    #[test]
+    fn test_map_embed_unknown_key() {
+        // Hand-craft CBOR: {1: 1, 2: "two", 3: 3, 99: 0} where key 99 is
+        // not claimed by any direct field or embed.
+        #[derive(Debug, PartialEq, Cbor)]
+        struct Embedded {
+            #[cbor(embed)]
+            inner: Inner,
+            #[cbor(key = 3)]
+            c: u64,
+        }
+        let mut enc = Encoder::new();
+        enc.encode_map_header(4);
+        enc.encode_int(1);
+        enc.encode_uint(1);
+        enc.encode_int(2);
+        enc.extend(&encode(&"two".to_string()).unwrap());
+        enc.encode_int(3);
+        enc.encode_uint(3);
+        enc.encode_int(99);
+        enc.encode_uint(0);
+        let data = enc.finish();
+        match decode::<Embedded>(&data) {
+            Err(Error::DecodeFailed(msg)) if msg.contains("unknown") => {}
+            other => panic!("expected DecodeFailed with 'unknown', got {:?}", other),
+        }
+    }
+
+    // Tests that out-of-order keys in wire data are rejected during embed decode.
+    #[test]
+    fn test_map_embed_key_order_rejected() {
+        #[derive(Debug, PartialEq, Cbor)]
+        struct Embedded {
+            #[cbor(embed)]
+            inner: Inner,
+            #[cbor(key = 3)]
+            c: u64,
+        }
+        // Hand-craft CBOR with keys out of order: {2: "x", 1: 1, 3: 3}
+        let mut enc = Encoder::new();
+        enc.encode_map_header(3);
+        enc.encode_int(2);
+        enc.extend(&encode(&"x".to_string()).unwrap());
+        enc.encode_int(1);
+        enc.encode_uint(1);
+        enc.encode_int(3);
+        enc.encode_uint(3);
+        let data = enc.finish();
+        match decode::<Embedded>(&data) {
+            Err(Error::InvalidMapKeyOrder(1, 2)) => {}
+            other => panic!("expected InvalidMapKeyOrder(1, 2), got {:?}", other),
+        }
+    }
+
+    // Tests that wire-level duplicate keys are rejected during embed decode.
+    #[test]
+    fn test_map_embed_wire_duplicate_key() {
+        #[derive(Debug, PartialEq, Cbor)]
+        struct Embedded {
+            #[cbor(embed)]
+            inner: Inner,
+            #[cbor(key = 3)]
+            c: u64,
+        }
+        // Hand-craft CBOR with duplicate key 1: {1: 1, 1: 2, 2: "x", 3: 3}
+        let mut enc = Encoder::new();
+        enc.encode_map_header(4);
+        enc.encode_int(1);
+        enc.encode_uint(1);
+        enc.encode_int(1);
+        enc.encode_uint(2);
+        enc.encode_int(2);
+        enc.extend(&encode(&"x".to_string()).unwrap());
+        enc.encode_int(3);
+        enc.encode_uint(3);
+        let data = enc.finish();
+        match decode::<Embedded>(&data) {
+            Err(Error::DuplicateMapKey(1)) => {}
+            other => panic!("expected DuplicateMapKey(1), got {:?}", other),
+        }
+    }
+
+    // Tests that schema-level collision between an optional direct field and
+    // an embed field is caught on encode even when the optional is None.
+    #[test]
+    fn test_map_embed_optional_overlap_encode() {
+        #[derive(Debug, Clone, PartialEq, Cbor)]
+        struct EmbedInner {
+            #[cbor(key = 1)]
+            a: u64,
+        }
+        #[derive(Debug, PartialEq, Cbor)]
+        struct Broken {
+            #[cbor(key = 1)]
+            x: Option<u64>, // collides with EmbedInner.a
+            #[cbor(embed)]
+            inner: EmbedInner,
+        }
+        match encode(&Broken {
+            x: None,
+            inner: EmbedInner { a: 42 },
+        }) {
+            Err(Error::DuplicateMapKey(1)) => {}
+            other => panic!("expected Err(DuplicateMapKey(1)), got {:?}", other),
+        }
+    }
+
+    // Tests that embed encoding validates actual merged keys too, not only
+    // keys reported by the embed's schema declaration.
+    #[test]
+    fn test_map_embed_runtime_key_mismatch_rejected() {
+        #[derive(Debug, Clone, PartialEq)]
+        struct RogueEmbed;
+
+        impl MapEncode for RogueEmbed {
+            fn encode_map(&self, enc: &mut MapEncodeBuffer) -> Result<(), Error> {
+                enc.push(1i64, &7u64)?;
+                Ok(())
+            }
+        }
+
+        impl MapDecode for RogueEmbed {
+            fn cbor_map_keys() -> &'static [i64] {
+                // Intentionally dishonest: claims key 2.
+                &[2]
+            }
+
+            fn decode_map<'a, E: MapEntryAccess<'a>>(entries: &mut E) -> Result<Self, Error> {
+                let _ = entries.take(2);
+                Ok(Self)
+            }
+        }
+
+        #[derive(Debug, PartialEq, Cbor)]
+        struct Parent {
+            #[cbor(key = 1)]
+            x: u64,
+            #[cbor(embed)]
+            rogue: RogueEmbed,
+        }
+
+        match encode(&Parent {
+            x: 42,
+            rogue: RogueEmbed,
+        }) {
+            Err(Error::DuplicateMapKey(1)) => {}
+            other => panic!("expected Err(DuplicateMapKey(1)), got {:?}", other),
+        }
+    }
+
+    // Tests the entry helper functions round-trip correctly.
+    #[test]
+    fn test_map_entries_roundtrip() {
+        let original = TestMap {
+            key1: 42,
+            key2: 67,
+            key_neg1: 100,
+        };
+        let data = encode(&original).unwrap();
+        let entries = decode_map_entries(&data).unwrap();
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].0, 1);
+        assert_eq!(entries[1].0, 2);
+        assert_eq!(entries[2].0, -1);
+
+        let re_encoded = encode_map_entries(&entries);
+        assert_eq!(data, re_encoded);
+    }
+
+    // Tests that decode_map_entries rejects out-of-order and duplicate keys.
+    #[test]
+    fn test_map_entries_rejection() {
+        // Out-of-order keys: 2 before 1.
+        let mut enc = Encoder::new();
+        enc.encode_map_header(2);
+        enc.encode_int(2);
+        enc.encode_uint(67);
+        enc.encode_int(1);
+        enc.encode_uint(42);
+        match decode_map_entries(&enc.finish()) {
+            Err(Error::InvalidMapKeyOrder(1, 2)) => {}
+            other => panic!("expected InvalidMapKeyOrder(1, 2), got {:?}", other),
+        }
+
+        // Duplicate keys: 1 appears twice.
+        let mut enc = Encoder::new();
+        enc.encode_map_header(2);
+        enc.encode_int(1);
+        enc.encode_uint(1);
+        enc.encode_int(1);
+        enc.encode_uint(2);
+        match decode_map_entries(&enc.finish()) {
+            Err(Error::DuplicateMapKey(1)) => {}
+            other => panic!("expected DuplicateMapKey(1), got {:?}", other),
+        }
     }
 
     // Tests that deeply nested CBOR structures are rejected with an error
