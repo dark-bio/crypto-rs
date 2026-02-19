@@ -97,6 +97,7 @@ fn derive_encode_array(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<T
 }
 
 /// Generates map-mode `Encode` impl: fields encoded as key-value pairs, sorted by key bytes.
+/// Option<T> fields are omitted when None (the key-value pair is not encoded).
 fn derive_encode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<TokenStream2> {
     let cbor_crate = quote! { darkbio_crypto::cbor };
 
@@ -117,31 +118,74 @@ fn derive_encode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
         ka.cmp(&kb)
     });
 
-    let len = sorted.len();
+    // Check if any field is optional (affects whether map size is static or dynamic)
+    let has_optional = sorted
+        .iter()
+        .any(|f| extract_option_inner(&f.kind).is_some());
 
-    // Generate code to encode each key-value pair in sorted order
+    // Generate code to count and encode fields. Optional fields are only included
+    // when they are Some, so the map header count must be computed at runtime.
+    let count_fields: Vec<_> = sorted
+        .iter()
+        .map(|f| {
+            let ident = &f.ident;
+            if extract_option_inner(&f.kind).is_some() {
+                quote! { if self.#ident.is_some() { count += 1; } }
+            } else {
+                quote! { count += 1; }
+            }
+        })
+        .collect();
+
     let encode_fields: Vec<_> = sorted
         .iter()
         .map(|f| {
             let ident = &f.ident;
             let key = f.key.unwrap();
-            quote! {
-                enc.encode_int(#key);
-                enc.extend(&self.#ident.encode_cbor());
+            if extract_option_inner(&f.kind).is_some() {
+                quote! {
+                    if let Some(ref v) = self.#ident {
+                        enc.encode_int(#key);
+                        enc.extend(&v.encode_cbor());
+                    }
+                }
+            } else {
+                quote! {
+                    enc.encode_int(#key);
+                    enc.extend(&self.#ident.encode_cbor());
+                }
             }
         })
         .collect();
 
-    Ok(quote! {
-        impl #cbor_crate::Encode for #name {
-            fn encode_cbor(&self) -> Vec<u8> {
-                let mut enc = #cbor_crate::Encoder::new();
-                enc.encode_map_header(#len);
-                #(#encode_fields)*
-                enc.finish()
+    // If there are no optional fields, use a static map header size to avoid
+    // generating unnecessary runtime counting code.
+    if has_optional {
+        Ok(quote! {
+            impl #cbor_crate::Encode for #name {
+                fn encode_cbor(&self) -> Vec<u8> {
+                    let mut enc = #cbor_crate::Encoder::new();
+                    let mut count: usize = 0;
+                    #(#count_fields)*
+                    enc.encode_map_header(count);
+                    #(#encode_fields)*
+                    enc.finish()
+                }
             }
-        }
-    })
+        })
+    } else {
+        let len = sorted.len();
+        Ok(quote! {
+            impl #cbor_crate::Encode for #name {
+                fn encode_cbor(&self) -> Vec<u8> {
+                    let mut enc = #cbor_crate::Encoder::new();
+                    enc.encode_map_header(#len);
+                    #(#encode_fields)*
+                    enc.finish()
+                }
+            }
+        })
+    }
 }
 
 /// Generates the `Decode` trait implementation for a struct.
@@ -194,6 +238,7 @@ fn derive_decode_array(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<T
 }
 
 /// Generates map-mode `Decode` impl: fields decoded as key-value pairs, validating key order.
+/// Option<T> fields tolerate missing keys by defaulting to None.
 fn derive_decode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<TokenStream2> {
     let cbor_crate = quote! { darkbio_crypto::cbor };
 
@@ -216,41 +261,121 @@ fn derive_decode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
 
     let len = sorted.len();
 
-    // Generate code to decode each key-value pair, validating key order
+    // Check if any field is optional (affects decoding strategy)
+    let has_optional = sorted
+        .iter()
+        .any(|f| extract_option_inner(&f.kind).is_some());
+
+    // Use original field order for struct construction (not sorted order)
+    let construct_fields: Vec<_> = fields.iter().map(|f| &f.ident).collect();
+
+    // If there are no optional fields, use the simple fixed-count decoder to
+    // avoid generating unnecessary runtime tracking code.
+    if !has_optional {
+        let decode_fields: Vec<_> = sorted
+            .iter()
+            .map(|f| {
+                let ident = &f.ident;
+                let ty = &f.kind;
+                let key = f.key.unwrap();
+                let decode_expr = if let Some(inner_ty) = extract_nullable_inner(ty) {
+                    // Option<Option<T>>: decode the inner Option<T> and wrap in Some
+                    quote! { Some(<#inner_ty as #cbor_crate::Decode>::decode_cbor_notrail(dec)?) }
+                } else {
+                    quote! { <#ty as #cbor_crate::Decode>::decode_cbor_notrail(dec)? }
+                };
+                quote! {
+                    let key = dec.decode_int()?;
+                    if key != #key {
+                        return Err(#cbor_crate::Error::InvalidMapKeyOrder(key, #key));
+                    }
+                    let #ident = #decode_expr;
+                }
+            })
+            .collect();
+
+        return Ok(quote! {
+            impl #cbor_crate::Decode for #name {
+                fn decode_cbor(data: &[u8]) -> Result<Self, #cbor_crate::Error> {
+                    let mut dec = #cbor_crate::Decoder::new(data);
+                    let result = Self::decode_cbor_notrail(&mut dec)?;
+                    dec.finish()?;
+                    Ok(result)
+                }
+
+                fn decode_cbor_notrail(dec: &mut #cbor_crate::Decoder) -> Result<Self, #cbor_crate::Error> {
+                    let len = dec.decode_map_header()?;
+                    if len != #len as u64 {
+                        return Err(#cbor_crate::Error::UnexpectedItemCount(len, #len));
+                    }
+                    #(#decode_fields)*
+                    Ok(Self { #(#construct_fields),* })
+                }
+            }
+        });
+    }
+
+    // Generate code to decode each field, walking expected keys in sorted order
+    // against actual map entries. Optional fields with missing keys default to None.
     let decode_fields: Vec<_> = sorted
         .iter()
         .map(|f| {
             let ident = &f.ident;
-            let ty = &f.kind;
             let key = f.key.unwrap();
-            quote! {
-                let key = dec.decode_int()?;
-                if key != #key {
-                    return Err(#cbor_crate::Error::InvalidMapKeyOrder(key, #key));
+            if let Some(inner_ty) = extract_option_inner(&f.kind) {
+                // Optional: peek at next key, decode if matching, else None
+                quote! {
+                    let #ident = if remaining > 0 && dec.peek_int()? == #key {
+                        dec.decode_int()?;
+                        remaining -= 1;
+                        Some(<#inner_ty as #cbor_crate::Decode>::decode_cbor_notrail(dec)?)
+                    } else {
+                        None
+                    };
                 }
-                let #ident = <#ty as #cbor_crate::Decode>::decode_cbor_notrail(dec)?;
+            } else {
+                // Required: must be present with correct key
+                let ty = &f.kind;
+                let decode_expr = if let Some(inner_ty) = extract_nullable_inner(ty) {
+                    // Option<Option<T>>: decode the inner Option<T> and wrap in Some
+                    quote! { Some(<#inner_ty as #cbor_crate::Decode>::decode_cbor_notrail(dec)?) }
+                } else {
+                    quote! { <#ty as #cbor_crate::Decode>::decode_cbor_notrail(dec)? }
+                };
+                quote! {
+                    if remaining == 0 {
+                        return Err(#cbor_crate::Error::InvalidMapKeyOrder(0, #key));
+                    }
+                    let key = dec.decode_int()?;
+                    if key != #key {
+                        return Err(#cbor_crate::Error::InvalidMapKeyOrder(key, #key));
+                    }
+                    remaining -= 1;
+                    let #ident = #decode_expr;
+                }
             }
         })
         .collect();
-
-    // Use original field order for struct construction (not sorted order)
-    let construct_fields: Vec<_> = fields.iter().map(|f| &f.ident).collect();
 
     Ok(quote! {
         impl #cbor_crate::Decode for #name {
             fn decode_cbor(data: &[u8]) -> Result<Self, #cbor_crate::Error> {
                 let mut dec = #cbor_crate::Decoder::new(data);
                 let result = Self::decode_cbor_notrail(&mut dec)?;
-                dec.finish()?; // Ensure no trailing data
+                dec.finish()?;
                 Ok(result)
             }
 
             fn decode_cbor_notrail(dec: &mut #cbor_crate::Decoder) -> Result<Self, #cbor_crate::Error> {
-                let len = dec.decode_map_header()?;
-                if len != #len as u64 {
-                    return Err(#cbor_crate::Error::UnexpectedItemCount(len, #len));
+                let map_len = dec.decode_map_header()?;
+                if map_len > #len as u64 {
+                    return Err(#cbor_crate::Error::UnexpectedItemCount(map_len, #len));
                 }
+                let mut remaining = map_len;
                 #(#decode_fields)*
+                if remaining != 0 {
+                    return Err(#cbor_crate::Error::UnexpectedItemCount(map_len, (map_len - remaining) as usize));
+                }
                 Ok(Self { #(#construct_fields),* })
             }
         }
@@ -320,6 +445,59 @@ fn parse_fields(input: &DeriveInput) -> syn::Result<Vec<FieldInfo>> {
         result.push(FieldInfo { ident, kind, key });
     }
     Ok(result)
+}
+
+/// Checks if a type is `Option<T>` (but not `Option<Option<T>>`) and returns
+/// the inner type `T`. Used to identify omittable map fields.
+///
+/// Returns `None` for `Option<Option<T>>`: nested options represent a
+/// non-omittable nullable field (always present, value is null or T).
+fn extract_option_inner(ty: &syn::Type) -> Option<&syn::Type> {
+    if let syn::Type::Path(type_path) = ty {
+        let segment = type_path.path.segments.last()?;
+        if segment.ident == "Option"
+            && let syn::PathArguments::AngleBracketed(args) = &segment.arguments
+            && args.args.len() == 1
+            && let syn::GenericArgument::Type(inner) = args.args.first()?
+        {
+            // Option<Option<T>> is NOT omittable — it's a non-omittable
+            // nullable field. See extract_nullable_inner.
+            if is_option_type(inner) {
+                return None;
+            }
+            return Some(inner);
+        }
+    }
+    None
+}
+
+/// Checks if a type is `Option<Option<T>>` and returns the inner `Option<T>`.
+/// Used to identify non-omittable nullable map fields. During decoding, the
+/// derive generates `Some(<Option<T>>::decode(...))` so that null on the wire
+/// becomes `Some(None)` rather than `None`.
+fn extract_nullable_inner(ty: &syn::Type) -> Option<&syn::Type> {
+    if let syn::Type::Path(type_path) = ty {
+        let segment = type_path.path.segments.last()?;
+        if segment.ident == "Option"
+            && let syn::PathArguments::AngleBracketed(args) = &segment.arguments
+            && args.args.len() == 1
+            && let syn::GenericArgument::Type(inner) = args.args.first()?
+            && is_option_type(inner)
+        {
+            return Some(inner);
+        }
+    }
+    None
+}
+
+/// Returns true if the type's last path segment is `Option`.
+fn is_option_type(ty: &syn::Type) -> bool {
+    if let syn::Type::Path(type_path) = ty
+        && let Some(segment) = type_path.path.segments.last()
+    {
+        return segment.ident == "Option";
+    }
+    false
 }
 
 /// Parses an integer expression, handling both positive literals and negation.
