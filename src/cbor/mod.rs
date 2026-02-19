@@ -1711,9 +1711,9 @@ mod tests {
     fn test_map_optional_decoding() {
         // Decode a map with required + nullable (null value), optionals absent
         let decoded = decode::<TestMapOptional>(&vec![
-            0xa2,             // map with 2 entries
+            0xa2, // map with 2 entries
             0x01, 0x18, 0x2a, // 1: 42
-            0x03, 0xf6,       // 3: null
+            0x03, 0xf6, // 3: null
         ])
         .unwrap();
         assert_eq!(decoded.required, 42);
@@ -1723,10 +1723,10 @@ mod tests {
 
         // Decode a map with required + nullable + first optional
         let decoded = decode::<TestMapOptional>(&vec![
-            0xa3,                         // map with 3 entries
-            0x01, 0x00,                   // 1: 0
-            0x02, 0x62, 0x68, 0x69,       // 2: "hi"
-            0x03, 0xf6,                   // 3: null
+            0xa3, // map with 3 entries
+            0x01, 0x00, // 1: 0
+            0x02, 0x62, 0x68, 0x69, // 2: "hi"
+            0x03, 0xf6, // 3: null
         ])
         .unwrap();
         assert_eq!(decoded.required, 0);
@@ -1736,10 +1736,10 @@ mod tests {
 
         // Decode a map with required + nullable + second optional (key -1)
         let decoded = decode::<TestMapOptional>(&vec![
-            0xa3,                   // map with 3 entries
-            0x01, 0x05,             // 1: 5
-            0x03, 0xf6,             // 3: null
-            0x20, 0x41, 0xab,       // -1: h'ab'
+            0xa3, // map with 3 entries
+            0x01, 0x05, // 1: 5
+            0x03, 0xf6, // 3: null
+            0x20, 0x41, 0xab, // -1: h'ab'
         ])
         .unwrap();
         assert_eq!(decoded.required, 5);
@@ -1749,7 +1749,7 @@ mod tests {
 
         // Decode with nullable absent must fail (it's required)
         let result = decode::<TestMapOptional>(&vec![
-            0xa1,             // map with 1 entry
+            0xa1, // map with 1 entry
             0x01, 0x18, 0x2a, // 1: 42 (key 3 missing)
         ]);
         assert!(result.is_err());
@@ -1778,7 +1778,7 @@ mod tests {
 
         // Nullable field missing (key 3 must always be present)
         let result = decode::<TestMapOptional>(&vec![
-            0xa1,             // map with 1 entry
+            0xa1, // map with 1 entry
             0x01, 0x18, 0x2a, // 1: 42 (key 3 missing)
         ]);
         assert!(result.is_err());

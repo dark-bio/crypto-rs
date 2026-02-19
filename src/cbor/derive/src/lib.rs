@@ -119,7 +119,9 @@ fn derive_encode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
     });
 
     // Check if any field is optional (affects whether map size is static or dynamic)
-    let has_optional = sorted.iter().any(|f| extract_option_inner(&f.kind).is_some());
+    let has_optional = sorted
+        .iter()
+        .any(|f| extract_option_inner(&f.kind).is_some());
 
     // Generate code to count and encode fields. Optional fields are only included
     // when they are Some, so the map header count must be computed at runtime.
@@ -260,7 +262,9 @@ fn derive_decode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
     let len = sorted.len();
 
     // Check if any field is optional (affects decoding strategy)
-    let has_optional = sorted.iter().any(|f| extract_option_inner(&f.kind).is_some());
+    let has_optional = sorted
+        .iter()
+        .any(|f| extract_option_inner(&f.kind).is_some());
 
     // Use original field order for struct construction (not sorted order)
     let construct_fields: Vec<_> = fields.iter().map(|f| &f.ident).collect();
@@ -451,19 +455,17 @@ fn parse_fields(input: &DeriveInput) -> syn::Result<Vec<FieldInfo>> {
 fn extract_option_inner(ty: &syn::Type) -> Option<&syn::Type> {
     if let syn::Type::Path(type_path) = ty {
         let segment = type_path.path.segments.last()?;
-        if segment.ident == "Option" {
-            if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
-                if args.args.len() == 1 {
-                    if let syn::GenericArgument::Type(inner) = args.args.first()? {
-                        // Option<Option<T>> is NOT omittable — it's a non-omittable
-                        // nullable field. See extract_nullable_inner.
-                        if is_option_type(inner) {
-                            return None;
-                        }
-                        return Some(inner);
-                    }
-                }
+        if segment.ident == "Option"
+            && let syn::PathArguments::AngleBracketed(args) = &segment.arguments
+            && args.args.len() == 1
+            && let syn::GenericArgument::Type(inner) = args.args.first()?
+        {
+            // Option<Option<T>> is NOT omittable — it's a non-omittable
+            // nullable field. See extract_nullable_inner.
+            if is_option_type(inner) {
+                return None;
             }
+            return Some(inner);
         }
     }
     None
@@ -476,16 +478,13 @@ fn extract_option_inner(ty: &syn::Type) -> Option<&syn::Type> {
 fn extract_nullable_inner(ty: &syn::Type) -> Option<&syn::Type> {
     if let syn::Type::Path(type_path) = ty {
         let segment = type_path.path.segments.last()?;
-        if segment.ident == "Option" {
-            if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
-                if args.args.len() == 1 {
-                    if let syn::GenericArgument::Type(inner) = args.args.first()? {
-                        if is_option_type(inner) {
-                            return Some(inner);
-                        }
-                    }
-                }
-            }
+        if segment.ident == "Option"
+            && let syn::PathArguments::AngleBracketed(args) = &segment.arguments
+            && args.args.len() == 1
+            && let syn::GenericArgument::Type(inner) = args.args.first()?
+            && is_option_type(inner)
+        {
+            return Some(inner);
         }
     }
     None
@@ -493,10 +492,10 @@ fn extract_nullable_inner(ty: &syn::Type) -> Option<&syn::Type> {
 
 /// Returns true if the type's last path segment is `Option`.
 fn is_option_type(ty: &syn::Type) -> bool {
-    if let syn::Type::Path(type_path) = ty {
-        if let Some(segment) = type_path.path.segments.last() {
-            return segment.ident == "Option";
-        }
+    if let syn::Type::Path(type_path) = ty
+        && let Some(segment) = type_path.path.segments.last()
+    {
+        return segment.ident == "Option";
     }
     false
 }
