@@ -777,11 +777,17 @@ impl<T: Decode> Decode for Option<T> {
     }
 }
 
-/// MapKeys exposes the flattened integer CBOR map keys for a derive-generated
-/// map-mode struct. Used by #[cbor(embed)] decoding to partition a merged parent
-/// map's entries to the correct embedded type.
-pub trait MapKeys {
+/// MapEncode exposes direct map-entry encoding for derive-generated map-mode
+/// structs. This avoids map encode/decode roundtrips when flattening embeds.
+pub trait MapEncode {
+    fn encode_map(&self, entries: &mut Vec<(i64, Raw)>) -> Result<(), Error>;
+}
+
+/// MapDecode exposes direct map-entry decoding for derive-generated map-mode
+/// structs. Implementations consume claimed keys from `entries`.
+pub trait MapDecode: Sized {
     fn cbor_map_keys() -> Vec<i64>;
+    fn decode_map(entries: &mut std::collections::BTreeMap<i64, Raw>) -> Result<Self, Error>;
 }
 
 /// Raw is a placeholder type to allow only partially parsing CBOR objects when
@@ -879,10 +885,9 @@ pub fn cbor_key_cmp(a: i64, b: i64) -> Ordering {
     encode_key(a).cmp(&encode_key(b))
 }
 
-/// decode_map_entries reads a CBOR map from raw bytes and returns its entries
-/// as (key, raw_value) pairs.
-pub fn decode_map_entries(data: &[u8]) -> Result<Vec<(i64, Raw)>, Error> {
-    let mut dec = Decoder::new(data);
+/// decode_map_entries_notrail reads a CBOR map from the decoder and returns its
+/// entries as (key, raw_value) pairs.
+pub fn decode_map_entries_notrail(dec: &mut Decoder<'_>) -> Result<Vec<(i64, Raw)>, Error> {
     let len = dec.decode_map_header()?;
     let mut entries = Vec::with_capacity(len as usize);
     let mut prev_key: Option<i64> = None;
@@ -898,9 +903,17 @@ pub fn decode_map_entries(data: &[u8]) -> Result<Vec<(i64, Raw)>, Error> {
             });
         }
         prev_key = Some(key);
-        let raw = Raw::decode_cbor_notrail(&mut dec)?;
+        let raw = Raw::decode_cbor_notrail(dec)?;
         entries.push((key, raw));
     }
+    Ok(entries)
+}
+
+/// decode_map_entries reads a CBOR map from raw bytes and returns its entries
+/// as (key, raw_value) pairs.
+pub fn decode_map_entries(data: &[u8]) -> Result<Vec<(i64, Raw)>, Error> {
+    let mut dec = Decoder::new(data);
+    let entries = decode_map_entries_notrail(&mut dec)?;
     dec.finish()?;
     Ok(entries)
 }
@@ -2448,9 +2461,7 @@ mod tests {
     }
 
     // Tests that schema-level collision between an optional direct field and
-    // an embed field is caught on encode even when the optional is None (so
-    // no entry-level duplicate exists). Before the fix, this encoded fine
-    // but always failed to decode — an encode/decode inconsistency.
+    // an embed field is caught on encode even when the optional is None.
     #[test]
     fn test_map_embed_optional_overlap_encode() {
         #[derive(Debug, Clone, PartialEq, Cbor)]
@@ -2465,8 +2476,6 @@ mod tests {
             #[cbor(embed)]
             inner: EmbedInner,
         }
-        // Even with x=None (no entry for key 1 from direct field), the
-        // schema-level collision is detected unconditionally.
         match encode(&Broken {
             x: None,
             inner: EmbedInner { a: 42 },
@@ -2477,39 +2486,29 @@ mod tests {
     }
 
     // Tests that embed encoding validates actual merged keys too, not only
-    // the key set reported by MapKeys.
+    // keys reported by the embed's schema declaration.
     #[test]
     fn test_map_embed_runtime_key_mismatch_rejected() {
         #[derive(Debug, Clone, PartialEq)]
         struct RogueEmbed;
 
-        impl MapKeys for RogueEmbed {
+        impl MapEncode for RogueEmbed {
+            fn encode_map(&self, entries: &mut Vec<(i64, Raw)>) -> Result<(), Error> {
+                entries.push((1, Raw(7u64.encode_cbor()?)));
+                Ok(())
+            }
+        }
+
+        impl MapDecode for RogueEmbed {
             fn cbor_map_keys() -> Vec<i64> {
-                // Intentionally dishonest: claims key 2
+                // Intentionally dishonest: claims key 2.
                 vec![2]
             }
-        }
 
-        impl Encode for RogueEmbed {
-            fn encode_cbor(&self) -> Result<Vec<u8>, Error> {
-                // Intentionally emits key 1 to collide with the parent direct field.
-                let mut enc = Encoder::new();
-                enc.encode_map_header(1);
-                enc.encode_int(1);
-                enc.encode_uint(7);
-                Ok(enc.finish())
-            }
-        }
-
-        impl Decode for RogueEmbed {
-            fn decode_cbor(data: &[u8]) -> Result<Self, Error> {
-                let _ = decode_map_entries(data)?;
-                Ok(Self)
-            }
-
-            fn decode_cbor_notrail(dec: &mut Decoder<'_>) -> Result<Self, Error> {
-                let raw = <Raw as Decode>::decode_cbor_notrail(dec)?;
-                let _ = decode_map_entries(&raw.0)?;
+            fn decode_map(
+                entries: &mut std::collections::BTreeMap<i64, Raw>,
+            ) -> Result<Self, Error> {
+                let _ = entries.remove(&2);
                 Ok(Self)
             }
         }
