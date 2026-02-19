@@ -528,6 +528,147 @@ fn derive_decode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
 
     let construct_fields: Vec<_> = fields.iter().map(|f| &f.ident).collect();
 
+    let map_decode_impl = quote! {
+        impl #cbor_crate::MapDecode for #name {
+            fn cbor_map_keys() -> Vec<i64> {
+                let mut keys = Vec::new();
+                #(#map_key_pushes)*
+                keys.sort_by(|a, b| #cbor_crate::cbor_key_cmp(*a, *b));
+                keys
+            }
+
+            fn decode_map(entries: &mut std::collections::BTreeMap<i64, #cbor_crate::Raw>) -> Result<Self, #cbor_crate::Error> {
+                #embed_state_setup
+
+                #(#extract_direct)*
+                #(#extract_embeds)*
+                Ok(Self { #(#construct_fields),* })
+            }
+        }
+    };
+
+    if embeds.is_empty() {
+        let mut sorted: Vec<_> = fields.iter().collect();
+        sorted.sort_by(|a, b| {
+            let ka = cbor_key_bytes(a.key.unwrap());
+            let kb = cbor_key_bytes(b.key.unwrap());
+            ka.cmp(&kb)
+        });
+
+        let len = sorted.len();
+        let has_optional = sorted
+            .iter()
+            .any(|f| extract_option_inner(&f.kind).is_some());
+
+        if !has_optional {
+            let decode_fields: Vec<_> = sorted
+                .iter()
+                .map(|f| {
+                    let ident = &f.ident;
+                    let ty = &f.kind;
+                    let key = f.key.unwrap();
+                    let decode_expr = if let Some(inner_ty) = extract_nullable_inner(ty) {
+                        quote! { Some(<#inner_ty as #cbor_crate::Decode>::decode_cbor_notrail(dec)?) }
+                    } else {
+                        quote! { <#ty as #cbor_crate::Decode>::decode_cbor_notrail(dec)? }
+                    };
+                    quote! {
+                        let key = dec.decode_int()?;
+                        if key != #key {
+                            return Err(#cbor_crate::Error::InvalidMapKeyOrder(key, #key));
+                        }
+                        let #ident = #decode_expr;
+                    }
+                })
+                .collect();
+
+            return Ok(quote! {
+                impl #cbor_crate::Decode for #name {
+                    fn decode_cbor(data: &[u8]) -> Result<Self, #cbor_crate::Error> {
+                        let mut dec = #cbor_crate::Decoder::new(data);
+                        let result = Self::decode_cbor_notrail(&mut dec)?;
+                        dec.finish()?;
+                        Ok(result)
+                    }
+
+                    fn decode_cbor_notrail(dec: &mut #cbor_crate::Decoder) -> Result<Self, #cbor_crate::Error> {
+                        let len = dec.decode_map_header()?;
+                        if len != #len as u64 {
+                            return Err(#cbor_crate::Error::UnexpectedItemCount(len, #len));
+                        }
+                        #(#decode_fields)*
+                        Ok(Self { #(#construct_fields),* })
+                    }
+                }
+
+                #map_decode_impl
+            });
+        }
+
+        let decode_fields: Vec<_> = sorted
+            .iter()
+            .map(|f| {
+                let ident = &f.ident;
+                let key = f.key.unwrap();
+                if let Some(inner_ty) = extract_option_inner(&f.kind) {
+                    quote! {
+                        let #ident = if remaining > 0 && dec.peek_int()? == #key {
+                            dec.decode_int()?;
+                            remaining -= 1;
+                            Some(<#inner_ty as #cbor_crate::Decode>::decode_cbor_notrail(dec)?)
+                        } else {
+                            None
+                        };
+                    }
+                } else {
+                    let ty = &f.kind;
+                    let decode_expr = if let Some(inner_ty) = extract_nullable_inner(ty) {
+                        quote! { Some(<#inner_ty as #cbor_crate::Decode>::decode_cbor_notrail(dec)?) }
+                    } else {
+                        quote! { <#ty as #cbor_crate::Decode>::decode_cbor_notrail(dec)? }
+                    };
+                    quote! {
+                        if remaining == 0 {
+                            return Err(#cbor_crate::Error::InvalidMapKeyOrder(0, #key));
+                        }
+                        let key = dec.decode_int()?;
+                        if key != #key {
+                            return Err(#cbor_crate::Error::InvalidMapKeyOrder(key, #key));
+                        }
+                        remaining -= 1;
+                        let #ident = #decode_expr;
+                    }
+                }
+            })
+            .collect();
+
+        return Ok(quote! {
+            impl #cbor_crate::Decode for #name {
+                fn decode_cbor(data: &[u8]) -> Result<Self, #cbor_crate::Error> {
+                    let mut dec = #cbor_crate::Decoder::new(data);
+                    let result = Self::decode_cbor_notrail(&mut dec)?;
+                    dec.finish()?;
+                    Ok(result)
+                }
+
+                fn decode_cbor_notrail(dec: &mut #cbor_crate::Decoder) -> Result<Self, #cbor_crate::Error> {
+                    let map_len = dec.decode_map_header()?;
+                    if map_len > #len as u64 {
+                        return Err(#cbor_crate::Error::UnexpectedItemCount(map_len, #len));
+                    }
+                    let mut remaining = map_len;
+                    #(#decode_fields)*
+                    if remaining != 0 {
+                        return Err(#cbor_crate::Error::UnexpectedItemCount(map_len, (map_len - remaining) as usize));
+                    }
+                    Ok(Self { #(#construct_fields),* })
+                }
+            }
+
+            #map_decode_impl
+        });
+    }
+
     Ok(quote! {
         impl #cbor_crate::Decode for #name {
             fn decode_cbor(data: &[u8]) -> Result<Self, #cbor_crate::Error> {
@@ -554,22 +695,7 @@ fn derive_decode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
             }
         }
 
-        impl #cbor_crate::MapDecode for #name {
-            fn cbor_map_keys() -> Vec<i64> {
-                let mut keys = Vec::new();
-                #(#map_key_pushes)*
-                keys.sort_by(|a, b| #cbor_crate::cbor_key_cmp(*a, *b));
-                keys
-            }
-
-            fn decode_map(entries: &mut std::collections::BTreeMap<i64, #cbor_crate::Raw>) -> Result<Self, #cbor_crate::Error> {
-                #embed_state_setup
-
-                #(#extract_direct)*
-                #(#extract_embeds)*
-                Ok(Self { #(#construct_fields),* })
-            }
-        }
+        #map_decode_impl
     })
 }
 
