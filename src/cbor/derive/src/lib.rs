@@ -89,7 +89,7 @@ fn derive_encode_array(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<T
         .iter()
         .map(|f| {
             let ident = &f.ident;
-            quote! { enc.extend(&self.#ident.encode_cbor()?); }
+            quote! { enc.encode_field(&self.#ident)?; }
         })
         .collect();
 
@@ -180,13 +180,11 @@ fn derive_encode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
                 let key = f.key.unwrap();
                 if extract_option_inner(&f.kind).is_some() {
                     quote! {
-                        if let Some(ref v) = self.#ident {
-                            entries.push((#key, #cbor_crate::Raw(#cbor_crate::Encode::encode_cbor(v)?)));
-                        }
+                        enc.push_optional(#key, &self.#ident)?;
                     }
                 } else {
                     quote! {
-                        entries.push((#key, #cbor_crate::Raw(#cbor_crate::Encode::encode_cbor(&self.#ident)?)));
+                        enc.push(#key, &self.#ident)?;
                     }
                 }
             })
@@ -198,7 +196,7 @@ fn derive_encode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
                 let ident = &f.ident;
                 let ty = &f.kind;
                 quote! {
-                    <#ty as #cbor_crate::MapEncode>::encode_map(&self.#ident, entries)?;
+                    <#ty as #cbor_crate::MapEncode>::encode_map(&self.#ident, enc)?;
                 }
             })
             .collect();
@@ -218,43 +216,14 @@ fn derive_encode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
                         Err(k) => return Err(#cbor_crate::Error::DuplicateMapKey(*k)),
                     };
 
-                    let mut entries: Vec<(i64, #cbor_crate::Raw)> = Vec::with_capacity(estimated_entries);
-                    <Self as #cbor_crate::MapEncode>::encode_map(self, &mut entries)?;
-
-                    let mut ordered = true;
-                    let mut prev_key: Option<i64> = None;
-                    for (key, _) in entries.iter() {
-                        if let Some(prev) = prev_key {
-                            if #cbor_crate::cbor_key_cmp(prev, *key) != std::cmp::Ordering::Less {
-                                ordered = false;
-                                break;
-                            }
-                        }
-                        prev_key = Some(*key);
-                    }
-                    if !ordered {
-                        entries.sort_unstable_by(|a, b| #cbor_crate::cbor_key_cmp(a.0, b.0));
-                    }
-
-                    let mut prev_key: Option<i64> = None;
-                    for (key, _) in entries.iter() {
-                        if let Some(prev) = prev_key {
-                            if #cbor_crate::cbor_key_cmp(prev, *key) != std::cmp::Ordering::Less {
-                                return Err(if prev == *key {
-                                    #cbor_crate::Error::DuplicateMapKey(*key)
-                                } else {
-                                    #cbor_crate::Error::InvalidMapKeyOrder(*key, prev)
-                                });
-                            }
-                        }
-                        prev_key = Some(*key);
-                    }
-                    Ok(#cbor_crate::encode_map_entries(&entries))
+                    let mut enc = #cbor_crate::MapEncodeBuffer::new(estimated_entries);
+                    <Self as #cbor_crate::MapEncode>::encode_map(self, &mut enc)?;
+                    enc.finish()
                 }
             }
 
             impl #cbor_crate::MapEncode for #name {
-                fn encode_map(&self, entries: &mut Vec<(i64, #cbor_crate::Raw)>) -> Result<(), #cbor_crate::Error> {
+                fn encode_map(&self, enc: &mut #cbor_crate::MapEncodeBuffer) -> Result<(), #cbor_crate::Error> {
                     #(#direct_entries)*
                     #(#embed_entries)*
                     Ok(())
@@ -300,13 +269,13 @@ fn derive_encode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
                 quote! {
                     if let Some(ref v) = self.#ident {
                         enc.encode_int(#key);
-                        enc.extend(&v.encode_cbor()?);
+                        enc.encode_field(v)?;
                     }
                 }
             } else {
                 quote! {
                     enc.encode_int(#key);
-                    enc.extend(&self.#ident.encode_cbor()?);
+                    enc.encode_field(&self.#ident)?;
                 }
             }
         })
@@ -319,13 +288,11 @@ fn derive_encode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
             let key = f.key.unwrap();
             if extract_option_inner(&f.kind).is_some() {
                 quote! {
-                    if let Some(ref v) = self.#ident {
-                        entries.push((#key, #cbor_crate::Raw(#cbor_crate::Encode::encode_cbor(v)?)));
-                    }
+                    enc.push_optional(#key, &self.#ident)?;
                 }
             } else {
                 quote! {
-                    entries.push((#key, #cbor_crate::Raw(#cbor_crate::Encode::encode_cbor(&self.#ident)?)));
+                    enc.push(#key, &self.#ident)?;
                 }
             }
         })
@@ -347,7 +314,7 @@ fn derive_encode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
             }
 
             impl #cbor_crate::MapEncode for #name {
-                fn encode_map(&self, entries: &mut Vec<(i64, #cbor_crate::Raw)>) -> Result<(), #cbor_crate::Error> {
+                fn encode_map(&self, enc: &mut #cbor_crate::MapEncodeBuffer) -> Result<(), #cbor_crate::Error> {
                     #(#map_encode_fields)*
                     Ok(())
                 }
@@ -366,7 +333,7 @@ fn derive_encode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
             }
 
             impl #cbor_crate::MapEncode for #name {
-                fn encode_map(&self, entries: &mut Vec<(i64, #cbor_crate::Raw)>) -> Result<(), #cbor_crate::Error> {
+                fn encode_map(&self, enc: &mut #cbor_crate::MapEncodeBuffer) -> Result<(), #cbor_crate::Error> {
                     #(#map_encode_fields)*
                     Ok(())
                 }

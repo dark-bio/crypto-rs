@@ -176,30 +176,51 @@ impl Encoder {
         self.buf.push(MAJOR_SIMPLE << 5 | SIMPLE_NULL);
     }
 
+    /// encode_field encodes a value directly into this encoder's buffer,
+    /// bypassing the per-field allocation of `encode_cbor()`.
+    pub fn encode_field<T: Encode + ?Sized>(&mut self, value: &T) -> Result<(), Error> {
+        value.encode_cbor_to(&mut self.buf)
+    }
+
     // encodeLength encodes a major type with an unsigned integer, which defines
     // the length for most types, or the value itself for integers.
     fn encode_length(&mut self, major_type: u8, len: u64) {
-        if len < 24 {
-            self.buf.push(major_type << 5 | len as u8);
-        } else if len <= u8::MAX as u64 {
-            self.buf.push(major_type << 5 | INFO_UINT8);
-            self.buf.push(len as u8);
-        } else if len <= u16::MAX as u64 {
-            self.buf.push(major_type << 5 | INFO_UINT16);
-            self.buf.extend_from_slice(&(len as u16).to_be_bytes());
-        } else if len <= u32::MAX as u64 {
-            self.buf.push(major_type << 5 | INFO_UINT32);
-            self.buf.extend_from_slice(&(len as u32).to_be_bytes());
-        } else {
-            self.buf.push(major_type << 5 | INFO_UINT64);
-            self.buf.extend_from_slice(&len.to_be_bytes());
-        }
+        encode_length_to(&mut self.buf, major_type, len);
     }
 }
 
 impl Default for Encoder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// encode_length_to writes a CBOR major-type + length header directly into a
+// buffer, matching the canonical shortest-form encoding.
+fn encode_length_to(buf: &mut Vec<u8>, major_type: u8, len: u64) {
+    if len < 24 {
+        buf.push(major_type << 5 | len as u8);
+    } else if len <= u8::MAX as u64 {
+        buf.push(major_type << 5 | INFO_UINT8);
+        buf.push(len as u8);
+    } else if len <= u16::MAX as u64 {
+        buf.push(major_type << 5 | INFO_UINT16);
+        buf.extend_from_slice(&(len as u16).to_be_bytes());
+    } else if len <= u32::MAX as u64 {
+        buf.push(major_type << 5 | INFO_UINT32);
+        buf.extend_from_slice(&(len as u32).to_be_bytes());
+    } else {
+        buf.push(major_type << 5 | INFO_UINT64);
+        buf.extend_from_slice(&len.to_be_bytes());
+    }
+}
+
+// encode_int_to encodes a signed integer directly into a buffer.
+pub fn encode_int_to(buf: &mut Vec<u8>, value: i64) {
+    if value >= 0 {
+        encode_length_to(buf, MAJOR_UINT, value as u64);
+    } else {
+        encode_length_to(buf, MAJOR_NINT, (-1 - value) as u64);
     }
 }
 
@@ -447,7 +468,19 @@ impl<'a> Decoder<'a> {
 /// Encode is the interface needed to encode a type to CBOR.
 pub trait Encode {
     // encode_cbor converts the type to CBOR.
-    fn encode_cbor(&self) -> Result<Vec<u8>, Error>;
+    fn encode_cbor(&self) -> Result<Vec<u8>, Error> {
+        let mut buf = Vec::new();
+        self.encode_cbor_to(&mut buf)?;
+        Ok(buf)
+    }
+
+    // encode_cbor_to writes the CBOR encoding directly into an existing buffer,
+    // avoiding the allocation overhead of encode_cbor(). Primitive types override
+    // this for zero-allocation encoding; the default falls back to encode_cbor().
+    fn encode_cbor_to(&self, buf: &mut Vec<u8>) -> Result<(), Error> {
+        buf.extend_from_slice(&self.encode_cbor()?);
+        Ok(())
+    }
 }
 
 /// Decode is the interface needed to decode a type from CBOR.
@@ -461,10 +494,9 @@ pub trait Decode: Sized {
 
 // Encoder and decoder implementation for booleans.
 impl Encode for bool {
-    fn encode_cbor(&self) -> Result<Vec<u8>, Error> {
-        let mut encoder = Encoder::new();
-        encoder.encode_bool(*self);
-        Ok(encoder.finish())
+    fn encode_cbor_to(&self, buf: &mut Vec<u8>) -> Result<(), Error> {
+        buf.push(MAJOR_SIMPLE << 5 | if *self { SIMPLE_TRUE } else { SIMPLE_FALSE });
+        Ok(())
     }
 }
 
@@ -483,10 +515,9 @@ impl Decode for bool {
 
 // Encoder and decoder implementation for positive integers.
 impl Encode for u64 {
-    fn encode_cbor(&self) -> Result<Vec<u8>, Error> {
-        let mut encoder = Encoder::new();
-        encoder.encode_uint(*self);
-        Ok(encoder.finish())
+    fn encode_cbor_to(&self, buf: &mut Vec<u8>) -> Result<(), Error> {
+        encode_length_to(buf, MAJOR_UINT, *self);
+        Ok(())
     }
 }
 
@@ -505,10 +536,9 @@ impl Decode for u64 {
 
 // Encoder and decoder implementation for signed integers.
 impl Encode for i64 {
-    fn encode_cbor(&self) -> Result<Vec<u8>, Error> {
-        let mut encoder = Encoder::new();
-        encoder.encode_int(*self);
-        Ok(encoder.finish())
+    fn encode_cbor_to(&self, buf: &mut Vec<u8>) -> Result<(), Error> {
+        encode_int_to(buf, *self);
+        Ok(())
     }
 }
 
@@ -527,18 +557,18 @@ impl Decode for i64 {
 
 // Encoder and decoder implementation for dynamic byte blobs.
 impl Encode for Vec<u8> {
-    fn encode_cbor(&self) -> Result<Vec<u8>, Error> {
-        let mut encoder = Encoder::new();
-        encoder.encode_bytes(self);
-        Ok(encoder.finish())
+    fn encode_cbor_to(&self, buf: &mut Vec<u8>) -> Result<(), Error> {
+        encode_length_to(buf, MAJOR_BYTES, self.len() as u64);
+        buf.extend_from_slice(self);
+        Ok(())
     }
 }
 
 impl Encode for &[u8] {
-    fn encode_cbor(&self) -> Result<Vec<u8>, Error> {
-        let mut encoder = Encoder::new();
-        encoder.encode_bytes(self);
-        Ok(encoder.finish())
+    fn encode_cbor_to(&self, buf: &mut Vec<u8>) -> Result<(), Error> {
+        encode_length_to(buf, MAJOR_BYTES, self.len() as u64);
+        buf.extend_from_slice(self);
+        Ok(())
     }
 }
 
@@ -557,10 +587,10 @@ impl Decode for Vec<u8> {
 
 // Encoder and decoder implementation for fixed byte blobs.
 impl<const N: usize> Encode for [u8; N] {
-    fn encode_cbor(&self) -> Result<Vec<u8>, Error> {
-        let mut encoder = Encoder::new();
-        encoder.encode_bytes(self);
-        Ok(encoder.finish())
+    fn encode_cbor_to(&self, buf: &mut Vec<u8>) -> Result<(), Error> {
+        encode_length_to(buf, MAJOR_BYTES, N as u64);
+        buf.extend_from_slice(self);
+        Ok(())
     }
 }
 
@@ -579,18 +609,18 @@ impl<const N: usize> Decode for [u8; N] {
 
 // Encoder and decoder implementation for UTF-8 strings.
 impl Encode for String {
-    fn encode_cbor(&self) -> Result<Vec<u8>, Error> {
-        let mut encoder = Encoder::new();
-        encoder.encode_text(self);
-        Ok(encoder.finish())
+    fn encode_cbor_to(&self, buf: &mut Vec<u8>) -> Result<(), Error> {
+        encode_length_to(buf, MAJOR_TEXT, self.len() as u64);
+        buf.extend_from_slice(self.as_bytes());
+        Ok(())
     }
 }
 
 impl Encode for &str {
-    fn encode_cbor(&self) -> Result<Vec<u8>, Error> {
-        let mut encoder = Encoder::new();
-        encoder.encode_text(self);
-        Ok(encoder.finish())
+    fn encode_cbor_to(&self, buf: &mut Vec<u8>) -> Result<(), Error> {
+        encode_length_to(buf, MAJOR_TEXT, self.len() as u64);
+        buf.extend_from_slice(self.as_bytes());
+        Ok(())
     }
 }
 
@@ -609,10 +639,9 @@ impl Decode for String {
 
 // Encoder and decoder implementation for the empty tuple.
 impl Encode for () {
-    fn encode_cbor(&self) -> Result<Vec<u8>, Error> {
-        let mut encoder = Encoder::new();
-        encoder.encode_empty_tuple();
-        Ok(encoder.finish())
+    fn encode_cbor_to(&self, buf: &mut Vec<u8>) -> Result<(), Error> {
+        encode_length_to(buf, MAJOR_ARRAY, 0);
+        Ok(())
     }
 }
 
@@ -640,17 +669,15 @@ impl Decode for () {
 macro_rules! impl_tuple {
     ($($t:ident),+) => {
         impl<$($t: Encode),+> Encode for ($($t,)+) {
-            fn encode_cbor(&self) -> Result<Vec<u8>, Error> {
-                let mut encoder = Encoder::new();
-
+            fn encode_cbor_to(&self, buf: &mut Vec<u8>) -> Result<(), Error> {
                 // Encode the length of the tuple
                 let len = args!($($t),+);
-                encoder.encode_array_header(len);
+                encode_length_to(buf, MAJOR_ARRAY, len as u64);
 
                 // Encode all the tuple elements individually
                 let ($($t,)+) = self;
-                $(encoder.buf.extend_from_slice(&$t.encode_cbor()?);)+
-                Ok(encoder.finish())
+                $($t.encode_cbor_to(buf)?;)+
+                Ok(())
             }
         }
 
@@ -714,6 +741,10 @@ impl<T: Encode> Encode for &T {
     fn encode_cbor(&self) -> Result<Vec<u8>, Error> {
         (*self).encode_cbor()
     }
+
+    fn encode_cbor_to(&self, buf: &mut Vec<u8>) -> Result<(), Error> {
+        (*self).encode_cbor_to(buf)
+    }
 }
 
 /// Constant for convenient CBOR null encoding (use `cbor::NULL`).
@@ -724,10 +755,9 @@ pub const NULL: Null = Null;
 pub struct Null;
 
 impl Encode for Null {
-    fn encode_cbor(&self) -> Result<Vec<u8>, Error> {
-        let mut encoder = Encoder::new();
-        encoder.encode_null();
-        Ok(encoder.finish())
+    fn encode_cbor_to(&self, buf: &mut Vec<u8>) -> Result<(), Error> {
+        buf.push(MAJOR_SIMPLE << 5 | SIMPLE_NULL);
+        Ok(())
     }
 }
 
@@ -751,9 +781,19 @@ impl<T: Encode> Encode for Option<T> {
         match self {
             Some(value) => value.encode_cbor(),
             None => {
-                let mut encoder = Encoder::new();
-                encoder.encode_null();
-                Ok(encoder.finish())
+                let mut buf = Vec::new();
+                buf.push(MAJOR_SIMPLE << 5 | SIMPLE_NULL);
+                Ok(buf)
+            }
+        }
+    }
+
+    fn encode_cbor_to(&self, buf: &mut Vec<u8>) -> Result<(), Error> {
+        match self {
+            Some(value) => value.encode_cbor_to(buf),
+            None => {
+                buf.push(MAJOR_SIMPLE << 5 | SIMPLE_NULL);
+                Ok(())
             }
         }
     }
@@ -780,7 +820,71 @@ impl<T: Decode> Decode for Option<T> {
 /// MapEncode exposes direct map-entry encoding for derive-generated map-mode
 /// structs. This avoids map encode/decode roundtrips when flattening embeds.
 pub trait MapEncode {
-    fn encode_map(&self, entries: &mut Vec<(i64, Raw)>) -> Result<(), Error>;
+    fn encode_map(&self, enc: &mut MapEncodeBuffer) -> Result<(), Error>;
+}
+
+/// MapEncodeBuffer collects CBOR map entries into a single shared buffer,
+/// recording (key, start, end) offsets. This avoids per-field allocation:
+/// all encoded values are written contiguously into `data`.
+pub struct MapEncodeBuffer {
+    pub data: Vec<u8>,
+    pub entries: Vec<(i64, u32, u32)>,
+}
+
+impl MapEncodeBuffer {
+    /// Creates a new buffer pre-sized for the expected number of entries.
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            data: Vec::with_capacity(capacity * 9), // ~9 bytes per field
+            entries: Vec::with_capacity(capacity),
+        }
+    }
+
+    /// Encodes a required field directly into the shared buffer.
+    pub fn push<T: Encode>(&mut self, key: i64, value: &T) -> Result<(), Error> {
+        let start = self.data.len() as u32;
+        value.encode_cbor_to(&mut self.data)?;
+        let end = self.data.len() as u32;
+        self.entries.push((key, start, end));
+        Ok(())
+    }
+
+    /// Encodes an optional field; omits the entry entirely when None.
+    pub fn push_optional<T: Encode>(&mut self, key: i64, value: &Option<T>) -> Result<(), Error> {
+        if let Some(v) = value {
+            self.push(key, v)?;
+        }
+        Ok(())
+    }
+
+    /// Assembles the final CBOR map bytes. Sorts entries by CBOR key order
+    /// if not already sorted, then verifies no duplicate keys.
+    pub fn finish(mut self) -> Result<Vec<u8>, Error> {
+        // Check if already in order (common case: keys from embeds interleave nicely)
+        let ordered = self
+            .entries
+            .windows(2)
+            .all(|w| cbor_key_cmp(w[0].0, w[1].0) == Ordering::Less);
+
+        if !ordered {
+            self.entries
+                .sort_unstable_by(|a, b| cbor_key_cmp(a.0, b.0));
+        }
+        // Verify no duplicates after sorting
+        for w in self.entries.windows(2) {
+            if w[0].0 == w[1].0 {
+                return Err(Error::DuplicateMapKey(w[0].0));
+            }
+        }
+        // Assemble output: map header + sorted key-value pairs
+        let mut out = Vec::with_capacity(self.data.len() + self.entries.len() * 10 + 5);
+        encode_length_to(&mut out, MAJOR_MAP, self.entries.len() as u64);
+        for &(key, start, end) in &self.entries {
+            encode_int_to(&mut out, key);
+            out.extend_from_slice(&self.data[start as usize..end as usize]);
+        }
+        Ok(out)
+    }
 }
 
 /// MapDecode exposes direct map-entry decoding for derive-generated map-mode
@@ -807,22 +911,23 @@ pub struct MapEntries<'a> {
 }
 
 impl<'a> MapEntries<'a> {
+    /// Creates from entries that are already in CBOR deterministic key order
+    /// (as validated by `decode_map_entries_slices_notrail`). Skips re-sorting.
     pub fn new(entries: Vec<(i64, &'a [u8])>) -> Self {
-        let mut entries: Vec<(i64, Option<&'a [u8]>)> =
+        let len = entries.len();
+        let entries: Vec<(i64, Option<&'a [u8]>)> =
             entries.into_iter().map(|(k, v)| (k, Some(v))).collect();
-        entries.sort_by_key(|(k, _)| *k);
-        Self::from_sorted_slots(entries)
-    }
-
-    fn from_sorted_slots(entries: Vec<(i64, Option<&'a [u8]>)>) -> Self {
         Self {
-            remaining: entries.len(),
+            remaining: len,
             entries,
         }
     }
 
     pub fn take(&mut self, key: i64) -> Option<&'a [u8]> {
-        let index = self.entries.binary_search_by_key(&key, |(k, _)| *k).ok()?;
+        let index = self
+            .entries
+            .binary_search_by(|(k, _)| cbor_key_cmp(*k, key))
+            .ok()?;
         let value = self.entries[index].1.take();
         if value.is_some() {
             self.remaining -= 1;
@@ -836,7 +941,7 @@ impl<'a> MapEntries<'a> {
 
     pub fn contains(&self, key: i64) -> bool {
         self.entries
-            .binary_search_by_key(&key, |(k, _)| *k)
+            .binary_search_by(|(k, _)| cbor_key_cmp(*k, key))
             .ok()
             .and_then(|index| self.entries[index].1.as_ref())
             .is_some()
@@ -944,6 +1049,11 @@ impl Encode for Raw {
     fn encode_cbor(&self) -> Result<Vec<u8>, Error> {
         Ok(self.0.clone())
     }
+
+    fn encode_cbor_to(&self, buf: &mut Vec<u8>) -> Result<(), Error> {
+        buf.extend_from_slice(&self.0);
+        Ok(())
+    }
 }
 
 impl Decode for Raw {
@@ -1008,12 +1118,25 @@ fn skip_object(decoder: &mut Decoder<'_>, depth: usize) -> Result<(), Error> {
 /// integers (-1, -2, -3, ...), and within each category they're ordered by their
 /// encoded length first, then by value.
 pub fn cbor_key_cmp(a: i64, b: i64) -> Ordering {
-    fn encode_key(k: i64) -> Vec<u8> {
-        let mut enc = Encoder::new();
-        enc.encode_int(k);
-        enc.finish()
+    // CBOR deterministic encoding of integer keys:
+    //   - Major type 0 (non-negative) encodes as 0x00..0x1b; shorter forms sort first.
+    //   - Major type 1 (negative)     encodes as 0x20..0x3b; shorter forms sort first.
+    //   - Major 0 bytes always < Major 1 bytes, so all non-negatives sort before negatives.
+    //
+    // Within each sign category, CBOR uses canonical shortest-form encoding,
+    // so smaller absolute values get shorter encodings which sort first; equal
+    // lengths are ordered by value. This matches plain unsigned comparison of
+    // the wire value (the value itself for non-negative, (-1 - n) for negative n).
+    match (a >= 0, b >= 0) {
+        (true, true) => (a as u64).cmp(&(b as u64)),
+        (false, false) => {
+            // Wire value for negative n is (-1 - n) as u64.
+            // -1 → wire 0, -2 → wire 1, … so smaller absolute value sorts first.
+            ((-1 - a) as u64).cmp(&((-1 - b) as u64))
+        }
+        (true, false) => Ordering::Less,
+        (false, true) => Ordering::Greater,
     }
-    encode_key(a).cmp(&encode_key(b))
 }
 
 /// decode_map_entries_notrail reads a CBOR map from the decoder and returns its
@@ -2664,8 +2787,8 @@ mod tests {
         struct RogueEmbed;
 
         impl MapEncode for RogueEmbed {
-            fn encode_map(&self, entries: &mut Vec<(i64, Raw)>) -> Result<(), Error> {
-                entries.push((1, Raw(7u64.encode_cbor()?)));
+            fn encode_map(&self, enc: &mut MapEncodeBuffer) -> Result<(), Error> {
+                enc.push(1i64, &7u64)?;
                 Ok(())
             }
         }
