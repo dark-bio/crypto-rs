@@ -274,12 +274,18 @@ fn derive_decode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
                 let ident = &f.ident;
                 let ty = &f.kind;
                 let key = f.key.unwrap();
+                let decode_expr = if let Some(inner_ty) = extract_nullable_inner(ty) {
+                    // Option<Option<T>>: decode the inner Option<T> and wrap in Some
+                    quote! { Some(<#inner_ty as #cbor_crate::Decode>::decode_cbor_notrail(dec)?) }
+                } else {
+                    quote! { <#ty as #cbor_crate::Decode>::decode_cbor_notrail(dec)? }
+                };
                 quote! {
                     let key = dec.decode_int()?;
                     if key != #key {
                         return Err(#cbor_crate::Error::InvalidMapKeyOrder(key, #key));
                     }
-                    let #ident = <#ty as #cbor_crate::Decode>::decode_cbor_notrail(dec)?;
+                    let #ident = #decode_expr;
                 }
             })
             .collect();
@@ -326,6 +332,12 @@ fn derive_decode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
             } else {
                 // Required: must be present with correct key
                 let ty = &f.kind;
+                let decode_expr = if let Some(inner_ty) = extract_nullable_inner(ty) {
+                    // Option<Option<T>>: decode the inner Option<T> and wrap in Some
+                    quote! { Some(<#inner_ty as #cbor_crate::Decode>::decode_cbor_notrail(dec)?) }
+                } else {
+                    quote! { <#ty as #cbor_crate::Decode>::decode_cbor_notrail(dec)? }
+                };
                 quote! {
                     if remaining == 0 {
                         return Err(#cbor_crate::Error::InvalidMapKeyOrder(0, #key));
@@ -335,7 +347,7 @@ fn derive_decode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
                         return Err(#cbor_crate::Error::InvalidMapKeyOrder(key, #key));
                     }
                     remaining -= 1;
-                    let #ident = <#ty as #cbor_crate::Decode>::decode_cbor_notrail(dec)?;
+                    let #ident = #decode_expr;
                 }
             }
         })
@@ -431,7 +443,11 @@ fn parse_fields(input: &DeriveInput) -> syn::Result<Vec<FieldInfo>> {
     Ok(result)
 }
 
-/// Checks if a type is `Option<T>` and returns the inner type `T`.
+/// Checks if a type is `Option<T>` (but not `Option<Option<T>>`) and returns
+/// the inner type `T`. Used to identify omittable map fields.
+///
+/// Returns `None` for `Option<Option<T>>`: nested options represent a
+/// non-omittable nullable field (always present, value is null or T).
 fn extract_option_inner(ty: &syn::Type) -> Option<&syn::Type> {
     if let syn::Type::Path(type_path) = ty {
         let segment = type_path.path.segments.last()?;
@@ -439,6 +455,11 @@ fn extract_option_inner(ty: &syn::Type) -> Option<&syn::Type> {
             if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
                 if args.args.len() == 1 {
                     if let syn::GenericArgument::Type(inner) = args.args.first()? {
+                        // Option<Option<T>> is NOT omittable — it's a non-omittable
+                        // nullable field. See extract_nullable_inner.
+                        if is_option_type(inner) {
+                            return None;
+                        }
                         return Some(inner);
                     }
                 }
@@ -446,6 +467,38 @@ fn extract_option_inner(ty: &syn::Type) -> Option<&syn::Type> {
         }
     }
     None
+}
+
+/// Checks if a type is `Option<Option<T>>` and returns the inner `Option<T>`.
+/// Used to identify non-omittable nullable map fields. During decoding, the
+/// derive generates `Some(<Option<T>>::decode(...))` so that null on the wire
+/// becomes `Some(None)` rather than `None`.
+fn extract_nullable_inner(ty: &syn::Type) -> Option<&syn::Type> {
+    if let syn::Type::Path(type_path) = ty {
+        let segment = type_path.path.segments.last()?;
+        if segment.ident == "Option" {
+            if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
+                if args.args.len() == 1 {
+                    if let syn::GenericArgument::Type(inner) = args.args.first()? {
+                        if is_option_type(inner) {
+                            return Some(inner);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Returns true if the type's last path segment is `Option`.
+fn is_option_type(ty: &syn::Type) -> bool {
+    if let syn::Type::Path(type_path) = ty {
+        if let Some(segment) = type_path.path.segments.last() {
+            return segment.ident == "Option";
+        }
+    }
+    false
 }
 
 /// Parses an integer expression, handling both positive literals and negation.

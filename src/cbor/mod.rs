@@ -18,7 +18,7 @@
 //! - UTF-8 text strings:      String, &str
 //! - Byte strings:            Vec<u8>, &[u8], [u8; N]
 //! - Arrays:                  (), (X,), (X,Y), ... tuples, or structs with #[cbor(array)]
-//! - Maps:                    structs with #[cbor(key = N)] fields
+//! - Maps:                    structs with #[cbor(key = N)] fields, Option<T>::None omitted
 
 pub use darkbio_crypto_cbor_derive::Cbor;
 
@@ -1626,97 +1626,133 @@ mod tests {
         required: u64,
         #[cbor(key = 2)]
         optional1: Option<String>,
+        #[cbor(key = 3)]
+        nullable: Option<Option<u64>>,
         #[cbor(key = -1)]
         optional2: Option<Vec<u8>>,
     }
 
-    // Tests that optional map fields are omitted when None during encoding.
+    // Tests that optional map fields are omitted when None during encoding,
+    // and that Option<Option<T>> (nullable) fields are always present.
     #[test]
     fn test_map_optional_encoding() {
-        // All fields present
+        // All fields present (nullable with value)
         let map = TestMapOptional {
             required: 42,
             optional1: Some("hello".to_string()),
+            nullable: Some(Some(1)),
             optional2: Some(vec![1, 2, 3]),
         };
         let encoded = encode(&map);
-        // Keys in bytewise order: 0x01, 0x02, 0x20 (1, 2, -1)
+        // Keys in bytewise order: 0x01, 0x02, 0x03, 0x20 (1, 2, 3, -1)
+        assert_eq!(encoded[0], 0xa4); // map with 4 entries
+        let decoded = decode::<TestMapOptional>(&encoded).unwrap();
+        assert_eq!(decoded, map);
+
+        // Only required + nullable (optionals None, nullable with null value)
+        let map = TestMapOptional {
+            required: 42,
+            optional1: None,
+            nullable: Some(None),
+            optional2: None,
+        };
+        let encoded = encode(&map);
+        assert_eq!(encoded[0], 0xa2); // map with 2 entries (required + nullable)
+        assert_eq!(encoded, vec![0xa2, 0x01, 0x18, 42, 0x03, 0xf6]);
+        let decoded = decode::<TestMapOptional>(&encoded).unwrap();
+        assert_eq!(decoded, map);
+
+        // None and Some(None) both encode identically as null (2-state collapse)
+        let map_none = TestMapOptional {
+            required: 42,
+            optional1: None,
+            nullable: None,
+            optional2: None,
+        };
+        let map_some_none = TestMapOptional {
+            required: 42,
+            optional1: None,
+            nullable: Some(None),
+            optional2: None,
+        };
+        assert_eq!(encode(&map_none), encode(&map_some_none));
+        // Both decode back as Some(None) since the key is always present
+        let decoded = decode::<TestMapOptional>(&encode(&map_none)).unwrap();
+        assert_eq!(decoded.nullable, Some(None));
+
+        // One optional present, one absent (nullable always present as null)
+        let map = TestMapOptional {
+            required: 42,
+            optional1: Some("hi".to_string()),
+            nullable: Some(None),
+            optional2: None,
+        };
+        let encoded = encode(&map);
         assert_eq!(encoded[0], 0xa3); // map with 3 entries
         let decoded = decode::<TestMapOptional>(&encoded).unwrap();
         assert_eq!(decoded, map);
 
-        // Only required field (both optionals None)
+        // Other optional present (nullable always present as null)
         let map = TestMapOptional {
             required: 42,
             optional1: None,
-            optional2: None,
-        };
-        let encoded = encode(&map);
-        assert_eq!(encoded[0], 0xa1); // map with 1 entry
-        assert_eq!(encoded[1], 0x01); // key 1
-        assert_eq!(encoded[2], 0x18);
-        assert_eq!(encoded[3], 42);
-        assert_eq!(encoded.len(), 4); // no optional fields encoded
-        let decoded = decode::<TestMapOptional>(&encoded).unwrap();
-        assert_eq!(decoded, map);
-
-        // One optional present, one absent
-        let map = TestMapOptional {
-            required: 42,
-            optional1: Some("hi".to_string()),
-            optional2: None,
-        };
-        let encoded = encode(&map);
-        assert_eq!(encoded[0], 0xa2); // map with 2 entries
-        let decoded = decode::<TestMapOptional>(&encoded).unwrap();
-        assert_eq!(decoded, map);
-
-        // Other optional present
-        let map = TestMapOptional {
-            required: 42,
-            optional1: None,
+            nullable: Some(None),
             optional2: Some(vec![0xff]),
         };
         let encoded = encode(&map);
-        assert_eq!(encoded[0], 0xa2); // map with 2 entries
+        assert_eq!(encoded[0], 0xa3); // map with 3 entries
         let decoded = decode::<TestMapOptional>(&encoded).unwrap();
         assert_eq!(decoded, map);
     }
 
-    // Tests that optional map fields decode as None when keys are missing.
+    // Tests that optional map fields decode as None when keys are missing,
+    // and that nullable (Option<Option<T>>) fields must always be present.
     #[test]
     fn test_map_optional_decoding() {
-        // Decode a map with only the required field
+        // Decode a map with required + nullable (null value), optionals absent
         let decoded = decode::<TestMapOptional>(&vec![
-            0xa1, // map with 1 entry
+            0xa2,             // map with 2 entries
             0x01, 0x18, 0x2a, // 1: 42
+            0x03, 0xf6,       // 3: null
         ])
         .unwrap();
         assert_eq!(decoded.required, 42);
         assert_eq!(decoded.optional1, None);
+        assert_eq!(decoded.nullable, Some(None));
         assert_eq!(decoded.optional2, None);
 
-        // Decode a map with required + first optional
+        // Decode a map with required + nullable + first optional
         let decoded = decode::<TestMapOptional>(&vec![
-            0xa2, // map with 2 entries
-            0x01, 0x00, // 1: 0
-            0x02, 0x62, 0x68, 0x69, // 2: "hi"
+            0xa3,                         // map with 3 entries
+            0x01, 0x00,                   // 1: 0
+            0x02, 0x62, 0x68, 0x69,       // 2: "hi"
+            0x03, 0xf6,                   // 3: null
         ])
         .unwrap();
         assert_eq!(decoded.required, 0);
         assert_eq!(decoded.optional1, Some("hi".to_string()));
+        assert_eq!(decoded.nullable, Some(None));
         assert_eq!(decoded.optional2, None);
 
-        // Decode a map with required + second optional (key -1)
+        // Decode a map with required + nullable + second optional (key -1)
         let decoded = decode::<TestMapOptional>(&vec![
-            0xa2, // map with 2 entries
-            0x01, 0x05, // 1: 5
-            0x20, 0x41, 0xab, // -1: h'ab'
+            0xa3,                   // map with 3 entries
+            0x01, 0x05,             // 1: 5
+            0x03, 0xf6,             // 3: null
+            0x20, 0x41, 0xab,       // -1: h'ab'
         ])
         .unwrap();
         assert_eq!(decoded.required, 5);
         assert_eq!(decoded.optional1, None);
+        assert_eq!(decoded.nullable, Some(None));
         assert_eq!(decoded.optional2, Some(vec![0xab]));
+
+        // Decode with nullable absent must fail (it's required)
+        let result = decode::<TestMapOptional>(&vec![
+            0xa1,             // map with 1 entry
+            0x01, 0x18, 0x2a, // 1: 42 (key 3 missing)
+        ]);
+        assert!(result.is_err());
     }
 
     // Tests that maps with optional fields still reject invalid data.
@@ -1724,10 +1760,11 @@ mod tests {
     fn test_map_optional_rejection() {
         // Too many entries
         let result = decode::<TestMapOptional>(&vec![
-            0xa4, // map with 4 entries (max is 3)
+            0xa5, // map with 5 entries (max is 4)
             0x01, 0x00, // 1: 0
             0x02, 0x60, // 2: ""
-            0x03, 0x00, // 3: 0 (unknown key)
+            0x03, 0xf6, // 3: null
+            0x04, 0x00, // 4: 0 (unknown key)
             0x20, 0x40, // -1: h''
         ]);
         assert!(result.is_err());
@@ -1736,6 +1773,13 @@ mod tests {
         let result = decode::<TestMapOptional>(&vec![
             0xa1, // map with 1 entry
             0x02, 0x60, // 2: "" (key 1 is required but missing)
+        ]);
+        assert!(result.is_err());
+
+        // Nullable field missing (key 3 must always be present)
+        let result = decode::<TestMapOptional>(&vec![
+            0xa1,             // map with 1 entry
+            0x01, 0x18, 0x2a, // 1: 42 (key 3 missing)
         ]);
         assert!(result.is_err());
     }
