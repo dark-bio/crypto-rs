@@ -52,6 +52,8 @@ pub enum Error {
     Cose(#[from] cose::Error),
     #[error("missing nbf claim")]
     MissingNbf,
+    #[error("duplicate claim key {0}")]
+    DuplicateKey(i64),
     #[error("token not yet valid: nbf {nbf} > now {now}")]
     NotYetValid { nbf: u64, now: u64 },
     #[error("token already expired: exp {exp} <= now {now}")]
@@ -158,11 +160,17 @@ fn read_temporal_claims(raw: &[u8]) -> Result<(u64, Option<u64>), Error> {
         let key = dec.decode_int().map_err(cbor::Error::from)?;
         match key {
             4 => {
-                // exp
+                // exp (reject duplicates)
+                if exp.is_some() {
+                    return Err(Error::DuplicateKey(4));
+                }
                 exp = Some(dec.decode_uint().map_err(cbor::Error::from)?);
             }
             5 => {
-                // nbf
+                // nbf (reject duplicates)
+                if nbf.is_some() {
+                    return Err(Error::DuplicateKey(5));
+                }
                 nbf = Some(dec.decode_uint().map_err(cbor::Error::from)?);
             }
             _ => {
@@ -436,5 +444,30 @@ mod tests {
         // Should pass even far in the future since there's no exp
         verify::<NoExpCert>(&token, &issuer.public_key(), "test", Some(99999999))
             .expect("no exp should pass");
+    }
+
+    /// Tests that duplicate temporal claim keys are rejected.
+    #[test]
+    fn test_verify_duplicate_nbf() {
+        let issuer = xdsa::SecretKey::generate();
+
+        // Manually construct a CBOR map with duplicate nbf (key 5)
+        let mut enc = cbor::Encoder::new();
+        enc.encode_map_header(3);
+        enc.encode_int(2);
+        enc.encode_text("test");
+        enc.encode_int(5);
+        enc.encode_uint(1000000);
+        enc.encode_int(5); // duplicate nbf
+        enc.encode_uint(2000000);
+
+        // Sign the raw payload via COSE (bypassing CWT's encoder)
+        let token =
+            cose::sign(Raw(enc.finish()), cbor::NULL, &issuer, "test".as_bytes()).expect("sign");
+
+        // Verify should fail with DuplicateKey before claims decoding
+        let err = verify::<SimpleCert>(&token, &issuer.public_key(), "test", Some(1500000))
+            .expect_err("should reject duplicate nbf");
+        assert!(matches!(err, Error::DuplicateKey(5)));
     }
 }
