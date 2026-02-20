@@ -112,7 +112,7 @@ pub fn verify<T: Decode>(
     now: Option<u64>,
 ) -> Result<T, Error> {
     // Verify COSE signature (skip COSE drift check — CWT handles temporal validation)
-    let raw: Raw = cose::verify(data, &cbor::NULL, verifier, domain.as_bytes(), None)?;
+    let raw: Raw = cose::verify(data, cbor::NULL, verifier, domain.as_bytes(), None)?;
 
     // Extract and validate temporal claims if requested
     if let Some(now) = now {
@@ -120,10 +120,8 @@ pub fn verify<T: Decode>(
         if now < nbf {
             return Err(Error::NotYetValid { nbf, now });
         }
-        if let Some(exp) = exp {
-            if now >= exp {
-                return Err(Error::AlreadyExpired { exp, now });
-            }
+        if let Some(exp) = exp && now >= exp {
+            return Err(Error::AlreadyExpired { exp, now });
         }
     }
     // Decode claims into T
@@ -151,31 +149,31 @@ pub fn peek<T: Decode>(data: &[u8]) -> Result<T, Error> {
 /// Returns nbf (required) and exp (optional, None if absent).
 fn read_temporal_claims(raw: &[u8]) -> Result<(u64, Option<u64>), Error> {
     let mut dec = cbor::Decoder::new(raw);
-    let n = dec.decode_map_header().map_err(cbor::Error::from)?;
+    let n = dec.decode_map_header()?;
 
     let mut nbf: Option<u64> = None;
     let mut exp: Option<u64> = None;
 
     for _ in 0..n {
-        let key = dec.decode_int().map_err(cbor::Error::from)?;
+        let key = dec.decode_int()?;
         match key {
             4 => {
                 // exp (reject duplicates)
                 if exp.is_some() {
                     return Err(Error::DuplicateKey(4));
                 }
-                exp = Some(dec.decode_uint().map_err(cbor::Error::from)?);
+                exp = Some(dec.decode_uint()?);
             }
             5 => {
                 // nbf (reject duplicates)
                 if nbf.is_some() {
                     return Err(Error::DuplicateKey(5));
                 }
-                nbf = Some(dec.decode_uint().map_err(cbor::Error::from)?);
+                nbf = Some(dec.decode_uint()?);
             }
             _ => {
                 // Skip unknown claim value
-                Raw::decode_cbor_notrail(&mut dec).map_err(cbor::Error::from)?;
+                Raw::decode_cbor_notrail(&mut dec)?;
             }
         }
     }
