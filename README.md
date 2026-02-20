@@ -43,7 +43,8 @@ As a starting point, you will most probably want `xdsa` for digital signatures, 
 |----------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------------|
 | `argon2` | Argon2id password hashing ([RFC-9106](https://datatracker.ietf.org/doc/html/rfc9106))                                                                                       |                          |
 | `cbor`   | CBOR serialization with derive macros ([RFC-8949](https://datatracker.ietf.org/doc/html/rfc8949))                                                                           |                          |
-| `cose`   | COSE signed/encrypted envelopes ([RFC-8152](https://datatracker.ietf.org/doc/html/rfc8152))                                                                                 | `cbor`, `xhpke`          |
+| `cose`   | COSE signed/encrypted envelopes ([RFC-8152](https://datatracker.ietf.org/doc/html/rfc8152))                                                                                 | `cbor`, `xdsa`, `xhpke`  |
+| `cwt`    | CWT signed credentials/attestations ([RFC-8392](https://datatracker.ietf.org/doc/html/rfc8392))                                                                             | `cose`                   |
 | `eddsa`  | Ed25519 signatures ([RFC-8032](https://datatracker.ietf.org/doc/html/rfc8032))                                                                                              | `pem`                    |
 | `hkdf`   | HKDF key derivation with SHA-256 ([RFC-5869](https://datatracker.ietf.org/doc/html/rfc5869))                                                                                |                          |
 | `mldsa`  | ML-DSA-65 post-quantum signatures ([FIPS-204](https://csrc.nist.gov/pubs/fips/204/final))                                                                                   | `pem`                    |
@@ -51,8 +52,7 @@ As a starting point, you will most probably want `xdsa` for digital signatures, 
 | `rand`   | Random number generation utilities                                                                                                                                          |                          |
 | `rsa`    | RSA-2048 signatures with SHA-256 ([RFC-8017](https://datatracker.ietf.org/doc/html/rfc8017))                                                                                | `pem`                    |
 | `stream` | STREAM chunked encryption (Age-compatible)                                                                                                                                  |                          |
-| `x509`   | X.509 certificate creation and parsing ([RFC-5280](https://datatracker.ietf.org/doc/html/rfc5280))                                                                          | `xdsa`                   |
-| `xdsa`   | Composite signatures (EdDSA + ML-DSA) ([DRAFT](https://datatracker.ietf.org/doc/html/draft-ietf-lamps-pq-composite-sigs))                                                   | `eddsa`, `mldsa`, `x509` |
+| `xdsa`   | Composite signatures (EdDSA + ML-DSA) ([DRAFT](https://datatracker.ietf.org/doc/html/draft-ietf-lamps-pq-composite-sigs))                                                   | `pem`, `eddsa`, `mldsa`  |
 | `xhpke`  | Hybrid encryption with X-Wing KEM ([RFC-9180](https://datatracker.ietf.org/doc/html/rfc9180), [DRAFT](https://datatracker.ietf.org/doc/html/draft-connolly-cfrg-xwing-kem)) | `xdsa`                   |
 
 ## Derive Cbor
