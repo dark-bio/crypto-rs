@@ -6,7 +6,7 @@
 
 //! ML-DSA cryptography wrappers and parametrization.
 //!
-//! https://datatracker.ietf.org/doc/html/draft-ietf-lamps-dilithium-certificates
+//! https://datatracker.ietf.org/doc/html/rfc9881
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
