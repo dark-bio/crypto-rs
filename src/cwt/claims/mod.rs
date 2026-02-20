@@ -7,27 +7,6 @@
 //! Standard CWT claim types.
 //!
 //! <https://datatracker.ietf.org/doc/html/rfc8392>
-//!
-//! Each claim is a single-field struct that can be composed into application-specific
-//! token types via `#[cbor(embed)]`.
-//!
-//! # Example
-//!
-//! ```ignore
-//! #[derive(Cbor)]
-//! struct MyClaims {
-//!     #[cbor(embed)]
-//!     sub: claims::Subject,
-//!     #[cbor(embed)]
-//!     nbf: claims::NotBefore,
-//!     #[cbor(embed)]
-//!     exp: Option<claims::Expiration>,
-//!     #[cbor(embed)]
-//!     cnf: claims::Confirm<xdsa::PublicKey>,
-//!     #[cbor(embed)]
-//!     ueid: claims::eat::Ueid,
-//! }
-//! ```
 
 pub mod eat;
 
@@ -37,10 +16,6 @@ use crate::cbor::{
 use crate::cose;
 use crate::xdsa;
 use crate::xhpke;
-
-// ---------------------------------------------------------------------------
-// RFC 8392 — CWT claims (keys 1–7)
-// ---------------------------------------------------------------------------
 
 /// Issuer identifies the principal that issued the token (key 1).
 #[derive(Clone, Debug, PartialEq, Eq, Cbor)]
@@ -90,10 +65,6 @@ pub struct TokenId {
     #[cbor(key = 7)]
     pub cti: Vec<u8>,
 }
-
-// ---------------------------------------------------------------------------
-// RFC 8747 — Confirm<T> (key 8)
-// ---------------------------------------------------------------------------
 
 /// Sealed trait implementation module. The supertrait lives in a private module
 /// so external crates cannot implement `ConfirmKey`.
