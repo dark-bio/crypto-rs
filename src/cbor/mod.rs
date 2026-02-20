@@ -12,14 +12,14 @@
 //!
 //! Only a minimal subset of CBOR is supported:
 //!
-//! - **Booleans:**  `bool`
-//! - **Integers:**  `u64`, `i64`
-//! - **Text:**      `String`, `&str`
-//! - **Bytes:**     `Vec<u8>`, `&[u8]`, `[u8; N]`
-//! - **Null:**      `Option<T>::None`, `cbor::Null`
-//! - **Arrays:**    `()`, `(X,)`, `(X, Y)`, ... tuples, or structs with `#[cbor(array)]`
-//! - **Maps:**      structs with `#[cbor(key = N)]` fields (integer keys, deterministic order)
-//! - **Raw:**       `cbor::Raw` (opaque CBOR bytes, passed through without parsing)
+//! - **Booleans:** `bool`
+//! - **Integers:** `u64`, `i64`
+//! - **Text:**     `String`, `&str`
+//! - **Bytes:**    `Vec<u8>`, `&[u8]`, `[u8; N]`
+//! - **Null:**     `Option<T>::None`, `cbor::Null`
+//! - **Arrays:**   `()`, `(X,)`, `(X, Y)`, ... tuples, or structs with `#[cbor(array)]`
+//! - **Maps:**     structs with `#[cbor(key = N)]` fields (integer keys, deterministic order)
+//! - **Raw:**      `cbor::Raw` (opaque CBOR bytes, passed through without parsing)
 //!
 //! # Derive macros
 //!
@@ -40,11 +40,11 @@
 //! #[derive(Cbor)]
 //! struct Bar {
 //!     #[cbor(key = 1)]
-//!     x: u64,                      // required
+//!     x: u64,                 // required
 //!     #[cbor(key = 2)]
-//!     y: Option<Vec<u8>>,          // optional: omitted when None
+//!     y: Option<Vec<u8>>,     // optional: omitted when None
 //!     #[cbor(key = 3)]
-//!     z: Option<Option<u64>>,      // nullable: always present, value or null
+//!     z: Option<Option<u64>>, // nullable: always present, value or null
 //! }
 //! ```
 //!
@@ -56,11 +56,25 @@
 //!
 //! ```ignore
 //! #[derive(Cbor)]
-//! struct Token {
+//! struct Outer {
 //!     #[cbor(embed)]
-//!     identity: Identity,           // keys from Identity merge into Token
+//!     inner: Inner,    // keys from Inner merge into Outer
 //!     #[cbor(key = 3)]
-//!     aud: String,
+//!     c: u64,
+//! }
+//! ```
+//!
+//! Optional embeds (`Option<T>`) use all-or-none semantics: either every required
+//! key from the embedded struct is present (`Some`), or none are (`None`). Partial
+//! presence is rejected.
+//!
+//! ```ignore
+//! #[derive(Cbor)]
+//! struct Outer {
+//!     #[cbor(embed)]
+//!     extra: Option<Extra>, // all Extra keys present, or none
+//!     #[cbor(key = 3)]
+//!     c: u64,
 //! }
 //! ```
 //!
@@ -1023,8 +1037,13 @@ impl<'a, 'b, E: MapEntryAccess<'a>> MapEntriesScoped<'a, 'b, E> {
         }
     }
 
+    /// Checks whether a key belongs to this scoped view. The keys slice
+    /// originates from `cbor_map_keys()` which is sorted by `cbor_key_cmp`,
+    /// so a binary search replaces the former linear scan.
     fn key_allowed(&self, key: i64) -> bool {
-        self.keys.contains(&key)
+        self.keys
+            .binary_search_by(|k| cbor_key_cmp(*k, key))
+            .is_ok()
     }
 }
 
@@ -1042,10 +1061,13 @@ impl<'a, 'b, E: MapEntryAccess<'a>> MapEntryAccess<'a> for MapEntriesScoped<'a, 
     }
 
     fn is_empty(&self) -> bool {
-        self.keys.iter().all(|k| !self.contains(*k))
+        // We are iterating self.keys, so every key is allowed by
+        // definition — skip key_allowed and probe the parent directly.
+        self.keys.iter().all(|k| !self.entries.contains(*k))
     }
 
     fn remaining_keys(&self) -> Vec<i64> {
+        // Same: iterating self.keys, so key_allowed is always true.
         self.keys
             .iter()
             .copied()
@@ -1179,7 +1201,18 @@ pub fn decode_map_entries_slices_notrail<'a>(
     dec: &mut Decoder<'a>,
 ) -> Result<Vec<(i64, &'a [u8])>, Error> {
     let len = dec.decode_map_header()?;
-    let mut entries = Vec::with_capacity(len as usize);
+
+    // Cap pre-allocation to prevent memory amplification from untrusted
+    // map headers. Each entry is ~24 bytes in memory (i64 + fat pointer)
+    // but only needs 2 bytes on the wire, giving a ~12x amplification
+    // factor. Dividing the remaining wire bytes by the in-memory entry
+    // size keeps the upfront allocation proportional to the input. The
+    // +16 avoids needless reallocation for the small maps that dominate
+    // real-world CBOR traffic.
+    let wire_remaining = dec.data.len() - dec.pos;
+    let entry_mem_size = 8 + 2 * std::mem::size_of::<usize>(); // sizeof (i64, &[u8])
+    let safe_cap = (wire_remaining / entry_mem_size).saturating_add(16);
+    let mut entries = Vec::with_capacity((len as usize).min(safe_cap));
     let mut prev_key: Option<i64> = None;
     for _ in 0..len {
         let key = dec.decode_int()?;
@@ -2848,6 +2881,561 @@ mod tests {
             Err(Error::DuplicateMapKey(1)) => {}
             other => panic!("expected Err(DuplicateMapKey(1)), got {:?}", other),
         }
+    }
+
+    // Tests that an optional embed (Option<T> with #[cbor(embed)]) produces
+    // the correct CBOR: Some → all fields present, None → all fields absent.
+    #[test]
+    fn test_map_embed_optional_roundtrip() {
+        #[derive(Debug, PartialEq, Cbor)]
+        struct Embedded {
+            #[cbor(embed)]
+            inner: Option<Inner>,
+            #[cbor(key = 3)]
+            c: u64,
+        }
+        // Non-nil: all fields present
+        let original = Embedded {
+            inner: Some(Inner {
+                a: 1,
+                b: "two".to_string(),
+            }),
+            c: 3,
+        };
+        let data = encode(&original).unwrap();
+        assert_eq!(data[0], 0xa3); // map with 3 entries
+        let decoded = decode::<Embedded>(&data).unwrap();
+        assert_eq!(decoded, original);
+
+        // Byte identity with flat struct
+        let flat = Flat {
+            a: 1,
+            b: "two".to_string(),
+            c: 3,
+        };
+        assert_eq!(data, encode(&flat).unwrap());
+
+        // Nil: only direct field present
+        let nil_original = Embedded { inner: None, c: 3 };
+        let data = encode(&nil_original).unwrap();
+        assert_eq!(data[0], 0xa1); // map with 1 entry (only key 3)
+        let decoded = decode::<Embedded>(&data).unwrap();
+        assert_eq!(decoded, nil_original);
+        assert_eq!(decoded.inner, None);
+        assert_eq!(decoded.c, 3);
+    }
+
+    // Tests that a partial optional embed (some required keys present but not
+    // all) is rejected during decode — all-or-none semantics.
+    #[test]
+    fn test_map_embed_optional_partial_rejected() {
+        #[derive(Debug, PartialEq, Cbor)]
+        struct Outer {
+            #[cbor(embed)]
+            inner: Option<Inner>,
+            #[cbor(key = 3)]
+            c: u64,
+        }
+        // Hand-craft: {1: 42, 3: 7} — key 1 present (from Inner) but key 2 missing
+        let mut enc = Encoder::new();
+        enc.encode_map_header(2);
+        enc.encode_int(1);
+        enc.encode_uint(42);
+        enc.encode_int(3);
+        enc.encode_uint(7);
+        let data = enc.finish();
+        match decode::<Outer>(&data) {
+            Err(Error::DecodeFailed(msg)) if msg.contains("missing required key 2") => {}
+            other => panic!("expected DecodeFailed about missing key 2, got {:?}", other),
+        }
+    }
+
+    // Tests that an optional embed with optional inner fields works correctly.
+    // All combinations: full Some, Some with inner optional absent, None.
+    #[test]
+    fn test_map_embed_optional_with_optional_fields() {
+        #[derive(Debug, Clone, PartialEq, Cbor)]
+        struct OptInner {
+            #[cbor(key = 1)]
+            a: u64,
+            #[cbor(key = 2)]
+            b: Option<Vec<u8>>,
+        }
+        #[derive(Debug, PartialEq, Cbor)]
+        struct Outer {
+            #[cbor(embed)]
+            inner: Option<OptInner>,
+            #[cbor(key = 3)]
+            c: u64,
+        }
+        // All present: inner has both required and optional field
+        let original = Outer {
+            inner: Some(OptInner {
+                a: 42,
+                b: Some(vec![0xab]),
+            }),
+            c: 7,
+        };
+        let data = encode(&original).unwrap();
+        assert_eq!(data[0], 0xa3); // map(3)
+        let decoded = decode::<Outer>(&data).unwrap();
+        assert_eq!(decoded, original);
+
+        // Mandatory key present, optional key omitted
+        let partial = Outer {
+            inner: Some(OptInner { a: 42, b: None }),
+            c: 7,
+        };
+        let data = encode(&partial).unwrap();
+        assert_eq!(data[0], 0xa2); // map(2): keys 1 and 3
+        let decoded = decode::<Outer>(&data).unwrap();
+        assert_eq!(decoded, partial);
+
+        // Nil: all embed fields absent
+        let nil = Outer { inner: None, c: 7 };
+        let data = encode(&nil).unwrap();
+        assert_eq!(data[0], 0xa1); // map(1): only key 3
+        let decoded = decode::<Outer>(&data).unwrap();
+        assert_eq!(decoded, nil);
+    }
+
+    // Tests that a mandatory value embed nested inside an optional embed
+    // enforces all-or-none: either all keys from the optional embed
+    // (including its sub-embed) are present, or none.
+    #[test]
+    fn test_map_embed_optional_nested_all_or_none() {
+        #[derive(Debug, Clone, PartialEq, Cbor)]
+        struct Sub {
+            #[cbor(key = 1)]
+            x: u64,
+        }
+        #[derive(Debug, Clone, PartialEq, Cbor)]
+        struct Mid {
+            #[cbor(embed)]
+            sub: Sub,
+            #[cbor(key = 2)]
+            y: u64,
+        }
+        #[derive(Debug, PartialEq, Cbor)]
+        struct Outer {
+            #[cbor(embed)]
+            mid: Option<Mid>,
+            #[cbor(key = 3)]
+            z: u64,
+        }
+        // All present: round-trip
+        let original = Outer {
+            mid: Some(Mid {
+                sub: Sub { x: 1 },
+                y: 2,
+            }),
+            z: 3,
+        };
+        let data = encode(&original).unwrap();
+        assert_eq!(data[0], 0xa3); // map(3)
+        let decoded = decode::<Outer>(&data).unwrap();
+        assert_eq!(decoded, original);
+
+        // None present: only Z
+        let nil = Outer { mid: None, z: 3 };
+        let data = encode(&nil).unwrap();
+        assert_eq!(data[0], 0xa1); // map(1)
+        let decoded = decode::<Outer>(&data).unwrap();
+        assert_eq!(decoded, nil);
+
+        // Partial: only key 1 (X from Sub) but not key 2 (Y) — rejected
+        let mut enc = Encoder::new();
+        enc.encode_map_header(2);
+        enc.encode_int(1);
+        enc.encode_uint(1);
+        enc.encode_int(3);
+        enc.encode_uint(3);
+        match decode::<Outer>(&enc.finish()) {
+            Err(Error::DecodeFailed(msg)) if msg.contains("missing required key 2") => {}
+            other => panic!("expected DecodeFailed about missing key 2, got {:?}", other),
+        }
+    }
+
+    // Tests nested optional embeds: Option<A> where A optionally embeds
+    // Option<B>. Activity in B propagates to A, so missing required keys
+    // in A are rejected when B's keys are present.
+    #[test]
+    fn test_map_embed_nested_optional_propagation() {
+        #[derive(Debug, Clone, PartialEq, Cbor)]
+        struct B {
+            #[cbor(key = 2)]
+            y: u64,
+        }
+        #[derive(Debug, Clone, PartialEq, Cbor)]
+        struct A {
+            #[cbor(key = 1)]
+            x: u64,
+            #[cbor(embed)]
+            b: Option<B>,
+        }
+        #[derive(Debug, PartialEq, Cbor)]
+        struct O {
+            #[cbor(embed)]
+            a: Option<A>,
+            #[cbor(key = 3)]
+            z: u64,
+        }
+        // All present: round-trip
+        let original = O {
+            a: Some(A {
+                x: 1,
+                b: Some(B { y: 2 }),
+            }),
+            z: 3,
+        };
+        let data = encode(&original).unwrap();
+        let decoded = decode::<O>(&data).unwrap();
+        assert_eq!(decoded, original);
+
+        // Both optional embeds nil: only Z present
+        let nil_all = O { a: None, z: 3 };
+        let data = encode(&nil_all).unwrap();
+        let decoded = decode::<O>(&data).unwrap();
+        assert_eq!(decoded, nil_all);
+
+        // Outer active, inner nil: X present, Y absent — valid
+        let outer_only = O {
+            a: Some(A { x: 1, b: None }),
+            z: 3,
+        };
+        let data = encode(&outer_only).unwrap();
+        let decoded = decode::<O>(&data).unwrap();
+        assert_eq!(decoded, outer_only);
+        assert!(decoded.a.as_ref().unwrap().b.is_none());
+
+        // Bug case: inner key present (Y from B), outer key missing (X from A).
+        // Wire {2: 2, 3: 3} must fail — B's activity propagates to A, making
+        // X required. This is the Go TestMapEmbedNestedPointerAllOrNone
+        // "inner-active-outer-missing" case.
+        let mut enc = Encoder::new();
+        enc.encode_map_header(2);
+        enc.encode_int(2);
+        enc.encode_uint(2);
+        enc.encode_int(3);
+        enc.encode_uint(3);
+        match decode::<O>(&enc.finish()) {
+            Err(Error::DecodeFailed(msg)) if msg.contains("missing required key 1") => {}
+            other => panic!("expected DecodeFailed about missing key 1, got {:?}", other),
+        }
+    }
+
+    // Tests that out-of-order keys in an optional embed produce
+    // InvalidMapKeyOrder (consistent with mandatory embed error semantics).
+    #[test]
+    fn test_map_embed_optional_key_order_rejected() {
+        #[derive(Debug, PartialEq, Cbor)]
+        struct Outer {
+            #[cbor(embed)]
+            inner: Option<Inner>,
+            #[cbor(key = 3)]
+            c: u64,
+        }
+        // Wire: {2: "x", 1: 42, 3: 7} — keys 2,1 out of order
+        let mut enc = Encoder::new();
+        enc.encode_map_header(3);
+        enc.encode_int(2);
+        enc.encode_field(&"x".to_string()).unwrap();
+        enc.encode_int(1);
+        enc.encode_uint(42);
+        enc.encode_int(3);
+        enc.encode_uint(7);
+        match decode::<Outer>(&enc.finish()) {
+            Err(Error::InvalidMapKeyOrder(1, 2)) => {}
+            other => panic!("expected InvalidMapKeyOrder(1, 2), got {:?}", other),
+        }
+    }
+
+    // Tests that schema-level collision between a direct field and an optional
+    // embed field is caught on encode even when the embed is None.
+    #[test]
+    fn test_map_embed_optional_direct_collision() {
+        #[derive(Debug, PartialEq, Cbor)]
+        struct Clash {
+            #[cbor(key = 1)] // same key as Inner.a
+            x: u64,
+            #[cbor(embed)]
+            inner: Option<Inner>,
+        }
+        // Even with None, the schema check catches the collision
+        match encode(&Clash { x: 99, inner: None }) {
+            Err(Error::DuplicateMapKey(1)) => {}
+            other => panic!("expected Err(DuplicateMapKey(1)), got {:?}", other),
+        }
+    }
+
+    // Tests that duplicate keys between two embeds (one optional) are detected.
+    #[test]
+    fn test_map_embed_optional_embed_collision() {
+        #[derive(Debug, Clone, PartialEq, Cbor)]
+        struct Left {
+            #[cbor(key = 1)]
+            a: u64,
+            #[cbor(key = 2)]
+            b: u64,
+        }
+        #[derive(Debug, Clone, PartialEq, Cbor)]
+        struct Right {
+            #[cbor(key = 2)] // collides with Left.b
+            c: u64,
+            #[cbor(key = 3)]
+            d: u64,
+        }
+        #[derive(Debug, PartialEq, Cbor)]
+        struct Both {
+            #[cbor(embed)]
+            left: Option<Left>,
+            #[cbor(embed)]
+            right: Option<Right>,
+        }
+        // Hand-craft CBOR with keys 1, 2, 3
+        let mut enc = Encoder::new();
+        enc.encode_map_header(3);
+        enc.encode_int(1);
+        enc.encode_uint(10);
+        enc.encode_int(2);
+        enc.encode_uint(20);
+        enc.encode_int(3);
+        enc.encode_uint(30);
+        match decode::<Both>(&enc.finish()) {
+            Err(Error::DuplicateMapKey(2)) => {}
+            other => panic!("expected DuplicateMapKey(2), got {:?}", other),
+        }
+    }
+
+    // Tests that unknown keys in wire data are rejected even when the struct
+    // has optional embeds.
+    #[test]
+    fn test_map_embed_optional_unknown_key() {
+        #[derive(Debug, PartialEq, Cbor)]
+        struct Outer {
+            #[cbor(embed)]
+            inner: Option<Inner>,
+            #[cbor(key = 3)]
+            c: u64,
+        }
+        // Wire: {1: 1, 2: "two", 3: 3, 99: 0} — key 99 unknown
+        let mut enc = Encoder::new();
+        enc.encode_map_header(4);
+        enc.encode_int(1);
+        enc.encode_uint(1);
+        enc.encode_int(2);
+        enc.encode_field(&"two".to_string()).unwrap();
+        enc.encode_int(3);
+        enc.encode_uint(3);
+        enc.encode_int(99);
+        enc.encode_uint(0);
+        match decode::<Outer>(&enc.finish()) {
+            Err(Error::DecodeFailed(msg)) if msg.contains("unknown") => {}
+            other => panic!("expected DecodeFailed with 'unknown', got {:?}", other),
+        }
+    }
+
+    // Tests wire-level duplicate keys are rejected when decoding optional embeds.
+    #[test]
+    fn test_map_embed_optional_wire_duplicate_key() {
+        #[derive(Debug, PartialEq, Cbor)]
+        struct Outer {
+            #[cbor(embed)]
+            inner: Option<Inner>,
+            #[cbor(key = 3)]
+            c: u64,
+        }
+        // Hand-craft CBOR: {1: 1, 1: 2, 2: "x", 3: 3} — duplicate key 1
+        let mut enc = Encoder::new();
+        enc.encode_map_header(4);
+        enc.encode_int(1);
+        enc.encode_uint(1);
+        enc.encode_int(1);
+        enc.encode_uint(2);
+        enc.encode_int(2);
+        enc.encode_field(&"x".to_string()).unwrap();
+        enc.encode_int(3);
+        enc.encode_uint(3);
+        match decode::<Outer>(&enc.finish()) {
+            Err(Error::DuplicateMapKey(1)) => {}
+            other => panic!("expected DuplicateMapKey(1), got {:?}", other),
+        }
+    }
+
+    // Tests multiple optional embeds with non-overlapping keys.
+    #[test]
+    fn test_map_embed_optional_multiple() {
+        #[derive(Debug, Clone, PartialEq, Cbor)]
+        struct EmbedA {
+            #[cbor(key = 1)]
+            a: u64,
+        }
+        #[derive(Debug, Clone, PartialEq, Cbor)]
+        struct EmbedB {
+            #[cbor(key = 2)]
+            b: String,
+        }
+        #[derive(Debug, PartialEq, Cbor)]
+        struct Multi {
+            #[cbor(embed)]
+            first: Option<EmbedA>,
+            #[cbor(embed)]
+            second: Option<EmbedB>,
+            #[cbor(key = 3)]
+            c: u64,
+        }
+        // Both present
+        let val = Multi {
+            first: Some(EmbedA { a: 1 }),
+            second: Some(EmbedB {
+                b: "two".to_string(),
+            }),
+            c: 3,
+        };
+        let data = encode(&val).unwrap();
+        assert_eq!(data[0], 0xa3); // 3 entries
+        let decoded = decode::<Multi>(&data).unwrap();
+        assert_eq!(decoded, val);
+
+        // First present, second absent
+        let val = Multi {
+            first: Some(EmbedA { a: 1 }),
+            second: None,
+            c: 3,
+        };
+        let data = encode(&val).unwrap();
+        assert_eq!(data[0], 0xa2); // 2 entries
+        let decoded = decode::<Multi>(&data).unwrap();
+        assert_eq!(decoded, val);
+
+        // First absent, second present
+        let val = Multi {
+            first: None,
+            second: Some(EmbedB {
+                b: "two".to_string(),
+            }),
+            c: 3,
+        };
+        let data = encode(&val).unwrap();
+        assert_eq!(data[0], 0xa2); // 2 entries
+        let decoded = decode::<Multi>(&data).unwrap();
+        assert_eq!(decoded, val);
+
+        // Both absent
+        let val = Multi {
+            first: None,
+            second: None,
+            c: 3,
+        };
+        let data = encode(&val).unwrap();
+        assert_eq!(data[0], 0xa1); // 1 entry
+        let decoded = decode::<Multi>(&data).unwrap();
+        assert_eq!(decoded, val);
+    }
+
+    // Tests that mixing mandatory and optional embeds works correctly.
+    #[test]
+    fn test_map_embed_mixed_mandatory_optional() {
+        #[derive(Debug, Clone, PartialEq, Cbor)]
+        struct Required {
+            #[cbor(key = 1)]
+            a: u64,
+        }
+        #[derive(Debug, Clone, PartialEq, Cbor)]
+        struct OptionalPart {
+            #[cbor(key = 2)]
+            b: String,
+        }
+        #[derive(Debug, PartialEq, Cbor)]
+        struct Mixed {
+            #[cbor(embed)]
+            required: Required,
+            #[cbor(embed)]
+            optional: Option<OptionalPart>,
+            #[cbor(key = 3)]
+            c: u64,
+        }
+        // Both embeds present
+        let val = Mixed {
+            required: Required { a: 1 },
+            optional: Some(OptionalPart {
+                b: "two".to_string(),
+            }),
+            c: 3,
+        };
+        let data = encode(&val).unwrap();
+        assert_eq!(data[0], 0xa3);
+        let decoded = decode::<Mixed>(&data).unwrap();
+        assert_eq!(decoded, val);
+
+        // Optional absent, mandatory present
+        let val = Mixed {
+            required: Required { a: 1 },
+            optional: None,
+            c: 3,
+        };
+        let data = encode(&val).unwrap();
+        assert_eq!(data[0], 0xa2);
+        let decoded = decode::<Mixed>(&data).unwrap();
+        assert_eq!(decoded, val);
+
+        // Wire missing mandatory embed's key but optional present → error
+        let mut enc = Encoder::new();
+        enc.encode_map_header(2);
+        enc.encode_int(2);
+        enc.encode_field(&"hello".to_string()).unwrap();
+        enc.encode_int(3);
+        enc.encode_uint(3);
+        match decode::<Mixed>(&enc.finish()) {
+            Err(Error::DecodeFailed(msg)) if msg.contains("missing required key 1") => {}
+            other => panic!("expected DecodeFailed about missing key 1, got {:?}", other),
+        }
+    }
+
+    // Tests that an optional embed where all inner fields are themselves
+    // optional correctly round-trips as None when all inner fields are absent.
+    // When none of the embed's keys appear on the wire, the embed is None,
+    // NOT Some(AllOptional { ... all None ... }).
+    #[test]
+    fn test_map_embed_optional_all_inner_optional() {
+        #[derive(Debug, Clone, PartialEq, Cbor)]
+        struct AllOpt {
+            #[cbor(key = 1)]
+            a: Option<u64>,
+            #[cbor(key = 2)]
+            b: Option<Vec<u8>>,
+        }
+        #[derive(Debug, PartialEq, Cbor)]
+        struct Outer {
+            #[cbor(embed)]
+            opt: Option<AllOpt>,
+            #[cbor(key = 3)]
+            c: u64,
+        }
+        // All absent: encode Some(AllOpt { None, None }) → only key 3 on wire
+        // Decode back → None (indistinguishable from outer None)
+        let val = Outer {
+            opt: Some(AllOpt { a: None, b: None }),
+            c: 7,
+        };
+        let data = encode(&val).unwrap();
+        assert_eq!(data[0], 0xa1); // map(1): only key 3
+        let decoded = decode::<Outer>(&data).unwrap();
+        assert_eq!(decoded.c, 7);
+        assert_eq!(decoded.opt, None); // round-trips as None, not Some({None, None})
+
+        // One inner field present: embed is Some
+        let val = Outer {
+            opt: Some(AllOpt {
+                a: Some(42),
+                b: None,
+            }),
+            c: 7,
+        };
+        let data = encode(&val).unwrap();
+        assert_eq!(data[0], 0xa2); // map(2): keys 1 and 3
+        let decoded = decode::<Outer>(&data).unwrap();
+        assert_eq!(decoded, val);
     }
 
     // Tests the entry helper functions round-trip correctly.
