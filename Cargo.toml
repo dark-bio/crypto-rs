@@ -16,7 +16,6 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [workspace]
 members = [".", "src/cbor/derive"]
-exclude = ["fuzz"]
 
 [features]
 default = []

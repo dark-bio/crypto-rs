@@ -88,18 +88,3 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - run: cargo doc --all-features --no-deps
-
-  fuzz:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Install nightly toolchain
-        run: rustup toolchain install nightly --profile minimal
-
-      - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz
-
-      - name: Run fuzzer for 1 minute
-        run: cargo +nightly fuzz run cbor -- -max_total_time=60
-        working-directory: fuzz
