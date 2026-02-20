@@ -120,7 +120,9 @@ pub fn verify<T: Decode>(
         if now < nbf {
             return Err(Error::NotYetValid { nbf, now });
         }
-        if let Some(exp) = exp && now >= exp {
+        if let Some(exp) = exp
+            && now >= exp
+        {
             return Err(Error::AlreadyExpired { exp, now });
         }
     }
