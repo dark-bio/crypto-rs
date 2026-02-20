@@ -465,6 +465,12 @@ impl<'a> Decoder<'a> {
         self.clone().decode_int()
     }
 
+    // peek_uint returns the next unsigned integer value without consuming it.
+    // Unlike peek_int, this only matches CBOR major type 0 (positive integers).
+    pub fn peek_uint(&self) -> Result<u64, Error> {
+        self.clone().decode_uint()
+    }
+
     // decode_header extracts the major type for the next field and the integer
     // value embedded as the additional info.
     fn decode_header(&mut self) -> Result<(u8, u64), Error> {
