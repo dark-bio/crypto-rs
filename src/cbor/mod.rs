@@ -12,14 +12,14 @@
 //!
 //! Only a minimal subset of CBOR is supported:
 //!
-//! - **Booleans:**  `bool`
-//! - **Integers:**  `u64`, `i64`
-//! - **Text:**      `String`, `&str`
-//! - **Bytes:**     `Vec<u8>`, `&[u8]`, `[u8; N]`
-//! - **Null:**      `Option<T>::None`, `cbor::Null`
-//! - **Arrays:**    `()`, `(X,)`, `(X, Y)`, ... tuples, or structs with `#[cbor(array)]`
-//! - **Maps:**      structs with `#[cbor(key = N)]` fields (integer keys, deterministic order)
-//! - **Raw:**       `cbor::Raw` (opaque CBOR bytes, passed through without parsing)
+//! - **Booleans:** `bool`
+//! - **Integers:** `u64`, `i64`
+//! - **Text:**     `String`, `&str`
+//! - **Bytes:**    `Vec<u8>`, `&[u8]`, `[u8; N]`
+//! - **Null:**     `Option<T>::None`, `cbor::Null`
+//! - **Arrays:**   `()`, `(X,)`, `(X, Y)`, ... tuples, or structs with `#[cbor(array)]`
+//! - **Maps:**     structs with `#[cbor(key = N)]` fields (integer keys, deterministic order)
+//! - **Raw:**      `cbor::Raw` (opaque CBOR bytes, passed through without parsing)
 //!
 //! # Derive macros
 //!
@@ -40,11 +40,11 @@
 //! #[derive(Cbor)]
 //! struct Bar {
 //!     #[cbor(key = 1)]
-//!     x: u64,                      // required
+//!     x: u64,                 // required
 //!     #[cbor(key = 2)]
-//!     y: Option<Vec<u8>>,          // optional: omitted when None
+//!     y: Option<Vec<u8>>,     // optional: omitted when None
 //!     #[cbor(key = 3)]
-//!     z: Option<Option<u64>>,      // nullable: always present, value or null
+//!     z: Option<Option<u64>>, // nullable: always present, value or null
 //! }
 //! ```
 //!
@@ -56,11 +56,25 @@
 //!
 //! ```ignore
 //! #[derive(Cbor)]
-//! struct Token {
+//! struct Outer {
 //!     #[cbor(embed)]
-//!     identity: Identity,           // keys from Identity merge into Token
+//!     inner: Inner,    // keys from Inner merge into Outer
 //!     #[cbor(key = 3)]
-//!     aud: String,
+//!     c: u64,
+//! }
+//! ```
+//!
+//! Optional embeds (`Option<T>`) use all-or-none semantics: either every required
+//! key from the embedded struct is present (`Some`), or none are (`None`). Partial
+//! presence is rejected.
+//!
+//! ```ignore
+//! #[derive(Cbor)]
+//! struct Outer {
+//!     #[cbor(embed)]
+//!     extra: Option<Extra>, // all Extra keys present, or none
+//!     #[cbor(key = 3)]
+//!     c: u64,
 //! }
 //! ```
 //!
