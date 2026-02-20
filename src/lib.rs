@@ -25,6 +25,9 @@ pub mod cbor;
 #[cfg(feature = "cose")]
 pub mod cose;
 
+#[cfg(feature = "cwt")]
+pub mod cwt;
+
 #[cfg(feature = "eddsa")]
 pub mod eddsa;
 

@@ -22,6 +22,7 @@ default = []
 argon2 = ["dep:argon2"]
 cbor = ["dep:thiserror", "dep:darkbio-crypto-cbor-derive"]
 cose = ["cbor", "xdsa", "xhpke"]
+cwt = ["cose"]
 eddsa = [
     "pem",
     "dep:der",
