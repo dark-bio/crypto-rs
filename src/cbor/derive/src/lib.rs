@@ -121,13 +121,10 @@ fn derive_encode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
                 "#[cbor(embed)] and #[cbor(key)] are mutually exclusive",
             ));
         }
-        if field.embed
-            && (extract_option_inner(&field.kind).is_some()
-                || extract_nullable_inner(&field.kind).is_some())
-        {
+        if field.embed && extract_nullable_inner(&field.kind).is_some() {
             return Err(syn::Error::new_spanned(
                 &field.ident,
-                "#[cbor(embed)] cannot be optional or nullable",
+                "#[cbor(embed)] cannot be nullable (Option<Option<T>>)",
             ));
         }
         if !field.embed && field.key.is_none() {
@@ -153,10 +150,10 @@ fn derive_encode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
         let schema_eval: Vec<_> = embeds
             .iter()
             .map(|f| {
-                let ty = &f.kind;
+                let embed_ty = extract_option_inner(&f.kind).unwrap_or(&f.kind);
                 quote! {
                     {
-                        let embed_keys = <#ty as #cbor_crate::MapDecode>::cbor_map_keys();
+                        let embed_keys = <#embed_ty as #cbor_crate::MapDecode>::cbor_map_keys();
                         estimated_entries += embed_keys.len();
                         for k in embed_keys.iter().copied() {
                             if dk.contains(&k) {
@@ -193,9 +190,17 @@ fn derive_encode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
             .iter()
             .map(|f| {
                 let ident = &f.ident;
-                let ty = &f.kind;
-                quote! {
-                    <#ty as #cbor_crate::MapEncode>::encode_map(&self.#ident, enc)?;
+                if let Some(inner_ty) = extract_option_inner(&f.kind) {
+                    quote! {
+                        if let Some(ref v) = self.#ident {
+                            <#inner_ty as #cbor_crate::MapEncode>::encode_map(v, enc)?;
+                        }
+                    }
+                } else {
+                    let ty = &f.kind;
+                    quote! {
+                        <#ty as #cbor_crate::MapEncode>::encode_map(&self.#ident, enc)?;
+                    }
                 }
             })
             .collect();
@@ -410,13 +415,10 @@ fn derive_decode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
                 "#[cbor(embed)] and #[cbor(key)] are mutually exclusive",
             ));
         }
-        if field.embed
-            && (extract_option_inner(&field.kind).is_some()
-                || extract_nullable_inner(&field.kind).is_some())
-        {
+        if field.embed && extract_nullable_inner(&field.kind).is_some() {
             return Err(syn::Error::new_spanned(
                 &field.ident,
-                "#[cbor(embed)] cannot be optional or nullable",
+                "#[cbor(embed)] cannot be nullable (Option<Option<T>>)",
             ));
         }
         if !field.embed && field.key.is_none() {
@@ -441,8 +443,8 @@ fn derive_decode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
         .iter()
         .map(|f| {
             if f.embed {
-                let ty = &f.kind;
-                quote! { keys.extend_from_slice(<#ty as #cbor_crate::MapDecode>::cbor_map_keys()); }
+                let embed_ty = extract_option_inner(&f.kind).unwrap_or(&f.kind);
+                quote! { keys.extend_from_slice(<#embed_ty as #cbor_crate::MapDecode>::cbor_map_keys()); }
             } else {
                 let key = f.key.unwrap();
                 quote! { keys.push(#key); }
@@ -482,48 +484,104 @@ fn derive_decode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
         })
         .collect();
 
-    let extract_embeds: Vec<_> = embeds
+    // Schema validation checks — each embed's keys are tested for overlap
+    // with direct keys and with every earlier embed's keys. These are static
+    // properties of the type, so they are evaluated once via OnceLock.
+    let schema_checks: Vec<_> = embeds
         .iter()
         .map(|f| {
             let ident = &f.ident;
-            let ty = &f.kind;
+            let embed_ty = extract_option_inner(&f.kind).unwrap_or(&f.kind);
             quote! {
-                let embed_keys: &[i64] = <#ty as #cbor_crate::MapDecode>::cbor_map_keys();
-                if embed_keys.is_empty() {
-                    return Err(#cbor_crate::Error::DecodeFailed(format!(
-                        "embedded field `{}` has no CBOR map keys", stringify!(#ident)
-                    )));
-                }
-                for k in embed_keys.iter().copied() {
-                    if direct_keys.contains(&k) {
-                        return Err(#cbor_crate::Error::DuplicateMapKey(k));
+                {
+                    let ek: &[i64] = <#embed_ty as #cbor_crate::MapDecode>::cbor_map_keys();
+                    if ek.is_empty() {
+                        return Some(#cbor_crate::Error::DecodeFailed(format!(
+                            "embedded field `{}` has no CBOR map keys", stringify!(#ident)
+                        )));
                     }
-                    if seen_embed_keys.contains(&k) {
-                        return Err(#cbor_crate::Error::DuplicateMapKey(k));
+                    for k in ek.iter().copied() {
+                        if dk.contains(&k) || seen.contains(&k) {
+                            return Some(#cbor_crate::Error::DuplicateMapKey(k));
+                        }
+                        seen.push(k);
                     }
-                    seen_embed_keys.push(k);
-                }
-
-                let mut subset = #cbor_crate::MapEntriesScoped::new(entries, embed_keys);
-                let #ident = <#ty as #cbor_crate::MapDecode>::decode_map(&mut subset)?;
-                if !#cbor_crate::MapEntryAccess::is_empty(&subset) {
-                    let unknown: Vec<i64> = #cbor_crate::MapEntryAccess::remaining_keys(&subset);
-                    return Err(#cbor_crate::Error::DecodeFailed(
-                        format!("unknown CBOR map keys: {:?}", unknown)
-                    ));
                 }
             }
         })
         .collect();
 
-    let embed_state_setup = if embeds.is_empty() {
+    let embed_schema_validation = if embeds.is_empty() {
         quote! {}
     } else {
         quote! {
-            let direct_keys: &[i64] = &[#(#direct_key_lits),*];
-            let mut seen_embed_keys: Vec<i64> = Vec::new();
+            static __EMBED_SCHEMA: std::sync::OnceLock<Option<#cbor_crate::Error>> = std::sync::OnceLock::new();
+            if let Some(err) = __EMBED_SCHEMA.get_or_init(|| {
+                let dk: &[i64] = &[#(#direct_key_lits),*];
+                let mut seen: Vec<i64> = Vec::new();
+                #(#schema_checks)*
+                None
+            }) {
+                return Err(err.clone());
+            }
         }
     };
+
+    // Per-call decode blocks — overlap was already validated above.
+    let extract_embeds: Vec<_> = embeds
+        .iter()
+        .map(|f| {
+            let ident = &f.ident;
+            let ty = &f.kind;
+            let is_optional = extract_option_inner(ty).is_some();
+            let embed_ty = extract_option_inner(ty).unwrap_or(ty);
+
+            if is_optional {
+                // Optional embed: check if any of the embed's keys are present.
+                // If none → None. If any → decode and wrap in Some (decode_map
+                // validates that all required keys within the embed are present,
+                // giving us all-or-none semantics).
+                quote! {
+                    let embed_keys: &[i64] = <#embed_ty as #cbor_crate::MapDecode>::cbor_map_keys();
+                    let #ident: #ty = {
+                        let mut found = false;
+                        for k in embed_keys.iter().copied() {
+                            if entries.contains(k) {
+                                found = true;
+                                break;
+                            }
+                        }
+                        if found {
+                            let mut subset = #cbor_crate::MapEntriesScoped::new(entries, embed_keys);
+                            let value = <#embed_ty as #cbor_crate::MapDecode>::decode_map(&mut subset)?;
+                            if !#cbor_crate::MapEntryAccess::is_empty(&subset) {
+                                let unknown: Vec<i64> = #cbor_crate::MapEntryAccess::remaining_keys(&subset);
+                                return Err(#cbor_crate::Error::DecodeFailed(
+                                    format!("unknown CBOR map keys: {:?}", unknown)
+                                ));
+                            }
+                            Some(value)
+                        } else {
+                            None
+                        }
+                    };
+                }
+            } else {
+                // Mandatory embed: all fields must be present.
+                quote! {
+                    let embed_keys: &[i64] = <#embed_ty as #cbor_crate::MapDecode>::cbor_map_keys();
+                    let mut subset = #cbor_crate::MapEntriesScoped::new(entries, embed_keys);
+                    let #ident = <#embed_ty as #cbor_crate::MapDecode>::decode_map(&mut subset)?;
+                    if !#cbor_crate::MapEntryAccess::is_empty(&subset) {
+                        let unknown: Vec<i64> = #cbor_crate::MapEntryAccess::remaining_keys(&subset);
+                        return Err(#cbor_crate::Error::DecodeFailed(
+                            format!("unknown CBOR map keys: {:?}", unknown)
+                        ));
+                    }
+                }
+            }
+        })
+        .collect();
 
     let construct_fields: Vec<_> = fields.iter().map(|f| &f.ident).collect();
 
@@ -540,7 +598,7 @@ fn derive_decode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
             }
 
             fn decode_map<'a, E: #cbor_crate::MapEntryAccess<'a>>(entries: &mut E) -> Result<Self, #cbor_crate::Error> {
-                #embed_state_setup
+                #embed_schema_validation
 
                 #(#extract_direct)*
                 #(#extract_embeds)*
