@@ -47,6 +47,14 @@ type KEM = xwing::Kem;
 type AEAD = hpke::aead::ChaCha20Poly1305;
 type KDF = hpke::kdf::HkdfSha256;
 
+/// DOMAIN_PREFIX is the prefix prepended to all domain strings before they are
+/// used in HPKE operations. This binds every encryption to the dark-bio application
+/// context, preventing cross-protocol attacks.
+///
+/// The final domain will be this prefix concatenated with the caller-supplied
+/// domain string.
+pub const DOMAIN_PREFIX: &[u8] = b"dark-bio-v1:";
+
 /// Size of the secret key seed in bytes.
 pub const SECRET_KEY_SIZE: usize = 32;
 
@@ -163,6 +171,9 @@ impl SecretKey {
         msg_to_auth: &[u8],
         domain: &[u8],
     ) -> Result<Vec<u8>, HpkeError> {
+        // Restrict the user's domain to the context of this library
+        let info = [DOMAIN_PREFIX, domain].concat();
+
         // Parse the encapsulated session key
         let session = <KEM as Kem>::EncappedKey::from_bytes(session_key)?;
 
@@ -171,7 +182,7 @@ impl SecretKey {
             &hpke::OpModeR::Base,
             &self.inner,
             &session,
-            domain,
+            &info,
         )?;
         // Verify the construct and decrypt the message if everything checks out
         ctx.open(msg_to_open, msg_to_auth)
@@ -188,12 +199,15 @@ impl SecretKey {
         encap_key: &[u8; ENCAP_KEY_SIZE],
         domain: &[u8],
     ) -> Result<Receiver, HpkeError> {
+        // Restrict the user's domain to the context of this library
+        let info = [DOMAIN_PREFIX, domain].concat();
+
         let encapped_key = <KEM as Kem>::EncappedKey::from_bytes(encap_key)?;
         let ctx = hpke::setup_receiver::<AEAD, KDF, KEM>(
             &hpke::OpModeR::Base,
             &self.inner,
             &encapped_key,
-            domain,
+            &info,
         )?;
         Ok(Receiver { inner: ctx })
     }
@@ -306,6 +320,9 @@ impl PublicKey {
         msg_to_auth: &[u8],
         domain: &[u8],
     ) -> Result<([u8; ENCAP_KEY_SIZE], Vec<u8>), HpkeError> {
+        // Restrict the user's domain to the context of this library
+        let info = [DOMAIN_PREFIX, domain].concat();
+
         // Create a random number stream that works in WASM
         let mut seed = [0u8; 32];
         getrandom::fill(&mut seed).expect("Failed to get random seed");
@@ -315,7 +332,7 @@ impl PublicKey {
         let (key, mut ctx) = hpke::setup_sender::<AEAD, KDF, KEM, _>(
             &hpke::OpModeS::Base,
             &self.inner,
-            domain,
+            &info,
             &mut rng,
         )?;
 
@@ -337,6 +354,9 @@ impl PublicKey {
     /// Note: X-Wing uses Base mode (no sender authentication). The recipient
     /// cannot verify the sender's identity from the context alone.
     pub fn new_sender(&self, domain: &[u8]) -> Result<(Sender, [u8; ENCAP_KEY_SIZE]), HpkeError> {
+        // Restrict the user's domain to the context of this library
+        let info = [DOMAIN_PREFIX, domain].concat();
+
         // Create a random number stream that works in WASM
         let mut seed = [0u8; 32];
         getrandom::fill(&mut seed).expect("Failed to get random seed");
@@ -345,7 +365,7 @@ impl PublicKey {
         let (key, ctx) = hpke::setup_sender::<AEAD, KDF, KEM, _>(
             &hpke::OpModeS::Base,
             &self.inner,
-            domain,
+            &info,
             &mut rng,
         )?;
 
