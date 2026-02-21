@@ -23,13 +23,13 @@ use web_time::{SystemTime, UNIX_EPOCH};
 use crate::cbor::{self, Decode, Encode, Raw};
 use crate::{xdsa, xhpke};
 
-// DOMAIN_PREFIX is the prefix of a public string known to both parties during
-// cryptographic operation, with the purpose of binding the keys used to some
-// application context.
-//
-// The final domain will be this prefix concatenated with another contextual one
-// from an app layer action.
-pub const DOMAIN_PREFIX: &[u8] = b"dark-bio-v1:";
+/// DOMAIN_PREFIX is the prefix of a public string known to both parties during
+/// cryptographic operation, with the purpose of binding the keys used to some
+/// application context.
+///
+/// The final domain will be this prefix concatenated with another contextual one
+/// from an app layer action.
+pub const DOMAIN_PREFIX: &[u8] = crate::xhpke::DOMAIN_PREFIX;
 
 /// Error is the failures that can occur during COSE operations.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -483,10 +483,7 @@ pub fn encrypt<A: Encode>(
         algorithm: ALGORITHM_ID_XHPKE,
         kid: recipient.fingerprint(),
     })?;
-    // Restrict the user's domain to the context of this library
-    let info = [DOMAIN_PREFIX, domain].concat();
-
-    // Build and seal Enc_structure
+    // Build and seal Enc_structure (domain prefixing is handled by xHPKE)
     let (encap_key, ciphertext) = recipient
         .seal(
             sign1,
@@ -495,7 +492,7 @@ pub fn encrypt<A: Encode>(
                 protected: &protected,
                 external_aad: &msg_to_auth,
             })?,
-            &info,
+            domain,
         )
         .map_err(|e| Error::DecryptionFailed(e.to_string()))?;
 
@@ -594,9 +591,6 @@ pub fn decrypt<A: Encode>(
     // Pre-encode for EncStructure (which needs raw bytes for external_aad)
     let msg_to_auth = cbor::encode(msg_to_auth)?;
 
-    // Restrict the user's domain to the context of this library
-    let info = [DOMAIN_PREFIX, domain].concat();
-
     // Parse COSE_Encrypt0
     let encrypt0: CoseEncrypt0 = cbor::decode(msg_to_open)?;
 
@@ -613,7 +607,7 @@ pub fn decrypt<A: Encode>(
             Error::InvalidEncapKeySize(encrypt0.unprotected.encap_key.len(), xhpke::ENCAP_KEY_SIZE)
         })?;
 
-    // Rebuild and open Enc_structure
+    // Rebuild and open Enc_structure (domain prefixing is handled by xHPKE)
     let decrypted = recipient
         .open(
             encap_key,
@@ -623,7 +617,7 @@ pub fn decrypt<A: Encode>(
                 protected: &encrypt0.protected,
                 external_aad: &msg_to_auth,
             })?,
-            &info,
+            domain,
         )
         .map_err(|e| Error::DecryptionFailed(e.to_string()))?;
 
