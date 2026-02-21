@@ -176,6 +176,27 @@ impl SecretKey {
         // Verify the construct and decrypt the message if everything checks out
         ctx.open(msg_to_open, msg_to_auth)
     }
+
+    /// new_receiver creates an HPKE receiver context for multi-message decryption
+    /// using the given encapsulated key. Messages must be decrypted in the same
+    /// order they were encrypted by the corresponding sender.
+    ///
+    /// Note: X-Wing uses Base mode (no sender authentication). The sender's
+    /// identity cannot be verified from the context alone.
+    pub fn new_receiver(
+        &self,
+        encap_key: &[u8; ENCAP_KEY_SIZE],
+        domain: &[u8],
+    ) -> Result<Receiver, HpkeError> {
+        let encapped_key = <KEM as Kem>::EncappedKey::from_bytes(encap_key)?;
+        let ctx = hpke::setup_receiver::<AEAD, KDF, KEM>(
+            &hpke::OpModeR::Base,
+            &self.inner,
+            &encapped_key,
+            domain,
+        )?;
+        Ok(Receiver { inner: ctx })
+    }
 }
 
 /// PublicKey contains a public key of the type bound to the configured crypto.
@@ -304,6 +325,68 @@ impl PublicKey {
         let mut encap_key = [0u8; 1120];
         encap_key.copy_from_slice(&key.to_bytes());
         Ok((encap_key, enc))
+    }
+
+    /// new_sender creates an HPKE sender context for multi-message encryption
+    /// to this public key. Returns the sender context and the encapsulated key
+    /// that must be transmitted to the recipient.
+    ///
+    /// Messages encrypted with the returned context must be decrypted in order
+    /// by the corresponding receiver context.
+    ///
+    /// Note: X-Wing uses Base mode (no sender authentication). The recipient
+    /// cannot verify the sender's identity from the context alone.
+    pub fn new_sender(&self, domain: &[u8]) -> Result<(Sender, [u8; ENCAP_KEY_SIZE]), HpkeError> {
+        // Create a random number stream that works in WASM
+        let mut seed = [0u8; 32];
+        getrandom::fill(&mut seed).expect("Failed to get random seed");
+        let mut rng = rand_chacha::ChaCha20Rng::from_seed(seed);
+
+        let (key, ctx) = hpke::setup_sender::<AEAD, KDF, KEM, _>(
+            &hpke::OpModeS::Base,
+            &self.inner,
+            domain,
+            &mut rng,
+        )?;
+
+        let mut encap_key = [0u8; ENCAP_KEY_SIZE];
+        encap_key.copy_from_slice(&key.to_bytes());
+        Ok((Sender { inner: ctx }, encap_key))
+    }
+}
+
+/// Sender wraps an HPKE sender encryption context for multi-message
+/// communication. Each call to [`seal`](Sender::seal) encrypts a message
+/// using an auto-incrementing nonce, ensuring unique ciphertexts even for
+/// identical plaintexts.
+///
+/// The corresponding [`Receiver`] must process messages in the same order
+/// they were sealed.
+pub struct Sender {
+    inner: hpke::aead::AeadCtxS<AEAD, KDF, KEM>,
+}
+
+impl Sender {
+    /// seal encrypts a message using the next nonce in the sequence.
+    pub fn seal(&mut self, msg_to_seal: &[u8], msg_to_auth: &[u8]) -> Result<Vec<u8>, HpkeError> {
+        self.inner.seal(msg_to_seal, msg_to_auth)
+    }
+}
+
+/// Receiver wraps an HPKE receiver decryption context for multi-message
+/// communication. Each call to [`open`](Receiver::open) decrypts a
+/// message using an auto-incrementing nonce.
+///
+/// Messages must be provided in the same order they were sealed by the
+/// corresponding [`Sender`].
+pub struct Receiver {
+    inner: hpke::aead::AeadCtxR<AEAD, KDF, KEM>,
+}
+
+impl Receiver {
+    /// open decrypts a message using the next nonce in the sequence.
+    pub fn open(&mut self, msg_to_open: &[u8], msg_to_auth: &[u8]) -> Result<Vec<u8>, HpkeError> {
+        self.inner.open(msg_to_open, msg_to_auth)
     }
 }
 
@@ -531,5 +614,138 @@ mod tests {
             // Validate that the cleartext matches our expected encrypted payload
             assert_eq!(cleartext, tt.seal_msg, "unexpected cleartext");
         }
+    }
+
+    // Tests that a sender/receiver context can be established and used to
+    // encrypt/decrypt multiple messages in sequence.
+    #[test]
+    fn test_context_seal_open() {
+        let secret = SecretKey::generate();
+        let public = secret.public_key();
+
+        // Set up the sender and receiver contexts
+        let (mut sender, encap_key) = public
+            .new_sender(b"test-session")
+            .expect("failed to setup sender");
+        let mut receiver = secret
+            .new_receiver(&encap_key, b"test-session")
+            .expect("failed to setup receiver");
+
+        // Encrypt and decrypt multiple messages in sequence
+        let messages: &[(&[u8], &[u8])] = &[
+            (b"first message", b"auth-1"),
+            (b"second message", b"auth-2"),
+            (b"third message", b""),
+            (b"", b"auth-only"), // empty message
+            (b"fifth message after empty", b"auth-5"),
+        ];
+        for (i, (msg, aad)) in messages.iter().enumerate() {
+            let ciphertext = sender
+                .seal(msg, aad)
+                .unwrap_or_else(|e| panic!("failed to seal message {}: {}", i, e));
+            let plaintext = receiver
+                .open(&ciphertext, aad)
+                .unwrap_or_else(|e| panic!("failed to open message {}: {}", i, e));
+            assert_eq!(plaintext, *msg, "message {} mismatch", i);
+        }
+    }
+
+    // Tests that a receiver context rejects messages decrypted out of order.
+    // The HPKE sequence counter is only advanced on success, so after a failed
+    // open the context remains usable for the correct next message.
+    #[test]
+    fn test_context_rejects_out_of_order() {
+        let secret = SecretKey::generate();
+        let public = secret.public_key();
+
+        let (mut sender, encap_key) = public
+            .new_sender(b"test-order")
+            .expect("failed to setup sender");
+        let mut receiver = secret
+            .new_receiver(&encap_key, b"test-order")
+            .expect("failed to setup receiver");
+
+        // Seal two messages
+        let ct0 = sender.seal(b"message 0", b"aad-0").unwrap();
+        let ct1 = sender.seal(b"message 1", b"aad-1").unwrap();
+
+        // Try to open the second message first (should fail: wrong nonce)
+        assert!(
+            receiver.open(&ct1, b"aad-1").is_err(),
+            "should reject out-of-order message"
+        );
+
+        // The sequence counter doesn't advance on failure, so the correct
+        // next message (ct0) should still work
+        let pt0 = receiver
+            .open(&ct0, b"aad-0")
+            .expect("should open in-order message");
+        assert_eq!(pt0, b"message 0");
+
+        // And now ct1 should work since the counter has advanced
+        let pt1 = receiver
+            .open(&ct1, b"aad-1")
+            .expect("should open next message");
+        assert_eq!(pt1, b"message 1");
+    }
+
+    // Tests that mismatched domains between sender and receiver prevent
+    // decryption (the HPKE contexts derive different keys).
+    #[test]
+    fn test_context_rejects_wrong_domain() {
+        let secret = SecretKey::generate();
+        let public = secret.public_key();
+
+        let (mut sender, encap_key) = public
+            .new_sender(b"domain-a")
+            .expect("failed to setup sender");
+        let mut receiver = secret
+            .new_receiver(&encap_key, b"domain-b")
+            .expect("failed to setup receiver");
+
+        let ciphertext = sender.seal(b"secret", b"aad").unwrap();
+        assert!(
+            receiver.open(&ciphertext, b"aad").is_err(),
+            "should reject mismatched domain"
+        );
+    }
+
+    // Tests that mismatched additional authenticated data between seal and open
+    // prevents decryption for both single-shot and context-based APIs.
+    #[test]
+    fn test_rejects_wrong_auth() {
+        let secret = SecretKey::generate();
+        let public = secret.public_key();
+
+        // Single-shot: wrong AAD must fail
+        let (sess_key, ciphertext) = public
+            .seal(b"secret", b"correct-aad", b"domain")
+            .expect("failed to seal");
+        assert!(
+            secret
+                .open(&sess_key, &ciphertext, b"wrong-aad", b"domain")
+                .is_err(),
+            "single-shot should reject wrong AAD"
+        );
+
+        // Context-based: wrong AAD must fail
+        let (mut sender, encap_key) = public
+            .new_sender(b"domain")
+            .expect("failed to setup sender");
+        let mut receiver = secret
+            .new_receiver(&encap_key, b"domain")
+            .expect("failed to setup receiver");
+
+        let ct = sender.seal(b"secret", b"correct-aad").unwrap();
+        assert!(
+            receiver.open(&ct, b"wrong-aad").is_err(),
+            "context should reject wrong AAD"
+        );
+
+        // Verify recovery: correct AAD still works after failed attempt
+        let pt = receiver
+            .open(&ct, b"correct-aad")
+            .expect("should open with correct AAD");
+        assert_eq!(pt, b"secret");
     }
 }
