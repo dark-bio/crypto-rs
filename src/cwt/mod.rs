@@ -34,8 +34,8 @@
 //!     ueid: Vec<u8>,
 //! }
 //!
-//! let token = cwt::issue(&cert, &signer_key, "device-cert").unwrap();
-//! let verified: DeviceCert = cwt::verify(&token, &issuer_pub, "device-cert", Some(now)).unwrap();
+//! let token = cwt::issue(&cert, &signer_key, b"device-cert").unwrap();
+//! let verified: DeviceCert = cwt::verify(&token, &issuer_pub, b"device-cert", Some(now)).unwrap();
 //! ```
 
 pub mod claims;
@@ -69,15 +69,10 @@ pub enum Error {
 pub fn issue(
     claims: &impl Encode,
     signer: &xdsa::SecretKey,
-    domain: &str,
+    domain: &[u8],
 ) -> Result<Vec<u8>, Error> {
     let claims_bytes = cbor::encode(claims)?;
-    Ok(cose::sign(
-        Raw(claims_bytes),
-        cbor::NULL,
-        signer,
-        domain.as_bytes(),
-    )?)
+    Ok(cose::sign(Raw(claims_bytes), cbor::NULL, signer, domain)?)
 }
 
 /// issue_at signs a set of claims as a CWT with an explicit COSE timestamp.
@@ -86,7 +81,7 @@ pub fn issue(
 pub fn issue_at(
     claims: &impl Encode,
     signer: &xdsa::SecretKey,
-    domain: &str,
+    domain: &[u8],
     timestamp: i64,
 ) -> Result<Vec<u8>, Error> {
     let claims_bytes = cbor::encode(claims)?;
@@ -94,7 +89,7 @@ pub fn issue_at(
         Raw(claims_bytes),
         cbor::NULL,
         signer,
-        domain.as_bytes(),
+        domain,
         timestamp,
     )?)
 }
@@ -108,11 +103,11 @@ pub fn issue_at(
 pub fn verify<T: Decode>(
     data: &[u8],
     verifier: &xdsa::PublicKey,
-    domain: &str,
+    domain: &[u8],
     now: Option<u64>,
 ) -> Result<T, Error> {
     // Verify COSE signature (skip COSE drift check — CWT handles temporal validation)
-    let raw: Raw = cose::verify(data, cbor::NULL, verifier, domain.as_bytes(), None)?;
+    let raw: Raw = cose::verify(data, cbor::NULL, verifier, domain, None)?;
 
     // Extract and validate temporal claims if requested
     if let Some(now) = now {
@@ -255,9 +250,9 @@ mod tests {
                 ueid: b"SN-999".to_vec(),
             },
         };
-        let token = issue(&cert, &issuer, "test-domain").expect("issue");
+        let token = issue(&cert, &issuer, b"test-domain").expect("issue");
         let got: DeviceCert =
-            verify(&token, &issuer.public_key(), "test-domain", Some(1500000)).expect("verify");
+            verify(&token, &issuer.public_key(), b"test-domain", Some(1500000)).expect("verify");
 
         assert_eq!(got.sub.sub, "device-abc");
         assert_eq!(got.exp.unwrap().exp, 2000000);
@@ -276,9 +271,9 @@ mod tests {
             nbf: claims::NotBefore { nbf: 1000000 },
             cnf: claims::Confirm::new(xdsa::SecretKey::generate().public_key()),
         };
-        let token = issue(&cert, &issuer, "test").expect("issue");
+        let token = issue(&cert, &issuer, b"test").expect("issue");
         let got: SimpleCert =
-            verify(&token, &issuer.public_key(), "test", None).expect("verify with None time");
+            verify(&token, &issuer.public_key(), b"test", None).expect("verify with None time");
 
         assert_eq!(got.sub.sub, "test");
     }
@@ -294,8 +289,8 @@ mod tests {
             nbf: claims::NotBefore { nbf: 1000000 },
             cnf: claims::Confirm::new(xdsa::SecretKey::generate().public_key()),
         };
-        let token = issue(&cert, &issuer, "test").expect("issue");
-        let err = verify::<SimpleCert>(&token, &issuer.public_key(), "test", Some(500000))
+        let token = issue(&cert, &issuer, b"test").expect("issue");
+        let err = verify::<SimpleCert>(&token, &issuer.public_key(), b"test", Some(500000))
             .expect_err("should fail");
 
         assert!(matches!(err, Error::NotYetValid { .. }));
@@ -312,8 +307,8 @@ mod tests {
             nbf: claims::NotBefore { nbf: 1000000 },
             cnf: claims::Confirm::new(xdsa::SecretKey::generate().public_key()),
         };
-        let token = issue(&cert, &issuer, "test").expect("issue");
-        let err = verify::<SimpleCert>(&token, &issuer.public_key(), "test", Some(3000000))
+        let token = issue(&cert, &issuer, b"test").expect("issue");
+        let err = verify::<SimpleCert>(&token, &issuer.public_key(), b"test", Some(3000000))
             .expect_err("should fail");
 
         assert!(matches!(err, Error::AlreadyExpired { .. }));
@@ -328,8 +323,8 @@ mod tests {
             sub: claims::Subject { sub: "test".into() },
             cnf: claims::Confirm::new(xdsa::SecretKey::generate().public_key()),
         };
-        let token = issue(&cert, &issuer, "test").expect("issue");
-        let err = verify::<NoNbfCert>(&token, &issuer.public_key(), "test", Some(1000000))
+        let token = issue(&cert, &issuer, b"test").expect("issue");
+        let err = verify::<NoNbfCert>(&token, &issuer.public_key(), b"test", Some(1000000))
             .expect_err("should fail");
 
         assert!(matches!(err, Error::MissingNbf));
@@ -347,9 +342,9 @@ mod tests {
             nbf: claims::NotBefore { nbf: 1000000 },
             cnf: claims::Confirm::new(xdsa::SecretKey::generate().public_key()),
         };
-        let token = issue(&cert, &issuer, "test").expect("issue");
+        let token = issue(&cert, &issuer, b"test").expect("issue");
 
-        assert!(verify::<SimpleCert>(&token, &wrong.public_key(), "test", Some(1500000)).is_err());
+        assert!(verify::<SimpleCert>(&token, &wrong.public_key(), b"test", Some(1500000)).is_err());
     }
 
     /// Tests fingerprint extraction from a token.
@@ -363,7 +358,7 @@ mod tests {
             nbf: claims::NotBefore { nbf: 1000000 },
             cnf: claims::Confirm::new(xdsa::SecretKey::generate().public_key()),
         };
-        let token = issue(&cert, &issuer, "test").expect("issue");
+        let token = issue(&cert, &issuer, b"test").expect("issue");
         let fp = signer(&token).expect("signer");
 
         assert_eq!(fp, issuer.public_key().fingerprint());
@@ -382,7 +377,7 @@ mod tests {
             nbf: claims::NotBefore { nbf: 1000000 },
             cnf: claims::Confirm::new(xdsa::SecretKey::generate().public_key()),
         };
-        let token = issue(&cert, &issuer, "test").expect("issue");
+        let token = issue(&cert, &issuer, b"test").expect("issue");
         let got: SimpleCert = peek(&token).expect("peek");
 
         assert_eq!(got.sub.sub, "peek-test");
@@ -399,10 +394,10 @@ mod tests {
             nbf: claims::NotBefore { nbf: 1000000 },
             cnf: claims::Confirm::new(xdsa::SecretKey::generate().public_key()),
         };
-        let token = issue(&cert, &issuer, "domain-a").expect("issue");
+        let token = issue(&cert, &issuer, b"domain-a").expect("issue");
 
         assert!(
-            verify::<SimpleCert>(&token, &issuer.public_key(), "domain-b", Some(1500000)).is_err()
+            verify::<SimpleCert>(&token, &issuer.public_key(), b"domain-b", Some(1500000)).is_err()
         );
     }
 
@@ -417,14 +412,14 @@ mod tests {
             nbf: claims::NotBefore { nbf: 1000000 },
             cnf: claims::Confirm::new(xdsa::SecretKey::generate().public_key()),
         };
-        let token = issue(&cert, &issuer, "test").expect("issue");
+        let token = issue(&cert, &issuer, b"test").expect("issue");
 
         // now == nbf should pass
-        verify::<SimpleCert>(&token, &issuer.public_key(), "test", Some(1000000))
+        verify::<SimpleCert>(&token, &issuer.public_key(), b"test", Some(1000000))
             .expect("now == nbf should pass");
 
         // now == exp should fail
-        let err = verify::<SimpleCert>(&token, &issuer.public_key(), "test", Some(2000000))
+        let err = verify::<SimpleCert>(&token, &issuer.public_key(), b"test", Some(2000000))
             .expect_err("now == exp should fail");
         assert!(matches!(err, Error::AlreadyExpired { .. }));
     }
@@ -439,10 +434,10 @@ mod tests {
             nbf: claims::NotBefore { nbf: 1000000 },
             cnf: claims::Confirm::new(xdsa::SecretKey::generate().public_key()),
         };
-        let token = issue(&cert, &issuer, "test").expect("issue");
+        let token = issue(&cert, &issuer, b"test").expect("issue");
 
         // Should pass even far in the future since there's no exp
-        verify::<NoExpCert>(&token, &issuer.public_key(), "test", Some(99999999))
+        verify::<NoExpCert>(&token, &issuer.public_key(), b"test", Some(99999999))
             .expect("no exp should pass");
     }
 
@@ -462,11 +457,10 @@ mod tests {
         enc.encode_uint(2000000);
 
         // Sign the raw payload via COSE (bypassing CWT's encoder)
-        let token =
-            cose::sign(Raw(enc.finish()), cbor::NULL, &issuer, "test".as_bytes()).expect("sign");
+        let token = cose::sign(Raw(enc.finish()), cbor::NULL, &issuer, b"test").expect("sign");
 
         // Verify should fail with DuplicateKey before claims decoding
-        let err = verify::<SimpleCert>(&token, &issuer.public_key(), "test", Some(1500000))
+        let err = verify::<SimpleCert>(&token, &issuer.public_key(), b"test", Some(1500000))
             .expect_err("should reject duplicate nbf");
         assert!(matches!(err, Error::DuplicateKey(5)));
     }
