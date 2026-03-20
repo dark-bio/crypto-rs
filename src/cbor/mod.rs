@@ -872,7 +872,7 @@ impl<T: Decode> Decode for Option<T> {
     }
 }
 
-/// Array wraps a `Vec<T>` to encode/decode as a CBOR array (major type 4).
+/// Array wraps a `Vec<T>` to encode/decode as a CBOR array.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Array<T>(pub Vec<T>);
 
@@ -932,8 +932,8 @@ impl<T: Decode> Decode for Array<T> {
     }
 }
 
-/// FixedArray wraps a `[T; N]` to encode/decode as a CBOR array (major type 4)
-/// with an exact element count. Decoding rejects any length other than N.
+/// FixedArray wraps a `[T; N]` to encode/decode as a CBOR array with an exact
+/// element count. Decoding rejects any length other than N.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FixedArray<T, const N: usize>(pub [T; N]);
 
