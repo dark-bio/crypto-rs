@@ -17,7 +17,7 @@
 //! - **Text:**     `String`, `&str`
 //! - **Bytes:**    `Vec<u8>`, `&[u8]`, `[u8; N]`
 //! - **Null:**     `Option<T>::None`, `cbor::Null`
-//! - **Arrays:**   `()`, `(X,)`, `(X, Y)`, ... tuples, or structs with `#[cbor(array)]`
+//! - **Arrays:**   `()`, `(X,)`, `(X, Y)`, ... tuples, `Array<T>`, `FixedArray<T, N>`, or structs with `#[cbor(array)]`
 //! - **Maps:**     structs with `#[cbor(key = N)]` fields (integer keys, deterministic order)
 //! - **Raw:**      `cbor::Raw` (opaque CBOR bytes, passed through without parsing)
 //!
@@ -869,6 +869,125 @@ impl<T: Decode> Decode for Option<T> {
         } else {
             Ok(Some(T::decode_cbor_notrail(decoder)?))
         }
+    }
+}
+
+/// Array wraps a `Vec<T>` to encode/decode as a CBOR array.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Array<T>(pub Vec<T>);
+
+impl<T> std::ops::Deref for Array<T> {
+    type Target = Vec<T>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<T> std::ops::DerefMut for Array<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl<T> From<Vec<T>> for Array<T> {
+    fn from(v: Vec<T>) -> Self {
+        Array(v)
+    }
+}
+
+impl<T: Encode> Encode for Array<T> {
+    fn encode_cbor_to(&self, buf: &mut Vec<u8>) -> Result<(), Error> {
+        encode_length_to(buf, MAJOR_ARRAY, self.0.len() as u64);
+        for item in &self.0 {
+            item.encode_cbor_to(buf)?;
+        }
+        Ok(())
+    }
+}
+
+impl<T: Decode> Decode for Array<T> {
+    fn decode_cbor(data: &[u8]) -> Result<Self, Error> {
+        let mut decoder = Decoder::new(data);
+        let result = Self::decode_cbor_notrail(&mut decoder)?;
+        decoder.finish()?;
+        Ok(result)
+    }
+
+    fn decode_cbor_notrail(decoder: &mut Decoder<'_>) -> Result<Self, Error> {
+        let len = decoder.decode_array_header()?;
+
+        // Cap pre-allocation: the wire can't produce more in-memory elements
+        // than remaining bytes / per-element size. Prevents OOM from inflated
+        // headers. .max(1) guards against zero-sized types.
+        let wire_remaining = decoder.data.len() - decoder.pos;
+        let elem_size = std::mem::size_of::<T>().max(1);
+        let safe_cap = wire_remaining / elem_size;
+        let mut items = Vec::with_capacity((len as usize).min(safe_cap));
+
+        for _ in 0..len {
+            items.push(T::decode_cbor_notrail(decoder)?);
+        }
+        Ok(Array(items))
+    }
+}
+
+/// FixedArray wraps a `[T; N]` to encode/decode as a CBOR array with an exact
+/// element count. Decoding rejects any length other than N.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FixedArray<T, const N: usize>(pub [T; N]);
+
+impl<T, const N: usize> std::ops::Deref for FixedArray<T, N> {
+    type Target = [T; N];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<T, const N: usize> std::ops::DerefMut for FixedArray<T, N> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl<T, const N: usize> From<[T; N]> for FixedArray<T, N> {
+    fn from(arr: [T; N]) -> Self {
+        FixedArray(arr)
+    }
+}
+
+impl<T: Encode, const N: usize> Encode for FixedArray<T, N> {
+    fn encode_cbor_to(&self, buf: &mut Vec<u8>) -> Result<(), Error> {
+        encode_length_to(buf, MAJOR_ARRAY, N as u64);
+        for item in &self.0 {
+            item.encode_cbor_to(buf)?;
+        }
+        Ok(())
+    }
+}
+
+impl<T: Decode, const N: usize> Decode for FixedArray<T, N> {
+    fn decode_cbor(data: &[u8]) -> Result<Self, Error> {
+        let mut decoder = Decoder::new(data);
+        let result = Self::decode_cbor_notrail(&mut decoder)?;
+        decoder.finish()?;
+        Ok(result)
+    }
+
+    fn decode_cbor_notrail(decoder: &mut Decoder<'_>) -> Result<Self, Error> {
+        let len = decoder.decode_array_header()?;
+        if len != N as u64 {
+            return Err(Error::UnexpectedItemCount(len, N));
+        }
+        let mut items: Vec<T> = Vec::with_capacity(N);
+        for _ in 0..N {
+            items.push(T::decode_cbor_notrail(decoder)?);
+        }
+        let items: [T; N] = items
+            .try_into()
+            .map_err(|_| Error::UnexpectedItemCount(len, N))?;
+        Ok(FixedArray(items))
     }
 }
 
@@ -3503,5 +3622,136 @@ mod tests {
         let mut over_limit = vec![0x81u8; MAX_DEPTH + 1];
         over_limit.push(0x00);
         assert_eq!(verify(&over_limit), Err(Error::MaxDepthExceeded(MAX_DEPTH)));
+    }
+
+    // Tests that Array<T> encodes correctly as a CBOR array of individually
+    // encoded items.
+    #[test]
+    fn test_generic_array_encoding() {
+        // Empty array
+        assert_eq!(encode(&Array::<u64>(vec![])).unwrap(), vec![0x80]);
+
+        // Array of unsigned integers
+        assert_eq!(
+            encode(&Array(vec![1u64, 2, 3])).unwrap(),
+            vec![0x83, 0x01, 0x02, 0x03]
+        );
+
+        // Array of strings round-trips correctly
+        let strings = Array(vec!["hello".to_string(), "world".to_string()]);
+        let encoded = encode(&strings).unwrap();
+        let decoded = decode::<Array<String>>(&encoded).unwrap();
+        assert_eq!(decoded.0, vec!["hello", "world"]);
+    }
+
+    // Tests that Array<T> decodes correctly from CBOR arrays.
+    #[test]
+    fn test_generic_array_decoding() {
+        // Empty array
+        let arr = decode::<Array<u64>>(&[0x80]).unwrap();
+        assert!(arr.0.is_empty());
+
+        // Array of unsigned integers
+        let arr = decode::<Array<u64>>(&[0x83, 0x01, 0x02, 0x03]).unwrap();
+        assert_eq!(arr.0, vec![1, 2, 3]);
+
+        // Trailing bytes should fail
+        assert!(decode::<Array<u64>>(&[0x80, 0x00]).is_err());
+
+        // Nested types: array of tuples
+        let nested = Array(vec![(1u64, "a".to_string()), (2u64, "b".to_string())]);
+        let encoded = encode(&nested).unwrap();
+        let decoded = decode::<Array<(u64, String)>>(&encoded).unwrap();
+        assert_eq!(nested, decoded);
+
+        // As a struct field
+        #[derive(Cbor, Debug, PartialEq)]
+        struct WithArray {
+            #[cbor(key = 1)]
+            items: Array<u64>,
+            #[cbor(key = 2)]
+            name: String,
+        }
+        let original = WithArray {
+            items: Array(vec![10, 20, 30]),
+            name: "test".to_string(),
+        };
+        let encoded = encode(&original).unwrap();
+        let decoded = decode::<WithArray>(&encoded).unwrap();
+        assert_eq!(original, decoded);
+    }
+
+    // Tests that FixedArray<T, N> encodes correctly as a CBOR array of exactly
+    // N individually encoded items.
+    #[test]
+    fn test_fixed_array_encoding() {
+        // Empty fixed array
+        assert_eq!(encode(&FixedArray::<u64, 0>([])).unwrap(), vec![0x80]);
+
+        // Fixed array of unsigned integers
+        assert_eq!(
+            encode(&FixedArray([1u64, 2, 3])).unwrap(),
+            vec![0x83, 0x01, 0x02, 0x03]
+        );
+
+        // Fixed array of strings round-trips correctly
+        let strings = FixedArray(["hello".to_string(), "world".to_string()]);
+        let encoded = encode(&strings).unwrap();
+        let decoded = decode::<FixedArray<String, 2>>(&encoded).unwrap();
+        assert_eq!(decoded.0, ["hello", "world"]);
+    }
+
+    // Tests that FixedArray<T, N> decodes correctly from CBOR arrays and rejects
+    // length mismatches.
+    #[test]
+    fn test_fixed_array_decoding() {
+        // Empty fixed array
+        let arr = decode::<FixedArray<u64, 0>>(&[0x80]).unwrap();
+        assert_eq!(arr.0, []);
+
+        // Fixed array of unsigned integers
+        let arr = decode::<FixedArray<u64, 3>>(&[0x83, 0x01, 0x02, 0x03]).unwrap();
+        assert_eq!(arr.0, [1, 2, 3]);
+
+        // Trailing bytes should fail
+        assert!(decode::<FixedArray<u64, 0>>(&[0x80, 0x00]).is_err());
+
+        // Wrong length should fail (too many)
+        let result = decode::<FixedArray<u64, 2>>(&[0x83, 0x01, 0x02, 0x03]);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            Error::UnexpectedItemCount(3, 2) => {}
+            e => panic!("expected UnexpectedItemCount, got {:?}", e),
+        }
+
+        // Wrong length should fail (too few)
+        let result = decode::<FixedArray<u64, 4>>(&[0x83, 0x01, 0x02, 0x03]);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            Error::UnexpectedItemCount(3, 4) => {}
+            e => panic!("expected UnexpectedItemCount, got {:?}", e),
+        }
+
+        // Nested types: fixed array of tuples
+        let nested = FixedArray([(1u64, "a".to_string()), (2u64, "b".to_string())]);
+        let encoded = encode(&nested).unwrap();
+        let decoded = decode::<FixedArray<(u64, String), 2>>(&encoded).unwrap();
+        assert_eq!(nested, decoded);
+
+        // As a struct field
+        #[derive(Cbor, Debug, PartialEq)]
+        struct WithFixedArray {
+            #[cbor(key = 1)]
+            items: FixedArray<u64, 3>,
+            #[cbor(key = 2)]
+            name: String,
+        }
+        let original = WithFixedArray {
+            items: FixedArray([10, 20, 30]),
+            name: "test".to_string(),
+        };
+        let encoded = encode(&original).unwrap();
+        let decoded = decode::<WithFixedArray>(&encoded).unwrap();
+        assert_eq!(original, decoded);
     }
 }
