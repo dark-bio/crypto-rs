@@ -33,6 +33,8 @@ pub enum Error {
     InvalidPathLen { details: &'static str },
     #[error("invalid issuer: {details}")]
     InvalidIssuer { details: &'static str },
+    #[error("unhandled critical extension: {oid}")]
+    UnhandledCriticalExtension { oid: String },
     #[error(transparent)]
     Der(#[from] der::Error),
     #[error(transparent)]

@@ -145,8 +145,15 @@ fn extract_cert(cert: &x509_parser::certificate::X509Certificate) -> Result<(Cer
             | ParsedExtension::BasicConstraints(_)
             | ParsedExtension::KeyUsage(_) => {}
             _ => {
+                // RFC 5280 §4.2: an application that cannot process a critical
+                // extension MUST reject the certificate. This verifier acts only
+                // on the four extensions matched above, so any other extension
+                // marked critical is unhandled and must be rejected.
+                if ext.critical {
+                    return Err(Error::UnhandledCriticalExtension { oid });
+                }
                 extensions.push(Extension {
-                    oid: ObjectIdentifier::new(ext.oid.to_id_string().as_str())?,
+                    oid: ObjectIdentifier::new(oid.as_str())?,
                     critical: ext.critical,
                     value: ext.value.to_vec(),
                 });
@@ -1084,6 +1091,49 @@ mod test {
         let der = cert.to_der().unwrap();
         let result = xdsa::verify_cert_der(&der, &issuer.public_key(), ValidityCheck::Now);
         assert!(result.is_err());
+    }
+
+    /// Verifies that a certificate carrying an unknown extension marked critical
+    /// is rejected (RFC 5280 §4.2), while the same extension marked non-critical
+    /// is accepted.
+    #[test]
+    fn test_verify_rejects_unknown_critical_extension() {
+        let subject = xdsa::SecretKey::generate();
+        let issuer = xdsa::SecretKey::generate();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let custom_oid = ObjectIdentifier::new("1.3.6.1.4.1.62253.7.7").unwrap();
+
+        // Same template shape, toggling only the criticality of the unknown extension.
+        let make_template = |critical: bool| Certificate {
+            subject: Name::new().cn("Alice Identity"),
+            issuer: Name::new().cn("Root"),
+            not_before: now,
+            not_after: now + 3600,
+            role: Role::Leaf,
+            extensions: vec![Extension {
+                oid: custom_oid,
+                critical,
+                value: vec![0x05, 0x00], // DER NULL
+            }],
+            ..Default::default()
+        };
+
+        // Critical unknown extension -> rejected.
+        let critical_pem =
+            xdsa::issue_cert_pem(&subject.public_key(), &issuer, &make_template(true)).unwrap();
+        let result = xdsa::verify_cert_pem(&critical_pem, &issuer.public_key(), ValidityCheck::Now);
+        assert!(matches!(result, Err(Error::UnhandledCriticalExtension { .. })));
+
+        // Same extension, non-critical -> accepted.
+        let noncritical_pem =
+            xdsa::issue_cert_pem(&subject.public_key(), &issuer, &make_template(false)).unwrap();
+        let result =
+            xdsa::verify_cert_pem(&noncritical_pem, &issuer.public_key(), ValidityCheck::Now);
+        assert!(result.is_ok());
     }
 
     /// Verifies that a subjectPublicKey BIT STRING with non-zero unused bits is rejected.
