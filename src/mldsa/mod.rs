@@ -110,7 +110,7 @@ impl SecretKey {
         let inner = ml_dsa::SigningKey::<MlDsa65>::from_seed(&seed);
 
         #[allow(deprecated)] // to_expanded is wasteful, but that's the DER spec
-        let enc = inner.to_expanded();
+        let enc = inner.expanded_key().to_expanded();
         if enc.as_slice().ct_ne(&expanded).into() {
             return Err("expanded key does not match seed".into());
         }
@@ -138,7 +138,7 @@ impl SecretKey {
     /// to_der serializes a private key into a DER buffer.
     pub fn to_der(&self) -> Vec<u8> {
         #[allow(deprecated)] // to_expanded is wasteful, but that's the DER spec
-        let enc = self.inner.to_expanded();
+        let enc = self.inner.expanded_key().to_expanded();
 
         let inner_key = MlDsa65PrivateKeyInner {
             seed: OctetString::new(self.seed.as_slice()).unwrap(),
@@ -166,7 +166,7 @@ impl SecretKey {
     /// public_key retrieves the public counterpart of the secret key.
     pub fn public_key(&self) -> PublicKey {
         PublicKey {
-            inner: self.inner.verifying_key(),
+            inner: self.inner.as_ref().clone(),
         }
     }
 
@@ -178,7 +178,11 @@ impl SecretKey {
 
     /// sign creates a digital signature of the message with an optional context string.
     pub fn sign(&self, message: &[u8], ctx: &[u8]) -> Signature {
-        let sig = self.inner.sign_deterministic(message, ctx).unwrap();
+        let sig = self
+            .inner
+            .expanded_key()
+            .sign_deterministic(message, ctx)
+            .unwrap();
         let encoded = sig.encode();
         let slice: &[u8] = encoded.as_ref();
         Signature(slice.try_into().unwrap())
