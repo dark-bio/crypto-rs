@@ -18,6 +18,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use sha2::Digest;
 use spki::{AlgorithmIdentifier, ObjectIdentifier, SubjectPublicKeyInfo};
 use std::error::Error;
+use zeroize::Zeroizing;
 
 /// Prefix is the byte encoding of "CompositeAlgorithmSignatures2025" per the
 /// IETF composite signature spec.
@@ -75,8 +76,8 @@ impl SecretKey {
 
     /// from_bytes creates a private key from a 64-byte seed.
     pub fn from_bytes(seed: &[u8; SECRET_KEY_SIZE]) -> Self {
-        let ml_seed: [u8; 32] = seed[..32].try_into().unwrap();
-        let ed_seed: [u8; 32] = seed[32..].try_into().unwrap();
+        let ml_seed: Zeroizing<[u8; 32]> = Zeroizing::new(seed[..32].try_into().unwrap());
+        let ed_seed: Zeroizing<[u8; 32]> = Zeroizing::new(seed[32..].try_into().unwrap());
 
         Self {
             ml_key: mldsa::SecretKey::from_bytes(&ml_seed),
@@ -98,10 +99,11 @@ impl SecretKey {
             return Err("not a composite ML-DSA-65-Ed25519-SHA512 private key".into());
         }
         // Private key is ML-DSA seed (32) || Ed25519 seed (32) = 64 bytes
-        let seed: [u8; 64] = info
-            .private_key
-            .try_into()
-            .map_err(|_| "composite private key must be 64 bytes")?;
+        let seed: Zeroizing<[u8; 64]> = Zeroizing::new(
+            info.private_key
+                .try_into()
+                .map_err(|_| "composite private key must be 64 bytes")?,
+        );
 
         Ok(Self::from_bytes(&seed))
     }
@@ -114,19 +116,19 @@ impl SecretKey {
             return Err(format!("invalid PEM tag {}", kind).into());
         }
         // Parse the DER content
-        Self::from_der(&data)
+        Self::from_der(&Zeroizing::new(data))
     }
 
     /// to_bytes converts a secret key into a 64-byte array.
-    pub fn to_bytes(&self) -> [u8; SECRET_KEY_SIZE] {
-        let mut out = [0u8; 64];
-        out[..32].copy_from_slice(&self.ml_key.to_bytes());
-        out[32..].copy_from_slice(&self.ed_key.to_bytes());
+    pub fn to_bytes(&self) -> Zeroizing<[u8; SECRET_KEY_SIZE]> {
+        let mut out = Zeroizing::new([0u8; 64]);
+        out[..32].copy_from_slice(self.ml_key.to_bytes().as_slice());
+        out[32..].copy_from_slice(self.ed_key.to_bytes().as_slice());
         out
     }
 
     /// to_der serializes a private key into a DER buffer.
-    pub fn to_der(&self) -> Vec<u8> {
+    pub fn to_der(&self) -> Zeroizing<Vec<u8>> {
         // Create the MLDSA65-Ed25519-SHA512 algorithm identifier; parameters
         // MUST be absent
         let alg = pkcs8::AlgorithmIdentifierRef {
@@ -138,15 +140,15 @@ impl SecretKey {
 
         let info = pkcs8::PrivateKeyInfo {
             algorithm: alg,
-            private_key: &key_bytes,
+            private_key: key_bytes.as_slice(),
             public_key: None,
         };
-        info.to_der().unwrap()
+        Zeroizing::new(info.to_der().unwrap())
     }
 
     /// to_pem serializes a private key into a PEM string.
-    pub fn to_pem(&self) -> String {
-        pem::encode("PRIVATE KEY", &self.to_der())
+    pub fn to_pem(&self) -> Zeroizing<String> {
+        Zeroizing::new(pem::encode("PRIVATE KEY", &self.to_der()))
     }
 
     /// public_key retrieves the public counterpart of the secret key.
@@ -750,7 +752,7 @@ f6e178bcc044204110444ea2b7e80548769ae5010c22707493adb0baf55f\
 
         // Re-encoding to DER should match the test vector
         let encoded_der = seckey_from_seed.to_der();
-        assert_eq!(encoded_der, pkcs8_bytes);
+        assert_eq!(*encoded_der, pkcs8_bytes);
 
         // Round-trip: decode and re-encode
         let roundtrip = SecretKey::from_der(&encoded_der).unwrap();
