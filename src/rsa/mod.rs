@@ -19,6 +19,7 @@ use rsa::signature::{Keypair, SignatureEncoding, Signer, Verifier};
 use rsa::traits::{PrivateKeyParts, PublicKeyParts};
 use rsa::{BigUint, RsaPrivateKey, RsaPublicKey};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
+use zeroize::Zeroizing;
 
 /// Size of the raw secret key in bytes.
 /// Format: p (128 bytes) || q (128 bytes) || d (256 bytes) || e (8 bytes)
@@ -112,26 +113,26 @@ impl SecretKey {
             return Err(format!("invalid PEM tag {}", kind).into());
         }
         // Parse the DER content
-        Self::from_der(&data)
+        Self::from_der(&Zeroizing::new(data))
     }
 
     /// to_bytes serializes a private key into a 520-byte array.
     ///
     /// Format: p (128 bytes) || q (128 bytes) || d (256 bytes) || e (8 bytes),
     /// all in big-endian.
-    pub fn to_bytes(&self) -> [u8; SECRET_KEY_SIZE] {
+    pub fn to_bytes(&self) -> Zeroizing<[u8; SECRET_KEY_SIZE]> {
         let key: &RsaPrivateKey = self.inner.as_ref();
         let primes = key.primes();
 
-        let mut out = [0u8; 520];
+        let mut out = Zeroizing::new([0u8; 520]);
 
-        let p_bytes = primes[0].to_bytes_be();
+        let p_bytes = Zeroizing::new(primes[0].to_bytes_be());
         out[128 - p_bytes.len()..128].copy_from_slice(&p_bytes);
 
-        let q_bytes = primes[1].to_bytes_be();
+        let q_bytes = Zeroizing::new(primes[1].to_bytes_be());
         out[256 - q_bytes.len()..256].copy_from_slice(&q_bytes);
 
-        let d_bytes = key.d().to_bytes_be();
+        let d_bytes = Zeroizing::new(key.d().to_bytes_be());
         out[512 - d_bytes.len()..512].copy_from_slice(&d_bytes);
 
         let e_bytes = key.e().to_bytes_be();
@@ -141,16 +142,18 @@ impl SecretKey {
     }
 
     /// to_der serializes a private key into a DER buffer.
-    pub fn to_der(&self) -> Vec<u8> {
-        rsa::pkcs1v15::SigningKey::<Sha256>::to_pkcs8_der(&self.inner)
-            .unwrap()
-            .as_bytes()
-            .to_vec()
+    pub fn to_der(&self) -> Zeroizing<Vec<u8>> {
+        Zeroizing::new(
+            rsa::pkcs1v15::SigningKey::<Sha256>::to_pkcs8_der(&self.inner)
+                .unwrap()
+                .as_bytes()
+                .to_vec(),
+        )
     }
 
     /// to_pem serializes a private key into a PEM string.
-    pub fn to_pem(&self) -> String {
-        pem::encode("PRIVATE KEY", &self.to_der())
+    pub fn to_pem(&self) -> Zeroizing<String> {
+        Zeroizing::new(pem::encode("PRIVATE KEY", &self.to_der()))
     }
 
     /// public_key retrieves the public counterpart of the secret key.

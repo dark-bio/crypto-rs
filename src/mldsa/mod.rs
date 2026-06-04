@@ -21,7 +21,7 @@ use spki::der::asn1::BitStringRef;
 use spki::{AlgorithmIdentifier, ObjectIdentifier, SubjectPublicKeyInfo};
 use std::error::Error;
 use subtle::ConstantTimeEq;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::pem;
 
@@ -41,7 +41,7 @@ pub const SIGNATURE_SIZE: usize = 3309;
 pub const FINGERPRINT_SIZE: usize = 32;
 
 /// ML-DSA-65 private key inner structure.
-#[derive(Clone, Debug, Eq, PartialEq, Sequence)]
+#[derive(Clone, Eq, PartialEq, Sequence)]
 struct MlDsa65PrivateKeyInner {
     seed: OctetString,
     expanded: OctetString,
@@ -100,7 +100,7 @@ impl SecretKey {
             .as_bytes()
             .try_into()
             .map_err(|_| "seed not 32 bytes")?;
-        let expanded: [u8; 4032] = inner_key
+        let mut expanded: [u8; 4032] = inner_key
             .expanded
             .as_bytes()
             .try_into()
@@ -110,8 +110,11 @@ impl SecretKey {
         let inner = ml_dsa::SigningKey::<MlDsa65>::from_seed(&seed);
 
         #[allow(deprecated)] // to_expanded is wasteful, but that's the DER spec
-        let enc = inner.expanded_key().to_expanded();
-        if enc.as_slice().ct_ne(&expanded).into() {
+        let mut enc = inner.expanded_key().to_expanded();
+        let mismatch: bool = enc.as_slice().ct_ne(&expanded).into();
+        expanded.zeroize();
+        enc.as_mut_slice().zeroize();
+        if mismatch {
             return Err("expanded key does not match seed".into());
         }
         Ok(Self { inner, seed })
@@ -125,26 +128,27 @@ impl SecretKey {
             return Err(format!("invalid PEM tag {}", kind).into());
         }
         // Parse the DER content
-        Self::from_der(&data)
+        Self::from_der(&Zeroizing::new(data))
     }
 
     /// to_bytes returns the 32-byte seed of the private key.
-    pub fn to_bytes(&self) -> [u8; SECRET_KEY_SIZE] {
-        let mut out = [0u8; 32];
+    pub fn to_bytes(&self) -> Zeroizing<[u8; SECRET_KEY_SIZE]> {
+        let mut out = Zeroizing::new([0u8; 32]);
         out.copy_from_slice(self.seed.as_slice());
         out
     }
 
     /// to_der serializes a private key into a DER buffer.
-    pub fn to_der(&self) -> Vec<u8> {
+    pub fn to_der(&self) -> Zeroizing<Vec<u8>> {
         #[allow(deprecated)] // to_expanded is wasteful, but that's the DER spec
-        let enc = self.inner.expanded_key().to_expanded();
+        let mut enc = self.inner.expanded_key().to_expanded();
 
         let inner_key = MlDsa65PrivateKeyInner {
             seed: OctetString::new(self.seed.as_slice()).unwrap(),
             expanded: OctetString::new(enc.as_slice()).unwrap(),
         };
-        let inner = inner_key.to_der().unwrap();
+        enc.as_mut_slice().zeroize();
+        let inner = Zeroizing::new(inner_key.to_der().unwrap());
 
         let alg = pkcs8::AlgorithmIdentifierRef {
             oid: OID,
@@ -155,12 +159,12 @@ impl SecretKey {
             private_key: &inner,
             public_key: None,
         };
-        info.to_der().unwrap()
+        Zeroizing::new(info.to_der().unwrap())
     }
 
     /// to_pem serializes a private key into a PEM string.
-    pub fn to_pem(&self) -> String {
-        pem::encode("PRIVATE KEY", &self.to_der())
+    pub fn to_pem(&self) -> Zeroizing<String> {
+        Zeroizing::new(pem::encode("PRIVATE KEY", &self.to_der()))
     }
 
     /// public_key retrieves the public counterpart of the secret key.

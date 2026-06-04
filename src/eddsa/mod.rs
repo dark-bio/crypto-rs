@@ -23,6 +23,7 @@ use spki::der::AnyRef;
 use spki::der::asn1::BitStringRef;
 use spki::{AlgorithmIdentifier, ObjectIdentifier, SubjectPublicKeyInfo};
 use std::error::Error;
+use zeroize::Zeroizing;
 
 /// OID is the ASN.1 object identifier for Ed25519.
 pub const OID: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.101.112");
@@ -56,8 +57,8 @@ impl SecretKey {
 
     /// from_bytes converts a 32-byte array into a private key.
     pub fn from_bytes(bin: &[u8; SECRET_KEY_SIZE]) -> Self {
-        let key = ed25519_dalek::SecretKey::from(*bin);
-        let sig = ed25519_dalek::SigningKey::from(&key);
+        let key = Zeroizing::new(ed25519_dalek::SecretKey::from(*bin));
+        let sig = ed25519_dalek::SigningKey::from(&*key);
         Self { inner: sig }
     }
 
@@ -82,19 +83,19 @@ impl SecretKey {
         if kind != "PRIVATE KEY" {
             return Err(format!("invalid PEM tag {}", kind).into());
         }
-        Self::from_der(&data)
+        Self::from_der(&Zeroizing::new(data))
     }
 
     /// to_bytes converts a private key into a 32-byte array.
-    pub fn to_bytes(&self) -> [u8; SECRET_KEY_SIZE] {
-        self.inner.to_bytes()
+    pub fn to_bytes(&self) -> Zeroizing<[u8; SECRET_KEY_SIZE]> {
+        Zeroizing::new(self.inner.to_bytes())
     }
 
     /// to_der serializes a private key into a DER buffer.
-    pub fn to_der(&self) -> Vec<u8> {
+    pub fn to_der(&self) -> Zeroizing<Vec<u8>> {
         // The private key field contains an OCTET STRING wrapping the seed
         let seed = OctetString::new(self.inner.to_bytes()).unwrap();
-        let inner = seed.to_der().unwrap();
+        let inner = Zeroizing::new(seed.to_der().unwrap());
 
         let alg = pkcs8::AlgorithmIdentifierRef {
             oid: OID,
@@ -105,12 +106,12 @@ impl SecretKey {
             private_key: &inner,
             public_key: None,
         };
-        info.to_der().unwrap()
+        Zeroizing::new(info.to_der().unwrap())
     }
 
     /// to_pem serializes a private key into a PEM string.
-    pub fn to_pem(&self) -> String {
-        pem::encode("PRIVATE KEY", &self.to_der())
+    pub fn to_pem(&self) -> Zeroizing<String> {
+        Zeroizing::new(pem::encode("PRIVATE KEY", &self.to_der()))
     }
 
     /// public_key retrieves the public counterpart of the secret key.
