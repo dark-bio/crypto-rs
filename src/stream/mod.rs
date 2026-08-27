@@ -23,8 +23,9 @@
 // Source: https://github.com/str4d/rage/blob/v0.12.0/age/src/primitives/stream.rs
 //
 // Local changes: the payload key, stream type and constructors are public
-// (upstream keeps them crate private) and the i18n error strings are plain
-// string literals.
+// (upstream keeps them crate private), the i18n error strings are plain
+// string literals, and the CCTV conformance tests are hooked in as a
+// trailing test-only submodule.
 
 #![allow(clippy::all)]
 #![allow(unexpected_cfgs)]
@@ -1115,3 +1116,6 @@ mod tests {
         assert_eq!(buf.len(), 0);
     }
 }
+
+#[cfg(all(test, feature = "hkdf"))]
+mod cctv;
