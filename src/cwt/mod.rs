@@ -464,4 +464,48 @@ mod tests {
             .expect_err("should reject duplicate nbf");
         assert!(matches!(err, Error::DuplicateKey(5)));
     }
+
+    /// Fixture corpus generated with v0.16.0 to pin the CWT wire format.
+    const FIXTURES: &str = include_str!("testdata/v0.16.json");
+
+    /// fixture retrieves a hex encoded field from the v0.16 fixture corpus.
+    fn fixture(corpus: &serde_json::Value, key: &str) -> Vec<u8> {
+        hex::decode(corpus[key].as_str().unwrap()).unwrap()
+    }
+
+    /// Tests that the v0.16 fixture corpus still validates, since that was in the
+    /// first public release of the Ark, so we can't change the format anymore.
+    #[test]
+    fn test_v0_16_fixtures() {
+        let corpus: serde_json::Value = serde_json::from_str(FIXTURES).unwrap();
+
+        let xdsa_seed: [u8; 64] = fixture(&corpus, "xdsa_seed").try_into().unwrap();
+        let signer = xdsa::SecretKey::from_bytes(&xdsa_seed);
+
+        let domain = fixture(&corpus, "domain");
+        let now = corpus["now"].as_u64().unwrap();
+
+        // Verify the committed valid token and check the decoded claims
+        let valid = fixture(&corpus, "valid");
+        let got: SimpleCert = verify(&valid, &signer.public_key(), &domain, Some(now)).unwrap();
+        assert_eq!(got.sub.sub, "fixture");
+        assert_eq!(got.exp.unwrap().exp, 4102444800);
+        assert_eq!(got.nbf.nbf, 1500000000);
+        assert_eq!(got.cnf.key().to_bytes(), signer.public_key().to_bytes());
+
+        // The expired and premature tokens must keep failing temporally
+        let expired = fixture(&corpus, "expired");
+        let err = verify::<SimpleCert>(&expired, &signer.public_key(), &domain, Some(now));
+        assert!(matches!(err, Err(Error::AlreadyExpired { .. })));
+
+        let premature = fixture(&corpus, "premature");
+        let err = verify::<NoExpCert>(&premature, &signer.public_key(), &domain, Some(now));
+        assert!(matches!(err, Err(Error::NotYetValid { .. })));
+
+        // A tampered token must fail the signature check
+        let mut tampered = valid.clone();
+        *tampered.last_mut().unwrap() ^= 1;
+        let err = verify::<SimpleCert>(&tampered, &signer.public_key(), &domain, Some(now));
+        assert!(err.is_err());
+    }
 }

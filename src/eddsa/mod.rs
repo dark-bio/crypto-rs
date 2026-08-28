@@ -350,11 +350,70 @@ impl crate::cbor::Decode for Fingerprint {
 mod tests {
     use super::*;
 
+    // Test vectors from RFC 8410 Sections 10.1 and 10.3
+    // https://datatracker.ietf.org/doc/html/rfc8410
+    mod ietf_vectors {
+        pub const SECKEY_SEED: &str =
+            "d4ee72dbf913584ad5b6d8f1f769f8ad3afe7c28cbf1d4fbe097a88f44755842";
+
+        pub const SECKEY_PEM: &str = "\
+-----BEGIN PRIVATE KEY-----
+MC4CAQAwBQYDK2VwBCIEINTuctv5E1hK1bbY8fdp+K06/nwoy/HU++CXqI9EdVhC
+-----END PRIVATE KEY-----";
+
+        pub const SECKEY_V2_PEM: &str = "\
+-----BEGIN PRIVATE KEY-----
+MHICAQEwBQYDK2VwBCIEINTuctv5E1hK1bbY8fdp+K06/nwoy/HU++CXqI9EdVhC
+oB8wHQYKKoZIhvcNAQkJFDEPDA1DdXJkbGUgQ2hhaXJzgSEAGb9ECWmEzf6FQbrB
+Z9w7lshQhqowtrbLDFw4rXAxZuE=
+-----END PRIVATE KEY-----";
+
+        pub const PUBKEY_PEM: &str = "\
+-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEAGb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE=
+-----END PUBLIC KEY-----";
+    }
+
+    // Tests operations with IETF test vectors: the private key must parse into
+    // the published raw seed, re-encode into the published PEM and DER, and
+    // derive the RFC's matching public key.
+    #[test]
+    fn test_ietf_vectors() {
+        // Round trip the secret key pem and verify the expected seed
+        let key = SecretKey::from_pem(ietf_vectors::SECKEY_PEM).unwrap();
+        assert_eq!(hex::encode(*key.to_bytes()), ietf_vectors::SECKEY_SEED);
+        assert_eq!(key.to_pem().trim(), ietf_vectors::SECKEY_PEM.trim());
+
+        // Round trip the secret key der
+        let (_, der) = pem::decode(ietf_vectors::SECKEY_PEM.as_bytes()).unwrap();
+        assert_eq!(*key.to_der(), der);
+
+        // Verify the expected public key
+        assert_eq!(
+            key.public_key().to_pem().trim(),
+            ietf_vectors::PUBKEY_PEM.trim()
+        );
+
+        // Round trip the public key pem
+        let key = PublicKey::from_pem(ietf_vectors::PUBKEY_PEM).unwrap();
+        assert_eq!(key.to_pem().trim(), ietf_vectors::PUBKEY_PEM.trim());
+
+        // Round trip the public key der
+        let (_, der) = pem::decode(ietf_vectors::PUBKEY_PEM.as_bytes()).unwrap();
+        assert_eq!(key.to_der(), der);
+    }
+
+    // Tests that the RFC 8410 v2 private key vector carrying an attribute and
+    // an embedded public key is rejected: only v1 keys without embedded public
+    // data are supported.
+    #[test]
+    fn test_ietf_v2_rejected() {
+        assert!(SecretKey::from_pem(ietf_vectors::SECKEY_V2_PEM).is_err());
+    }
+
     // Tests signing and verifying messages. Note, this test is not meant to test
     // cryptography, it is mostly an API sanity check to verify that everything
     // seems to work.
-    //
-    // TODO(karalabe): Get some live test vectors for a bit more sanity
     #[test]
     fn test_sign_verify() {
         // Create the keys for Alice

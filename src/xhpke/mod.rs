@@ -530,6 +530,78 @@ fn validate_mlkem768_encapsulation_key(key: &[u8]) -> Result<(), Box<dyn Error>>
 mod tests {
     use super::*;
 
+    // Test vectors from draft-connolly-cfrg-xwing-kem-10 Appendix D
+    // https://datatracker.ietf.org/doc/html/draft-connolly-cfrg-xwing-kem
+    mod ietf_vectors {
+        pub const SECKEY_SEED: &str =
+            "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
+
+        pub const SECKEY_PEM: &str = "\
+-----BEGIN PRIVATE KEY-----
+MDQCAQAwDQYLKwYBBAGD5i2ByHoEIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZ
+GhscHR4f
+-----END PRIVATE KEY-----";
+
+        pub const PUBKEY_PEM: &str = "\
+-----BEGIN PUBLIC KEY-----
+MIIE1DANBgsrBgEEAYPmLYHIegOCBMEAb1QJigoOZBFGYUtpYLpg2GA9YvRH+atJ
+m0e9aQbMQLBh2GNKPoiQbyhJWOdEHKbHJcu5cJW3ZxpGK2aByeZYC7yNYLFJ+mAm
+EEOvu6UvIFpgKDhIUVlq3zcavqmNM0c4PSu2c0OPZ4NhK/hwFPe5Gol0AmU0XfZ5
+NARz0cTBdohuXim48Fi7fHNTFmhs/1w764wmHLAJcKacGvzFS5TLhuHOY7pjbjlc
+pFEB4hx70EwxPqGa8kFB79KtREFqJbpPZZEO99iAnDCT8EqvAOPNluNcSqPIAsGK
+1vOdpLS42YyL15Atg6B7pFOWZ0pgJDyrk+gP2bHId3N2qcwNb6EV4mOTgLnGvnhI
+vRNYjGRwOgU10ZoPgWM6l2oKEFtm7ihdD9JV6CwDMZJfQ4O278dh72CZI1oLmHJj
+WKqdAbi4llGfkhR0u3wUuyIlK1wvENQSRsmyPnZEhJNn9UGhX2O8koo5u3vHPwe2
+ZcSWu2VYyPRUiacuxLrNNOnFlMM4cbcj8DSV6ItDkasm5DBD3rYRezkZ5FxMGxar
+KOR93XI2Y4VHZhkvwYBspwq7eGy9swky5oyKNwvPsHmDoBLDJmuT76YmV/S4ODdM
+sLuV4OwGVBsHZdmc8VO8a5YTXKeApVs2R3ieMZFeRig8+ce7boRT+2aCEFFB8dwN
+ANhe7XA7bGyWH3nIRSdrQkiUnAZ4LlE+spkbldlgQuOMvto1JEmytQhOvaUiamIG
+QAeJEwowlkSYSLYp/upKLCp0PEoN3Jyz89Z2/FY3MbJsShpm3IRZFwBW1XaX8UQ7
+gamjRBK7e/BfMydXWlkR3TAdYFOGfzwwgHEfG/EVh7C7KYQnayaF53ViEOSz+JVT
+hCMeVYxvUQyR4PxWtdGIX/KUnpWka8G+4fpx9QJ+EMRDsOkdD9dED0Z6JyISEuiP
+XGumQpbK4NIHv8YPiMfPtcRaoYOdGMs3xFhD5UJqSpDIArZCj5U8NZxKwGA0UvrA
+tzYeL9NdzIhakhRdT8oBWPG31wtLzRGOSipBVEON8xDESpobmepBWQcmeoiwYkJB
+V5wXIvRu1hwuPspUXJlwUXF1OZuADbJdo5WT0GSQ1xQsAOiNLbBH6YmL23rLftkH
+9uMEFswN5UokLAohJjAvXVTIW8Zqwvg8eXlFtQZ8qkK9LgwZypdQblB6sKXJ9WM3
+CEmcGfJK7FE705A6XXO27EmR98cuuZHBw3iJgFyx6jigzAIXayfFjWOM5aMmaEV8
++bm+AnygIUBXlxcl1UEC6JlnFusq2CNFO2BbhVNwsbIbOTLN7UFgqplzx+uuWsR2
+TZTPfMlQbwd7rXMBLbtKyBQKOHRkEuszyVFFliBfcHY1hiIX2bYJGMYmjZNEkVuE
+eiR2waJw8VSlyEI0FlrPyGk5hwLOqemgfnsOmeqb3LeEH+nA+iXIM4CSVho+3dxw
+AfR4rWV4GmAkqtFl2baXmtrESKRGL1ZGhVJ/diQ0/ppCWoRDe0VzkuyoDJE1BhUe
+OhMjnzQvynZVtuquhFoiHOs+Z/VjnGGT9v3u9X45m4CLfzqitXQKre2QFj3F13XJ
++vfx+9B12rNE6dfRRmRygfu6ezxWyv1YM7epMOxCBufDptd2T+gdeg==
+-----END PUBLIC KEY-----";
+    }
+
+    // Tests operations with IETF test vectors: the private key must parse into
+    // the published raw seed, re-encode into the published PEM and DER, and
+    // expand to the draft's matching public key.
+    #[test]
+    fn test_ietf_vectors() {
+        // Round trip the secret key pem and verify the expected seed
+        let key = SecretKey::from_pem(ietf_vectors::SECKEY_PEM).unwrap();
+        assert_eq!(hex::encode(*key.to_bytes()), ietf_vectors::SECKEY_SEED);
+        assert_eq!(key.to_pem().trim(), ietf_vectors::SECKEY_PEM.trim());
+
+        // Round trip the secret key der
+        let (_, der) = pem::decode(ietf_vectors::SECKEY_PEM.as_bytes()).unwrap();
+        assert_eq!(*key.to_der(), der);
+
+        // Verify the expected public key
+        assert_eq!(
+            key.public_key().to_pem().trim(),
+            ietf_vectors::PUBKEY_PEM.trim()
+        );
+
+        // Round trip the public key pem
+        let key = PublicKey::from_pem(ietf_vectors::PUBKEY_PEM).unwrap();
+        assert_eq!(key.to_pem().trim(), ietf_vectors::PUBKEY_PEM.trim());
+
+        // Round trip the public key der
+        let (_, der) = pem::decode(ietf_vectors::PUBKEY_PEM.as_bytes()).unwrap();
+        assert_eq!(key.to_der(), der);
+    }
+
     // Tests that a private key can be serialized to bytes and parsed back.
     #[test]
     fn test_secretkey_bytes_roundtrip() {
