@@ -353,6 +353,7 @@ dependencies = [
  "rand_chacha 0.9.0",
  "rsa",
  "serde",
+ "serde_json",
  "sha2",
  "signature 2.2.0",
  "spki 0.7.3",

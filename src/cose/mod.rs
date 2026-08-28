@@ -1069,4 +1069,91 @@ mod tests {
 
         assert_eq!(recovered, payload);
     }
+
+    // Fixture corpus generated with v0.16.0 to pin the COSE wire format.
+    const FIXTURES: &str = include_str!("testdata/v0.16.json");
+
+    // fixture retrieves a hex encoded field from the v0.16 fixture corpus.
+    fn fixture(corpus: &serde_json::Value, key: &str) -> Vec<u8> {
+        hex::decode(corpus[key].as_str().unwrap()).unwrap()
+    }
+
+    // Tests that the v0.16 fixture corpus still validates, since that was in the
+    // first public release of the Ark, so we can't change the format anymore.
+    #[test]
+    fn test_v0_16_fixtures() {
+        let corpus: serde_json::Value = serde_json::from_str(FIXTURES).unwrap();
+
+        let xdsa_seed: [u8; 64] = fixture(&corpus, "xdsa_seed").try_into().unwrap();
+        let xhpke_seed: [u8; 32] = fixture(&corpus, "xhpke_seed").try_into().unwrap();
+        let signer = xdsa::SecretKey::from_bytes(&xdsa_seed);
+        let recipient = xhpke::SecretKey::from_bytes(&xhpke_seed);
+
+        let domain = fixture(&corpus, "domain");
+        let payload = fixture(&corpus, "payload");
+        let aad = fixture(&corpus, "aad");
+        let sign1 = fixture(&corpus, "sign1");
+        let encrypt0 = fixture(&corpus, "encrypt0");
+
+        // Verify the committed signature and check the embedded payload
+        let got: Vec<u8> = verify_at(
+            &sign1,
+            aad.as_slice(),
+            &signer.public_key(),
+            &domain,
+            None,
+            0,
+        )
+        .unwrap();
+        assert_eq!(got, payload);
+
+        // Wrong domains and tampered structures must fail
+        let bad = verify_at::<Vec<u8>, _>(
+            &sign1,
+            aad.as_slice(),
+            &signer.public_key(),
+            b"wrong",
+            None,
+            0,
+        );
+        assert!(bad.is_err());
+
+        let mut tampered = sign1.clone();
+        *tampered.last_mut().unwrap() ^= 1;
+        let bad = verify_at::<Vec<u8>, _>(
+            &tampered,
+            aad.as_slice(),
+            &signer.public_key(),
+            &domain,
+            None,
+            0,
+        );
+        assert!(bad.is_err());
+
+        // Open the committed encrypted message and check the payload
+        let got: Vec<u8> = open_at(
+            &encrypt0,
+            aad.as_slice(),
+            &recipient,
+            &signer.public_key(),
+            &domain,
+            None,
+            0,
+        )
+        .unwrap();
+        assert_eq!(got, payload);
+
+        let mut tampered = encrypt0.clone();
+        *tampered.last_mut().unwrap() ^= 1;
+        let bad = open_at::<Vec<u8>, _>(
+            &tampered,
+            aad.as_slice(),
+            &recipient,
+            &signer.public_key(),
+            &domain,
+            None,
+            0,
+        );
+        assert!(bad.is_err());
+    }
 }

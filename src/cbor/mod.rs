@@ -1814,7 +1814,7 @@ mod tests {
         // Test empty fixed-size array
         let encoded = vec![0x40]; // major 2, length 0
         let decoded = decode::<[u8; 0]>(&encoded).unwrap();
-        assert_eq!(decoded, []);
+        assert_eq!(decoded, [0u8; 0]);
     }
 
     // Tests that bytes decoding fails when fixed size lengths don't match.
@@ -3707,7 +3707,7 @@ mod tests {
     fn test_fixed_array_decoding() {
         // Empty fixed array
         let arr = decode::<FixedArray<u64, 0>>(&[0x80]).unwrap();
-        assert_eq!(arr.0, []);
+        assert_eq!(arr.0, [0u64; 0]);
 
         // Fixed array of unsigned integers
         let arr = decode::<FixedArray<u64, 3>>(&[0x83, 0x01, 0x02, 0x03]).unwrap();
