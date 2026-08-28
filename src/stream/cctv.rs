@@ -172,7 +172,7 @@ fn test_cctv_vectors() {
         let key: [u8; 32] = hkdf::key(&filekey, &paysec[..16], b"payload");
         let ciphertext = &paysec[16..];
 
-        let mut reader = Stream::decrypt(PayloadKey(key.into()), ciphertext);
+        let mut reader = Stream::decrypt(PayloadKey::from_bytes(&key), ciphertext);
         let mut released = Vec::new();
         let mut buf = [0u8; 65536];
         let result = loop {
@@ -192,7 +192,7 @@ fn test_cctv_vectors() {
             result.unwrap_or_else(|err| panic!("{name}: {err}"));
 
             let mut reencrypted = Vec::new();
-            let mut writer = Stream::encrypt(PayloadKey(key.into()), &mut reencrypted);
+            let mut writer = Stream::encrypt(PayloadKey::from_bytes(&key), &mut reencrypted);
             writer.write_all(&released).unwrap();
             writer.finish().unwrap();
             assert_eq!(reencrypted, ciphertext, "{name}");

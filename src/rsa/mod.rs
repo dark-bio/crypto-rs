@@ -11,7 +11,7 @@
 use crate::pem;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use rsa::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey, Error};
+use rsa::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey};
 use rsa::rand_core::OsRng;
 use rsa::sha2::{Digest, Sha256};
 use rsa::signature::hazmat::PrehashVerifier;
@@ -35,6 +35,19 @@ pub const SIGNATURE_SIZE: usize = 256;
 /// Size of an RSA key fingerprint (SHA256 hash).
 pub const FINGERPRINT_SIZE: usize = 32;
 
+/// Error is the failures that can occur during RSA operations.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum Error {
+    #[error("pem: {0}")]
+    Pem(#[from] pem::Error),
+    #[error("invalid PEM tag {0}")]
+    UnexpectedPemTag(String),
+    #[error("malformed key: {0}")]
+    MalformedKey(String),
+    #[error("signature verification failed")]
+    InvalidSignature,
+}
+
 /// SecretKey contains a 2048-bit RSA private key usable for signing, with SHA256
 /// as the underlying hash algorithm. Whilst RSA could also be used for encryption,
 /// that is not exposed on the API as it's not required by the project.
@@ -57,7 +70,7 @@ impl SecretKey {
     ///
     /// Format: p (128 bytes) || q (128 bytes) || d (256 bytes) || e (8 bytes),
     /// all in big-endian.
-    pub fn from_bytes(bytes: &[u8; SECRET_KEY_SIZE]) -> Result<Self, rsa::Error> {
+    pub fn from_bytes(bytes: &[u8; SECRET_KEY_SIZE]) -> Result<Self, Error> {
         let p = BigUint::from_bytes_be(&bytes[0..128]);
         let q = BigUint::from_bytes_be(&bytes[128..256]);
         let d = BigUint::from_bytes_be(&bytes[256..512]);
@@ -67,50 +80,53 @@ impl SecretKey {
 
         // The modulus must be exactly 2048 bits
         if n.bits() != 2048 {
-            return Err(rsa::Error::InvalidModulus);
+            return Err(Error::MalformedKey("modulus not 2048 bits".into()));
         }
         // Whilst the RSA algorithm permits different exponents, every modern
         // system only ever uses 65537 and most also enforce this. Might as
         // well do the same.
         if e != BigUint::from(65537u32) {
-            return Err(rsa::Error::InvalidExponent);
+            return Err(Error::MalformedKey("exponent not 65537".into()));
         }
-        let key = RsaPrivateKey::from_components(n, e, d, vec![p, q])?;
+        let key = RsaPrivateKey::from_components(n, e, d, vec![p, q])
+            .map_err(|err| Error::MalformedKey(err.to_string()))?;
         let sig = rsa::pkcs1v15::SigningKey::<Sha256>::new(key);
         Ok(Self { inner: sig })
     }
 
     /// from_der parses a DER buffer into a private key.
-    pub fn from_der(der: &[u8]) -> Result<Self, Box<dyn std::error::Error>> {
-        let inner = rsa::pkcs1v15::SigningKey::<Sha256>::from_pkcs8_der(der)?;
+    pub fn from_der(der: &[u8]) -> Result<Self, Error> {
+        let inner = rsa::pkcs1v15::SigningKey::<Sha256>::from_pkcs8_der(der)
+            .map_err(|err| Error::MalformedKey(err.to_string()))?;
 
         // The modulus must be exactly 2048 bits
         let key: &RsaPrivateKey = inner.as_ref();
         if key.n().bits() != 2048 {
-            return Err(Error::KeyMalformed.into());
+            return Err(Error::MalformedKey("modulus not 2048 bits".into()));
         }
         // Whilst the RSA algorithm permits different exponents, every modern
         // system only ever uses 65537 and most also enforce this. Might as
         // well do the same.
         if *key.e() != BigUint::from(65537u32) {
-            return Err(Error::KeyMalformed.into());
+            return Err(Error::MalformedKey("exponent not 65537".into()));
         }
         // The upstream rsa crate ignores CRT parameters (dP, dQ, qInv) and
         // recomputes them, accepting malformed values. We don't want to allow
         // that, so just round trip the format and see if it's matching or not.
-        let recoded = rsa::pkcs1v15::SigningKey::<Sha256>::to_pkcs8_der(&inner)?;
+        let recoded = rsa::pkcs1v15::SigningKey::<Sha256>::to_pkcs8_der(&inner)
+            .map_err(|err| Error::MalformedKey(err.to_string()))?;
         if recoded.as_bytes() != der {
-            return Err(Error::KeyMalformed.into());
+            return Err(Error::MalformedKey("non-canonical key encoding".into()));
         }
         Ok(Self { inner })
     }
 
     /// from_pem parses a PEM string into a private key.
-    pub fn from_pem(pem_str: &str) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn from_pem(pem_str: &str) -> Result<Self, Error> {
         // Crack open the PEM to get to the private key info
         let (kind, data) = pem::decode(pem_str.as_bytes())?;
         if kind != "PRIVATE KEY" {
-            return Err(format!("invalid PEM tag {}", kind).into());
+            return Err(Error::UnexpectedPemTag(kind));
         }
         // Parse the DER content
         Self::from_der(&Zeroizing::new(data))
@@ -188,49 +204,50 @@ impl PublicKey {
     /// from_bytes parses a 264-byte array into a public key.
     ///
     /// Format: n (256 bytes) || e (8 bytes), all in big-endian.
-    pub fn from_bytes(bytes: &[u8; PUBLIC_KEY_SIZE]) -> Result<Self, rsa::Error> {
+    pub fn from_bytes(bytes: &[u8; PUBLIC_KEY_SIZE]) -> Result<Self, Error> {
         let n = BigUint::from_bytes_be(&bytes[0..256]);
         let e = BigUint::from_bytes_be(&bytes[256..264]);
 
         // The modulus must be exactly 2048 bits
         if n.bits() != 2048 {
-            return Err(rsa::Error::InvalidModulus);
+            return Err(Error::MalformedKey("modulus not 2048 bits".into()));
         }
         // Whilst the RSA algorithm permits different exponents, every modern
         // system only ever uses 65537 and most also enforce this. Might as
         // well do the same.
         if e != BigUint::from(65537u32) {
-            return Err(rsa::Error::InvalidExponent);
+            return Err(Error::MalformedKey("exponent not 65537".into()));
         }
-        let key = RsaPublicKey::new(n, e)?;
+        let key = RsaPublicKey::new(n, e).map_err(|err| Error::MalformedKey(err.to_string()))?;
         let inner = rsa::pkcs1v15::VerifyingKey::<Sha256>::new(key);
         Ok(Self { inner })
     }
 
     /// from_der parses a DER buffer into a public key.
-    pub fn from_der(der: &[u8]) -> Result<Self, Box<dyn std::error::Error>> {
-        let inner = rsa::pkcs1v15::VerifyingKey::<Sha256>::from_public_key_der(der)?;
+    pub fn from_der(der: &[u8]) -> Result<Self, Error> {
+        let inner = rsa::pkcs1v15::VerifyingKey::<Sha256>::from_public_key_der(der)
+            .map_err(|err| Error::MalformedKey(err.to_string()))?;
 
         // The modulus must be exactly 2048 bits
         let key: &RsaPublicKey = inner.as_ref();
         if key.n().bits() != 2048 {
-            return Err(Error::KeyMalformed.into());
+            return Err(Error::MalformedKey("modulus not 2048 bits".into()));
         }
         // Whilst the RSA algorithm permits different exponents, every modern
         // system only ever uses 65537 and most also enforce this. Might as
         // well do the same.
         if *key.e() != BigUint::from(65537u32) {
-            return Err(Error::KeyMalformed.into());
+            return Err(Error::MalformedKey("exponent not 65537".into()));
         }
         Ok(Self { inner })
     }
 
     /// from_pem parses a PEM string into a public key.
-    pub fn from_pem(pem_str: &str) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn from_pem(pem_str: &str) -> Result<Self, Error> {
         // Crack open the PEM to get to the public key info
         let (kind, data) = pem::decode(pem_str.as_bytes())?;
         if kind != "PUBLIC KEY" {
-            return Err(format!("invalid PEM tag {}", kind).into());
+            return Err(Error::UnexpectedPemTag(kind));
         }
         // Parse the DER content
         Self::from_der(&data)
@@ -283,23 +300,21 @@ impl PublicKey {
     }
 
     /// verify verifies a digital signature.
-    pub fn verify(
-        &self,
-        message: &[u8],
-        signature: &Signature,
-    ) -> Result<(), rsa::signature::Error> {
-        let sig = rsa::pkcs1v15::Signature::try_from(signature.to_bytes().as_slice())?;
-        self.inner.verify(message, &sig)
+    pub fn verify(&self, message: &[u8], signature: &Signature) -> Result<(), Error> {
+        let sig = rsa::pkcs1v15::Signature::try_from(signature.to_bytes().as_slice())
+            .map_err(|_| Error::InvalidSignature)?;
+        self.inner
+            .verify(message, &sig)
+            .map_err(|_| Error::InvalidSignature)
     }
 
     /// verify_hash verifies a digital signature on an already hashed message.
-    pub fn verify_hash(
-        &self,
-        hash: &[u8],
-        signature: &Signature,
-    ) -> Result<(), rsa::signature::Error> {
-        let sig = rsa::pkcs1v15::Signature::try_from(signature.to_bytes().as_slice())?;
-        self.inner.verify_prehash(hash, &sig)
+    pub fn verify_hash(&self, hash: &[u8], signature: &Signature) -> Result<(), Error> {
+        let sig = rsa::pkcs1v15::Signature::try_from(signature.to_bytes().as_slice())
+            .map_err(|_| Error::InvalidSignature)?;
+        self.inner
+            .verify_prehash(hash, &sig)
+            .map_err(|_| Error::InvalidSignature)
     }
 }
 
