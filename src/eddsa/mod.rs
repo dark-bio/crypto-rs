@@ -46,12 +46,12 @@ pub enum Error {
     Pem(#[from] pem::Error),
     #[error("invalid PEM tag {0}")]
     UnexpectedPemTag(String),
+    #[error("not an Ed25519 key")]
+    UnexpectedAlgorithm,
     #[error("malformed key: {0}")]
     MalformedKey(String),
     #[error("trailing data in key encoding")]
     TrailingData,
-    #[error("embedded public key not supported")]
-    EmbeddedPublicKey,
     #[error("signature verification failed")]
     InvalidSignature,
 }
@@ -90,8 +90,15 @@ impl SecretKey {
         if length.try_into() != Ok(der.len()) {
             return Err(Error::TrailingData);
         }
+        // Ensure the algorithm OID matches Ed25519
+        if info.algorithm.oid != OID {
+            return Err(Error::UnexpectedAlgorithm);
+        }
+        // Reject v2 keys. The decoder only ever yields v1 keys without or v2
+        // keys with an embedded public key, all other combinations fail to
+        // parse, so public key presence is an exact v2 marker.
         if info.public_key.is_some() {
-            return Err(Error::EmbeddedPublicKey);
+            return Err(Error::MalformedKey("unsupported PKCS#8 version".into()));
         }
         let inner = ed25519_dalek::SigningKey::from_pkcs8_der(der)
             .map_err(|err| Error::MalformedKey(err.to_string()))?;
@@ -179,6 +186,10 @@ impl PublicKey {
             .map_err(|err| Error::MalformedKey(err.to_string()))?;
         if length.try_into() != Ok(der.len()) {
             return Err(Error::TrailingData);
+        }
+        // Ensure the algorithm OID matches Ed25519
+        if info.algorithm.oid != OID {
+            return Err(Error::UnexpectedAlgorithm);
         }
         let inner = ed25519_dalek::VerifyingKey::from_public_key_der(der)
             .map_err(|err| Error::MalformedKey(err.to_string()))?;

@@ -118,6 +118,12 @@ impl SecretKey {
         if info.algorithm.oid != OID {
             return Err(Error::UnexpectedAlgorithm);
         }
+        // Reject v2 keys. The decoder only ever yields v1 keys without or v2
+        // keys with an embedded public key, all other combinations fail to
+        // parse, so public key presence is an exact v2 marker.
+        if info.public_key.is_some() {
+            return Err(Error::MalformedKey("unsupported PKCS#8 version".into()));
+        }
         // Private key is ML-DSA seed (32) || Ed25519 seed (32) = 64 bytes
         let seed: Zeroizing<[u8; 64]> =
             Zeroizing::new(info.private_key.try_into().map_err(|_| {

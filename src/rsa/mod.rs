@@ -11,7 +11,13 @@
 use crate::pem;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use rsa::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey};
+use rsa::pkcs8::der::asn1::BitStringRef;
+use rsa::pkcs8::der::{AnyRef, Decode};
+use rsa::pkcs8::spki::SubjectPublicKeyInfo;
+use rsa::pkcs8::{
+    DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey, ObjectIdentifier,
+    PrivateKeyInfo,
+};
 use rsa::rand_core::OsRng;
 use rsa::sha2::{Digest, Sha256};
 use rsa::signature::hazmat::PrehashVerifier;
@@ -20,6 +26,9 @@ use rsa::traits::{PrivateKeyParts, PublicKeyParts};
 use rsa::{BigUint, RsaPrivateKey, RsaPublicKey};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use zeroize::Zeroizing;
+
+/// OID is the ASN.1 object identifier for RSA encryption.
+pub const OID: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.1");
 
 /// Size of the raw secret key in bytes.
 /// Format: p (128 bytes) || q (128 bytes) || d (256 bytes) || e (8 bytes)
@@ -42,6 +51,8 @@ pub enum Error {
     Pem(#[from] pem::Error),
     #[error("invalid PEM tag {0}")]
     UnexpectedPemTag(String),
+    #[error("not an RSA key")]
+    UnexpectedAlgorithm,
     #[error("malformed key: {0}")]
     MalformedKey(String),
     #[error("signature verification failed")]
@@ -96,6 +107,18 @@ impl SecretKey {
 
     /// from_der parses a DER buffer into a private key.
     pub fn from_der(der: &[u8]) -> Result<Self, Error> {
+        // Ensure the algorithm OID matches RSA
+        let info =
+            PrivateKeyInfo::try_from(der).map_err(|err| Error::MalformedKey(err.to_string()))?;
+        if info.algorithm.oid != OID {
+            return Err(Error::UnexpectedAlgorithm);
+        }
+        // Reject v2 keys. The decoder only ever yields v1 keys without or v2
+        // keys with an embedded public key, all other combinations fail to
+        // parse, so public key presence is an exact v2 marker.
+        if info.public_key.is_some() {
+            return Err(Error::MalformedKey("unsupported PKCS#8 version".into()));
+        }
         let inner = rsa::pkcs1v15::SigningKey::<Sha256>::from_pkcs8_der(der)
             .map_err(|err| Error::MalformedKey(err.to_string()))?;
 
@@ -225,6 +248,12 @@ impl PublicKey {
 
     /// from_der parses a DER buffer into a public key.
     pub fn from_der(der: &[u8]) -> Result<Self, Error> {
+        // Ensure the algorithm OID matches RSA
+        let info: SubjectPublicKeyInfo<AnyRef, BitStringRef> = SubjectPublicKeyInfo::from_der(der)
+            .map_err(|err| Error::MalformedKey(err.to_string()))?;
+        if info.algorithm.oid != OID {
+            return Err(Error::UnexpectedAlgorithm);
+        }
         let inner = rsa::pkcs1v15::VerifyingKey::<Sha256>::from_public_key_der(der)
             .map_err(|err| Error::MalformedKey(err.to_string()))?;
 

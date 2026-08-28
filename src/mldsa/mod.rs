@@ -110,6 +110,12 @@ impl SecretKey {
         if info.algorithm.oid != OID {
             return Err(Error::UnexpectedAlgorithm);
         }
+        // Reject v2 keys. The decoder only ever yields v1 keys without or v2
+        // keys with an embedded public key, all other combinations fail to
+        // parse, so public key presence is an exact v2 marker.
+        if info.public_key.is_some() {
+            return Err(Error::MalformedKey("unsupported PKCS#8 version".into()));
+        }
         // Wrap the private key in a SEQUENCE containing:
         //   - OCTET STRING (32 bytes): seed
         //   - OCTET STRING (4032 bytes): expanded key
@@ -782,6 +788,23 @@ b2e7dd3ce3a9fc61c902a110cfb9ff3b07bf"
         let der = hex::decode(&input).unwrap();
         let key = SecretKey::from_der(&der).unwrap();
         assert_eq!(hex::encode(key.to_der()), input);
+    }
+
+    // Tests that a v2 PKCS#8 private key carrying an embedded public key is
+    // rejected: only v1 keys are supported.
+    #[test]
+    fn test_secretkey_der_rejects_v2() {
+        // Rebuild a valid v1 key as a v2 envelope with an embedded public key
+        let key = SecretKey::from_bytes(&[7; 32]);
+        let der = key.to_der();
+
+        let mut info = PrivateKeyInfo::try_from(der.as_slice()).unwrap();
+        let public = key.public_key().to_bytes();
+        info.public_key = Some(&public);
+        let der_v2 = info.to_der().unwrap();
+
+        let err = SecretKey::from_der(&der_v2);
+        assert!(matches!(err, Err(Error::MalformedKey(_))));
     }
 
     // Tests that a DER encoded ML-DSA-65 public key can be decoded and re-encoded

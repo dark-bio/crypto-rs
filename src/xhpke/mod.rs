@@ -79,28 +79,6 @@ pub enum Error {
     SealFailed(String),
     #[error("opening failed: {0}")]
     OpenFailed(String),
-    #[error("message limit reached")]
-    MessageLimitReached,
-}
-
-/// seal_error converts an HPKE failure during sealing into a module error,
-/// keeping the message limit distinguishable so long-lived senders can rotate
-/// their session when the nonce sequence runs out.
-fn seal_error(err: hpke::HpkeError) -> Error {
-    match err {
-        hpke::HpkeError::MessageLimitReached => Error::MessageLimitReached,
-        err => Error::SealFailed(err.to_string()),
-    }
-}
-
-/// open_error converts an HPKE failure during opening into a module error,
-/// keeping the message limit distinguishable so long-lived receivers can
-/// rotate their session when the nonce sequence runs out.
-fn open_error(err: hpke::HpkeError) -> Error {
-    match err {
-        hpke::HpkeError::MessageLimitReached => Error::MessageLimitReached,
-        err => Error::OpenFailed(err.to_string()),
-    }
 }
 
 /// SecretKey contains a private key of the type bound to the configured crypto.
@@ -140,6 +118,12 @@ impl SecretKey {
         // Ensure the algorithm OID matches X-Wing and extract the actual private key
         if info.algorithm.oid != OID {
             return Err(Error::UnexpectedAlgorithm);
+        }
+        // Reject v2 keys. The decoder only ever yields v1 keys without or v2
+        // keys with an embedded public key, all other combinations fail to
+        // parse, so public key presence is an exact v2 marker.
+        if info.public_key.is_some() {
+            return Err(Error::MalformedKey("unsupported PKCS#8 version".into()));
         }
         let bytes: Zeroizing<[u8; 32]> = Zeroizing::new(
             info.private_key
@@ -219,7 +203,8 @@ impl SecretKey {
         let info = [DOMAIN_PREFIX, domain].concat();
 
         // Parse the encapsulated session key
-        let session = <KEM as Kem>::EncappedKey::from_bytes(session_key).map_err(open_error)?;
+        let session = <KEM as Kem>::EncappedKey::from_bytes(session_key)
+            .map_err(|err| Error::OpenFailed(err.to_string()))?;
 
         // Create a receiver session using Base mode (X-Wing doesn't support Auth mode)
         let mut ctx = hpke::setup_receiver::<AEAD, KDF, KEM>(
@@ -228,9 +213,10 @@ impl SecretKey {
             &session,
             &info,
         )
-        .map_err(open_error)?;
+        .map_err(|err| Error::OpenFailed(err.to_string()))?;
         // Verify the construct and decrypt the message if everything checks out
-        ctx.open(msg_to_open, msg_to_auth).map_err(open_error)
+        ctx.open(msg_to_open, msg_to_auth)
+            .map_err(|err| Error::OpenFailed(err.to_string()))
     }
 
     /// new_receiver creates an HPKE receiver context for multi-message decryption
@@ -247,14 +233,15 @@ impl SecretKey {
         // Restrict the user's domain to the context of this library
         let info = [DOMAIN_PREFIX, domain].concat();
 
-        let encapped_key = <KEM as Kem>::EncappedKey::from_bytes(encap_key).map_err(open_error)?;
+        let encapped_key = <KEM as Kem>::EncappedKey::from_bytes(encap_key)
+            .map_err(|err| Error::OpenFailed(err.to_string()))?;
         let ctx = hpke::setup_receiver::<AEAD, KDF, KEM>(
             &hpke::OpModeR::Base,
             &self.inner,
             &encapped_key,
             &info,
         )
-        .map_err(open_error)?;
+        .map_err(|err| Error::OpenFailed(err.to_string()))?;
         Ok(Receiver { inner: ctx })
     }
 }
@@ -388,10 +375,12 @@ impl PublicKey {
             &info,
             &mut rng,
         )
-        .map_err(seal_error)?;
+        .map_err(|err| Error::SealFailed(err.to_string()))?;
 
         // Encrypt the messages and seal all the crypto details into a nice box
-        let enc = ctx.seal(msg_to_seal, msg_to_auth).map_err(seal_error)?;
+        let enc = ctx
+            .seal(msg_to_seal, msg_to_auth)
+            .map_err(|err| Error::SealFailed(err.to_string()))?;
 
         let mut encap_key = [0u8; 1120];
         encap_key.copy_from_slice(&key.to_bytes());
@@ -422,7 +411,7 @@ impl PublicKey {
             &info,
             &mut rng,
         )
-        .map_err(seal_error)?;
+        .map_err(|err| Error::SealFailed(err.to_string()))?;
 
         let mut encap_key = [0u8; ENCAP_KEY_SIZE];
         encap_key.copy_from_slice(&key.to_bytes());
@@ -446,7 +435,7 @@ impl Sender {
     pub fn seal(&mut self, msg_to_seal: &[u8], msg_to_auth: &[u8]) -> Result<Vec<u8>, Error> {
         self.inner
             .seal(msg_to_seal, msg_to_auth)
-            .map_err(seal_error)
+            .map_err(|err| Error::SealFailed(err.to_string()))
     }
 }
 
@@ -465,7 +454,7 @@ impl Receiver {
     pub fn open(&mut self, msg_to_open: &[u8], msg_to_auth: &[u8]) -> Result<Vec<u8>, Error> {
         self.inner
             .open(msg_to_open, msg_to_auth)
-            .map_err(open_error)
+            .map_err(|err| Error::OpenFailed(err.to_string()))
     }
 }
 
