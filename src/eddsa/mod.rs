@@ -11,12 +11,11 @@
 use crate::pem;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use der::asn1::OctetString;
+use der::asn1::{OctetString, OctetStringRef};
 use der::{Decode, Encode};
-use ed25519_dalek::ed25519::signature::rand_core::OsRng;
 use ed25519_dalek::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePublicKey};
 use ed25519_dalek::{Signer, Verifier};
-use pkcs8::PrivateKeyInfo;
+use pkcs8::PrivateKeyInfoRef;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use sha2::Digest;
 use spki::der::AnyRef;
@@ -65,10 +64,10 @@ pub struct SecretKey {
 impl SecretKey {
     /// generate creates a new, random private key.
     pub fn generate() -> SecretKey {
-        let mut rng = OsRng;
+        let mut seed = Zeroizing::new([0u8; SECRET_KEY_SIZE]);
+        getrandom::fill(seed.as_mut()).unwrap();
 
-        let key = ed25519_dalek::SigningKey::generate(&mut rng);
-        Self { inner: key }
+        Self::from_bytes(&seed)
     }
 
     /// from_bytes converts a 32-byte array into a private key.
@@ -81,7 +80,7 @@ impl SecretKey {
     /// from_der parses a DER buffer into a private key.
     pub fn from_der(der: &[u8]) -> Result<Self, Error> {
         let info =
-            PrivateKeyInfo::try_from(der).map_err(|err| Error::MalformedKey(err.to_string()))?;
+            PrivateKeyInfoRef::try_from(der).map_err(|err| Error::MalformedKey(err.to_string()))?;
 
         // Reject trailing data by verifying re-encoded length matches input
         let length = info
@@ -129,9 +128,9 @@ impl SecretKey {
             oid: OID,
             parameters: None::<AnyRef>,
         };
-        let info = PrivateKeyInfo {
+        let info = PrivateKeyInfoRef {
             algorithm: alg,
-            private_key: &inner,
+            private_key: OctetStringRef::new(&inner).unwrap(),
             public_key: None,
         };
         Zeroizing::new(info.to_der().unwrap())

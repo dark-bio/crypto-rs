@@ -10,10 +10,10 @@
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use der::asn1::OctetString;
+use der::asn1::{OctetString, OctetStringRef};
 use der::{Decode, Encode, Sequence};
 use ml_dsa::{EncodedVerifyingKey, MlDsa65};
-use pkcs8::PrivateKeyInfo;
+use pkcs8::PrivateKeyInfoRef;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use sha2::Digest;
 use spki::der::AnyRef;
@@ -97,7 +97,7 @@ impl SecretKey {
     pub fn from_der(der: &[u8]) -> Result<Self, Error> {
         // Parse the DER encoded container
         let info =
-            PrivateKeyInfo::from_der(der).map_err(|err| Error::MalformedKey(err.to_string()))?;
+            PrivateKeyInfoRef::from_der(der).map_err(|err| Error::MalformedKey(err.to_string()))?;
 
         // Reject trailing data by verifying re-encoded length matches input
         let length = info
@@ -119,7 +119,7 @@ impl SecretKey {
         // Wrap the private key in a SEQUENCE containing:
         //   - OCTET STRING (32 bytes): seed
         //   - OCTET STRING (4032 bytes): expanded key
-        let inner_key = MlDsa65PrivateKeyInner::from_der(info.private_key)
+        let inner_key = MlDsa65PrivateKeyInner::from_der(info.private_key.as_bytes())
             .map_err(|err| Error::MalformedKey(err.to_string()))?;
 
         let seed: ml_dsa::Seed = inner_key
@@ -183,9 +183,9 @@ impl SecretKey {
             oid: OID,
             parameters: None::<AnyRef>,
         };
-        let info = PrivateKeyInfo {
+        let info = PrivateKeyInfoRef {
             algorithm: alg,
-            private_key: &inner,
+            private_key: OctetStringRef::new(&inner).unwrap(),
             public_key: None,
         };
         Zeroizing::new(info.to_der().unwrap())
@@ -798,9 +798,9 @@ b2e7dd3ce3a9fc61c902a110cfb9ff3b07bf"
         let key = SecretKey::from_bytes(&[7; 32]);
         let der = key.to_der();
 
-        let mut info = PrivateKeyInfo::try_from(der.as_slice()).unwrap();
+        let mut info = PrivateKeyInfoRef::try_from(der.as_slice()).unwrap();
         let public = key.public_key().to_bytes();
-        info.public_key = Some(&public);
+        info.public_key = Some(BitStringRef::from_bytes(&public).unwrap());
         let der_v2 = info.to_der().unwrap();
 
         let err = SecretKey::from_der(&der_v2);
