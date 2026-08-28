@@ -8,23 +8,22 @@
 //!
 //! https://datatracker.ietf.org/doc/html/rfc9180
 
-// We can't use Kem for our own type, it clashes with the hpke lib stuff. Let us
-// keep our all-caps abbreviations.
+// Let us keep our all-caps abbreviations for the crypto suite parameters.
 #![allow(clippy::upper_case_acronyms)]
-
-pub mod xwing;
 
 use crate::pem;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use hpke::rand_core::SeedableRng;
 use hpke::{Deserializable, Kem, Serializable};
-use pkcs8::PrivateKeyInfo;
+use pkcs8::PrivateKeyInfoRef;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use sha2::Digest;
 use spki::der::asn1::BitStringRef;
+use spki::der::asn1::OctetStringRef;
 use spki::der::{AnyRef, Decode, Encode};
 use spki::{AlgorithmIdentifier, ObjectIdentifier, SubjectPublicKeyInfo};
+use subtle::ConstantTimeEq;
 use zeroize::Zeroizing;
 
 /// OID is the ASN.1 object identifier for X-Wing.
@@ -38,7 +37,7 @@ pub const OID: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.4.1.6225
 // - For symmetric encryption, ChaCha20 was chosen, authenticated with Poly1305,
 //   which should be more portable to systems without AES hardware acceleration.
 // - For key derivation, HKDF was chosen (pretty much the only contender).
-type KEM = xwing::Kem;
+type KEM = hpke::kem::XWing;
 type AEAD = hpke::aead::ChaCha20Poly1305;
 type KDF = hpke::kdf::HkdfSha256;
 
@@ -82,17 +81,29 @@ pub enum Error {
 }
 
 /// SecretKey contains a private key of the type bound to the configured crypto.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct SecretKey {
     inner: <KEM as Kem>::PrivateKey,
 }
 
+impl PartialEq for SecretKey {
+    /// Tests for `self` and `other` values to be equal, and is used by `==`.
+    fn eq(&self, other: &Self) -> bool {
+        self.inner.ct_eq(&other.inner).into()
+    }
+}
+
+impl Eq for SecretKey {}
+
 impl SecretKey {
     /// generate creates a new, random private key.
     pub fn generate() -> SecretKey {
-        let mut rng = rand::rng();
+        // Create a random number stream that works in WASM
+        let mut seed = [0u8; 32];
+        getrandom::fill(&mut seed).expect("Failed to get random seed");
+        let mut rng = rand_chacha::ChaCha20Rng::from_seed(seed);
 
-        let (key, _) = KEM::gen_keypair(&mut rng);
+        let (key, _) = KEM::gen_keypair_with_rng(&mut rng);
         Self { inner: key }
     }
 
@@ -106,7 +117,7 @@ impl SecretKey {
     pub fn from_der(der: &[u8]) -> Result<Self, Error> {
         // Parse the DER encoded container
         let info =
-            PrivateKeyInfo::from_der(der).map_err(|err| Error::MalformedKey(err.to_string()))?;
+            PrivateKeyInfoRef::from_der(der).map_err(|err| Error::MalformedKey(err.to_string()))?;
 
         // Reject trailing data by verifying re-encoded length matches input
         let length = info
@@ -127,6 +138,7 @@ impl SecretKey {
         }
         let bytes: Zeroizing<[u8; 32]> = Zeroizing::new(
             info.private_key
+                .as_bytes()
                 .try_into()
                 .map_err(|_| Error::MalformedKey("private key not 32 bytes".into()))?,
         );
@@ -159,9 +171,9 @@ impl SecretKey {
             parameters: None::<AnyRef>,
         };
         // Per RFC, privateKey contains the raw 32-byte seed directly
-        let info = PrivateKeyInfo {
+        let info = PrivateKeyInfoRef {
             algorithm: alg,
-            private_key: bytes.as_slice(),
+            private_key: OctetStringRef::new(bytes.as_slice()).unwrap(),
             public_key: None,
         };
         Zeroizing::new(info.to_der().unwrap())
@@ -369,7 +381,7 @@ impl PublicKey {
         let mut rng = rand_chacha::ChaCha20Rng::from_seed(seed);
 
         // Create a sender session using Base mode (X-Wing doesn't support Auth mode)
-        let (key, mut ctx) = hpke::setup_sender::<AEAD, KDF, KEM, _>(
+        let (key, mut ctx) = hpke::setup_sender_with_rng::<AEAD, KDF, KEM>(
             &hpke::OpModeS::Base,
             &self.inner,
             &info,
@@ -405,7 +417,7 @@ impl PublicKey {
         getrandom::fill(&mut seed).expect("Failed to get random seed");
         let mut rng = rand_chacha::ChaCha20Rng::from_seed(seed);
 
-        let (key, ctx) = hpke::setup_sender::<AEAD, KDF, KEM, _>(
+        let (key, ctx) = hpke::setup_sender_with_rng::<AEAD, KDF, KEM>(
             &hpke::OpModeS::Base,
             &self.inner,
             &info,

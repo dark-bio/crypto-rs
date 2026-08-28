@@ -12,7 +12,7 @@ use crate::pem;
 use crate::{eddsa, mldsa};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use der::asn1::BitStringRef;
+use der::asn1::{BitStringRef, OctetStringRef};
 use der::{AnyRef, Decode, Encode};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use sha2::Digest;
@@ -104,7 +104,7 @@ impl SecretKey {
     /// from_der parses a DER buffer into a private key.
     pub fn from_der(der: &[u8]) -> Result<Self, Error> {
         // Parse the DER encoded container
-        let info = pkcs8::PrivateKeyInfo::from_der(der)
+        let info = pkcs8::PrivateKeyInfoRef::from_der(der)
             .map_err(|err| Error::MalformedKey(err.to_string()))?;
 
         // Reject trailing data by verifying re-encoded length matches input
@@ -126,7 +126,7 @@ impl SecretKey {
         }
         // Private key is ML-DSA seed (32) || Ed25519 seed (32) = 64 bytes
         let seed: Zeroizing<[u8; 64]> =
-            Zeroizing::new(info.private_key.try_into().map_err(|_| {
+            Zeroizing::new(info.private_key.as_bytes().try_into().map_err(|_| {
                 Error::MalformedKey("composite private key must be 64 bytes".into())
             })?);
 
@@ -163,9 +163,9 @@ impl SecretKey {
         // The private key is ML-DSA seed (32) || Ed25519 seed (32) = 64 bytes
         let key_bytes = self.to_bytes();
 
-        let info = pkcs8::PrivateKeyInfo {
+        let info = pkcs8::PrivateKeyInfoRef {
             algorithm: alg,
-            private_key: key_bytes.as_slice(),
+            private_key: OctetStringRef::new(key_bytes.as_slice()).unwrap(),
             public_key: None,
         };
         Zeroizing::new(info.to_der().unwrap())
