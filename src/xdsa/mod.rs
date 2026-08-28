@@ -16,7 +16,7 @@ use der::asn1::{BitStringRef, OctetStringRef};
 use der::{AnyRef, Decode, Encode};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use sha2::Digest;
-use spki::{AlgorithmIdentifier, ObjectIdentifier, SubjectPublicKeyInfo};
+use spki::{ObjectIdentifier, SubjectPublicKeyInfo};
 use zeroize::Zeroizing;
 
 /// Prefix is the byte encoding of "CompositeAlgorithmSignatures2025" per the
@@ -123,6 +123,12 @@ impl SecretKey {
         // parse, so public key presence is an exact v2 marker.
         if info.public_key.is_some() {
             return Err(Error::MalformedKey("unsupported PKCS#8 version".into()));
+        }
+        // Ensure no algorithm parameters are present, none are allowed
+        if info.algorithm.parameters.is_some() {
+            return Err(Error::MalformedKey(
+                "unexpected algorithm parameters".into(),
+            ));
         }
         // Private key is ML-DSA seed (32) || Ed25519 seed (32) = 64 bytes
         let seed: Zeroizing<[u8; 64]> =
@@ -237,9 +243,8 @@ impl PublicKey {
     /// from_der parses a DER buffer into a public key.
     pub fn from_der(der: &[u8]) -> Result<Self, Error> {
         // Parse the DER encoded container
-        let info: SubjectPublicKeyInfo<AlgorithmIdentifier<AnyRef>, BitStringRef> =
-            SubjectPublicKeyInfo::from_der(der)
-                .map_err(|err| Error::MalformedKey(err.to_string()))?;
+        let info: SubjectPublicKeyInfo<AnyRef, BitStringRef> = SubjectPublicKeyInfo::from_der(der)
+            .map_err(|err| Error::MalformedKey(err.to_string()))?;
 
         // Reject trailing data by verifying re-encoded length matches input
         let length = info
@@ -251,6 +256,12 @@ impl PublicKey {
         // Ensure the algorithm OID matches MLDSA65-Ed25519-SHA512
         if info.algorithm.oid != OID {
             return Err(Error::UnexpectedAlgorithm);
+        }
+        // Ensure no algorithm parameters are present, none are allowed
+        if info.algorithm.parameters.is_some() {
+            return Err(Error::MalformedKey(
+                "unexpected algorithm parameters".into(),
+            ));
         }
         // Public key is ML-DSA-65 (1952 bytes) || Ed25519 (32 bytes) = 1984 bytes
         let key_bytes: [u8; 1984] = info
@@ -874,5 +885,50 @@ f6e178bcc044204110444ea2b7e80548769ae5010c22707493adb0baf55f\
 
         // Verify the composed signature with the composed public key
         composite_pub.verify(message, &composite_sig).unwrap();
+    }
+
+    // Tests that a public key whose algorithm identifier carries parameters is
+    // rejected.
+    #[test]
+    fn test_publickey_der_rejects_params() {
+        // Rebuild a valid public key with injected NULL algorithm parameters
+        let key = SecretKey::generate().public_key();
+        let der = key.to_der();
+
+        let mut info: SubjectPublicKeyInfo<AnyRef, BitStringRef> =
+            SubjectPublicKeyInfo::from_der(&der).unwrap();
+        info.algorithm.parameters = Some(AnyRef::NULL);
+        let der_bad = info.to_der().unwrap();
+
+        let err = PublicKey::from_der(&der_bad);
+        assert!(matches!(err, Err(Error::MalformedKey(_))));
+    }
+
+    // Tests that a private key whose algorithm identifier carries parameters is
+    // rejected.
+    #[test]
+    fn test_secretkey_der_rejects_params() {
+        // Rebuild a valid private key with NULL algorithm parameters spliced in
+        let der = SecretKey::from_bytes(&[7; 64]).to_der().to_vec();
+        let long = der[1] == 0x82;
+        let algid_pos = if long { 7 } else { 5 };
+        let algid_len = der[algid_pos + 1] as usize;
+        let oid_pos = algid_pos + 2;
+        let oid_len = 2 + der[oid_pos + 1] as usize;
+        let after_oid = oid_pos + oid_len;
+
+        let mut bad = der.clone();
+        bad.splice(after_oid..after_oid, [0x05, 0x00]);
+        bad[algid_pos + 1] = (algid_len + 2) as u8;
+        if long {
+            let grown = (((der[2] as usize) << 8) | der[3] as usize) + 2;
+            bad[2] = (grown >> 8) as u8;
+            bad[3] = (grown & 0xff) as u8;
+        } else {
+            bad[1] = (der[1] as usize + 2) as u8;
+        }
+
+        let err = SecretKey::from_der(&bad);
+        assert!(matches!(err, Err(Error::MalformedKey(_))));
     }
 }
