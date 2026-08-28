@@ -22,19 +22,24 @@
 //
 // Source: https://github.com/str4d/rage/blob/v0.12.0/age/src/primitives/stream.rs
 //
-// Local changes: the i18n error strings are plain string literals.
+// Local changes:
+//   - the i18n error strings are plain string literals
+//   - secrecy types are imported from the secrecy crate directly instead of
+//     through the age-core re-export; the HKDF doc links point at RFC 5869
+//   - chacha20poly1305 is tracked at 0.11 ahead of upstream's 0.10, where the
+//     aead crate renamed GenericArray to Array
 
 #![allow(clippy::all)]
 #![allow(unexpected_cfgs)]
 
 //! I/O helper structs for age file encryption and decryption.
 
-use age_core::secrecy::{ExposeSecret, SecretSlice};
 use chacha20poly1305::{
     ChaCha20Poly1305,
-    aead::{Aead, KeyInit, KeySizeUser, generic_array::GenericArray},
+    aead::{Aead, KeyInit, KeySizeUser, array::Array},
 };
 use pin_project::pin_project;
+use secrecy::{ExposeSecret, SecretSlice};
 use std::cmp;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use zeroize::Zeroize;
@@ -52,9 +57,7 @@ const CHUNK_SIZE: usize = 64 * 1024;
 const TAG_SIZE: usize = 16;
 const ENCRYPTED_CHUNK_SIZE: usize = CHUNK_SIZE + TAG_SIZE;
 
-pub(crate) struct PayloadKey(
-    pub(crate) GenericArray<u8, <ChaCha20Poly1305 as KeySizeUser>::KeySize>,
-);
+pub(crate) struct PayloadKey(pub(crate) Array<u8, <ChaCha20Poly1305 as KeySizeUser>::KeySize>);
 
 impl Drop for PayloadKey {
     fn drop(&mut self) {
@@ -136,7 +139,7 @@ impl Stream {
     /// achieved by deriving the key with [`HKDF`] from both a random file key and a
     /// random nonce.
     ///
-    /// [`HKDF`]: age_core::primitives::hkdf
+    /// [`HKDF`]: https://datatracker.ietf.org/doc/html/rfc5869
     pub(crate) fn encrypt<W: Write>(key: PayloadKey, inner: W) -> StreamWriter<W> {
         StreamWriter {
             stream: Self::new(key),
@@ -153,7 +156,7 @@ impl Stream {
     /// achieved by deriving the key with [`HKDF`] from both a random file key and a
     /// random nonce.
     ///
-    /// [`HKDF`]: age_core::primitives::hkdf
+    /// [`HKDF`]: https://datatracker.ietf.org/doc/html/rfc5869
     #[cfg(feature = "async")]
     #[cfg_attr(docsrs, doc(cfg(feature = "async")))]
     pub(crate) fn encrypt_async<W: AsyncWrite>(key: PayloadKey, inner: W) -> StreamWriter<W> {
@@ -171,7 +174,7 @@ impl Stream {
     /// achieved by deriving the key with [`HKDF`] from both a random file key and a
     /// random nonce.
     ///
-    /// [`HKDF`]: age_core::primitives::hkdf
+    /// [`HKDF`]: https://datatracker.ietf.org/doc/html/rfc5869
     pub(crate) fn decrypt<R: Read>(key: PayloadKey, inner: R) -> StreamReader<R> {
         StreamReader {
             stream: Self::new(key),
@@ -191,7 +194,7 @@ impl Stream {
     /// achieved by deriving the key with [`HKDF`] from both a random file key and a
     /// random nonce.
     ///
-    /// [`HKDF`]: age_core::primitives::hkdf
+    /// [`HKDF`]: https://datatracker.ietf.org/doc/html/rfc5869
     #[cfg(feature = "async")]
     #[cfg_attr(docsrs, doc(cfg(feature = "async")))]
     pub(crate) fn decrypt_async<R: AsyncRead>(key: PayloadKey, inner: R) -> StreamReader<R> {
@@ -714,7 +717,7 @@ impl<R: Read + Seek> Seek for StreamReader<R> {
 
 #[cfg(test)]
 mod tests {
-    use age_core::secrecy::ExposeSecret;
+    use secrecy::ExposeSecret;
     use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
 
     use super::{CHUNK_SIZE, PayloadKey, Stream, TAG_SIZE};
