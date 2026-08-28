@@ -72,7 +72,6 @@ der = { version = "0.8.1", features = ["derive"], optional = true }
 ed25519-dalek = { version = "3.0.0", features = ["pem", "rand_core"], optional = true }
 getrandom = { version = "0.4.3", features = ["wasm_js"] }
 getrandom02 = { package = "getrandom", version = "0.2", features = ["js"] }
-getrandom03 = { package = "getrandom", version = "0.3.4", features = ["wasm_js"] }
 hkdf = { version = "0.13.0", optional = true }
 hpke = { version = "0.14.0", default-features = false, features = ["alloc", "mlkem", "x25519", "chacha", "hkdfsha2"], optional = true }
 ml-dsa = { version = "0.1.1", features = ["rand_core"], optional = true }
