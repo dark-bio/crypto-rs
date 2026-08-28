@@ -8,11 +8,31 @@
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use std::error::Error;
 
 const PEM_HEADER: &[u8] = b"-----BEGIN ";
 const PEM_FOOTER: &[u8] = b"-----END ";
 const PEM_ENDING: &[u8] = b"-----";
+
+/// Error is the failures that can occur during PEM operations.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum Error {
+    #[error("missing PEM header")]
+    MissingHeader,
+    #[error("malformed PEM header: {0}")]
+    MalformedHeader(String),
+    #[error("empty PEM block type")]
+    EmptyBlockType,
+    #[error("malformed PEM block type")]
+    MalformedBlockType,
+    #[error("missing PEM footer")]
+    MissingFooter,
+    #[error("trailing data after PEM block")]
+    TrailingData,
+    #[error("malformed PEM body: {0}")]
+    MalformedBody(String),
+    #[error("malformed base64 payload: {0}")]
+    MalformedPayload(String),
+}
 
 /// Decodes a single PEM block with strict validation.
 ///
@@ -25,16 +45,16 @@ const PEM_ENDING: &[u8] = b"-----";
 ///   - No trailing data after the PEM block
 ///
 /// Returns (kind, data) tuple on success.
-pub fn decode(data: &[u8]) -> Result<(String, Vec<u8>), Box<dyn Error>> {
+pub fn decode(data: &[u8]) -> Result<(String, Vec<u8>), Error> {
     // Must start with header immediately (no leading whitespace)
     if !data.starts_with(PEM_HEADER) {
-        return Err("pem: missing PEM header".into());
+        return Err(Error::MissingHeader);
     }
     // Find the end of header line (first \n)
     let header_end = data
         .iter()
         .position(|&b| b == b'\n')
-        .ok_or("pem: incomplete PEM header")?;
+        .ok_or_else(|| Error::MalformedHeader("incomplete header line".into()))?;
 
     // Detect line ending style from first line
     let line_ending: &[u8] = if header_end > 0 && data[header_end - 1] == b'\r' {
@@ -52,13 +72,13 @@ pub fn decode(data: &[u8]) -> Result<(String, Vec<u8>), Box<dyn Error>> {
 
     // Parse the block type from the header
     if !header.starts_with(PEM_HEADER) || !header.ends_with(PEM_ENDING) {
-        return Err("pem: malformed PEM header".into());
+        return Err(Error::MalformedHeader("unterminated block type".into()));
     }
     let block_type = &header[PEM_HEADER.len()..header.len() - PEM_ENDING.len()];
     if block_type.is_empty() {
-        return Err("pem: empty PEM block type".into());
+        return Err(Error::EmptyBlockType);
     }
-    let kind = String::from_utf8(block_type.to_vec())?;
+    let kind = String::from_utf8(block_type.to_vec()).map_err(|_| Error::MalformedBlockType)?;
 
     // Build expected footer
     let mut footer = Vec::with_capacity(PEM_FOOTER.len() + block_type.len() + PEM_ENDING.len());
@@ -71,14 +91,14 @@ pub fn decode(data: &[u8]) -> Result<(String, Vec<u8>), Box<dyn Error>> {
     let footer_idx = search_area
         .windows(footer.len())
         .position(|w| w == footer.as_slice())
-        .ok_or("pem: missing PEM footer")?;
+        .ok_or(Error::MissingFooter)?;
     let footer_start = header_end + 1 + footer_idx;
     let footer_end = footer_start + footer.len();
 
     // Validate what comes after footer: nothing or same line ending
     let rest = &data[footer_end..];
     if !rest.is_empty() && rest != line_ending {
-        return Err("pem: trailing data after PEM block".into());
+        return Err(Error::TrailingData);
     }
 
     // Extract body (between header and footer)
@@ -86,10 +106,10 @@ pub fn decode(data: &[u8]) -> Result<(String, Vec<u8>), Box<dyn Error>> {
 
     // Body must end with the line ending (the line before footer)
     if body.is_empty() {
-        return Err("pem: empty PEM body".into());
+        return Err(Error::MalformedBody("empty body".into()));
     }
     if !body.ends_with(line_ending) {
-        return Err("pem: body must end with newline before footer".into());
+        return Err(Error::MalformedBody("missing newline before footer".into()));
     }
     let body = &body[..body.len() - line_ending.len()];
 
@@ -106,7 +126,9 @@ pub fn decode(data: &[u8]) -> Result<(String, Vec<u8>), Box<dyn Error>> {
         .copied()
         .collect();
 
-    let decoded = STANDARD.decode(&b64)?;
+    let decoded = STANDARD
+        .decode(&b64)
+        .map_err(|err| Error::MalformedPayload(err.to_string()))?;
 
     Ok((kind, decoded))
 }

@@ -18,14 +18,13 @@ use crate::pem;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use hpke::rand_core::SeedableRng;
-use hpke::{Deserializable, HpkeError, Kem, Serializable};
+use hpke::{Deserializable, Kem, Serializable};
 use pkcs8::PrivateKeyInfo;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use sha2::Digest;
 use spki::der::asn1::BitStringRef;
 use spki::der::{AnyRef, Decode, Encode};
 use spki::{AlgorithmIdentifier, ObjectIdentifier, SubjectPublicKeyInfo};
-use std::error::Error;
 use zeroize::Zeroizing;
 
 /// OID is the ASN.1 object identifier for X-Wing.
@@ -63,6 +62,25 @@ pub const ENCAP_KEY_SIZE: usize = 1120;
 /// Size of the fingerprint in bytes.
 pub const FINGERPRINT_SIZE: usize = 32;
 
+/// Error is the failures that can occur during xHPKE operations.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum Error {
+    #[error("pem: {0}")]
+    Pem(#[from] pem::Error),
+    #[error("invalid PEM tag {0}")]
+    UnexpectedPemTag(String),
+    #[error("not an X-Wing key")]
+    UnexpectedAlgorithm,
+    #[error("malformed key: {0}")]
+    MalformedKey(String),
+    #[error("trailing data in key encoding")]
+    TrailingData,
+    #[error("sealing failed: {0}")]
+    SealFailed(String),
+    #[error("opening failed: {0}")]
+    OpenFailed(String),
+}
+
 /// SecretKey contains a private key of the type bound to the configured crypto.
 #[derive(Clone, PartialEq, Eq)]
 pub struct SecretKey {
@@ -85,28 +103,42 @@ impl SecretKey {
     }
 
     /// from_der parses a DER buffer into a private key.
-    pub fn from_der(der: &[u8]) -> Result<Self, Box<dyn Error>> {
+    pub fn from_der(der: &[u8]) -> Result<Self, Error> {
         // Parse the DER encoded container
-        let info = PrivateKeyInfo::from_der(der)?;
+        let info =
+            PrivateKeyInfo::from_der(der).map_err(|err| Error::MalformedKey(err.to_string()))?;
 
         // Reject trailing data by verifying re-encoded length matches input
-        if info.encoded_len()?.try_into() != Ok(der.len()) {
-            return Err("trailing data in private key".into());
+        let length = info
+            .encoded_len()
+            .map_err(|err| Error::MalformedKey(err.to_string()))?;
+        if length.try_into() != Ok(der.len()) {
+            return Err(Error::TrailingData);
         }
         // Ensure the algorithm OID matches X-Wing and extract the actual private key
         if info.algorithm.oid != OID {
-            return Err("not an X-Wing private key".into());
+            return Err(Error::UnexpectedAlgorithm);
         }
-        let bytes: Zeroizing<[u8; 32]> = Zeroizing::new(info.private_key.try_into()?);
+        // Reject v2 keys. The decoder only ever yields v1 keys without or v2
+        // keys with an embedded public key, all other combinations fail to
+        // parse, so public key presence is an exact v2 marker.
+        if info.public_key.is_some() {
+            return Err(Error::MalformedKey("unsupported PKCS#8 version".into()));
+        }
+        let bytes: Zeroizing<[u8; 32]> = Zeroizing::new(
+            info.private_key
+                .try_into()
+                .map_err(|_| Error::MalformedKey("private key not 32 bytes".into()))?,
+        );
         Ok(SecretKey::from_bytes(&bytes))
     }
 
     /// from_pem parses a PEM string into a private key.
-    pub fn from_pem(pem_str: &str) -> Result<Self, Box<dyn Error>> {
+    pub fn from_pem(pem_str: &str) -> Result<Self, Error> {
         // Crack open the PEM to get to the private key info
         let (kind, data) = pem::decode(pem_str.as_bytes())?;
         if kind != "PRIVATE KEY" {
-            return Err(format!("invalid PEM tag {}", kind).into());
+            return Err(Error::UnexpectedPemTag(kind));
         }
         // Parse the DER content
         Self::from_der(&Zeroizing::new(data))
@@ -166,12 +198,13 @@ impl SecretKey {
         msg_to_open: &[u8],
         msg_to_auth: &[u8],
         domain: &[u8],
-    ) -> Result<Vec<u8>, HpkeError> {
+    ) -> Result<Vec<u8>, Error> {
         // Restrict the user's domain to the context of this library
         let info = [DOMAIN_PREFIX, domain].concat();
 
         // Parse the encapsulated session key
-        let session = <KEM as Kem>::EncappedKey::from_bytes(session_key)?;
+        let session = <KEM as Kem>::EncappedKey::from_bytes(session_key)
+            .map_err(|err| Error::OpenFailed(err.to_string()))?;
 
         // Create a receiver session using Base mode (X-Wing doesn't support Auth mode)
         let mut ctx = hpke::setup_receiver::<AEAD, KDF, KEM>(
@@ -179,9 +212,11 @@ impl SecretKey {
             &self.inner,
             &session,
             &info,
-        )?;
+        )
+        .map_err(|err| Error::OpenFailed(err.to_string()))?;
         // Verify the construct and decrypt the message if everything checks out
         ctx.open(msg_to_open, msg_to_auth)
+            .map_err(|err| Error::OpenFailed(err.to_string()))
     }
 
     /// new_receiver creates an HPKE receiver context for multi-message decryption
@@ -194,17 +229,19 @@ impl SecretKey {
         &self,
         encap_key: &[u8; ENCAP_KEY_SIZE],
         domain: &[u8],
-    ) -> Result<Receiver, HpkeError> {
+    ) -> Result<Receiver, Error> {
         // Restrict the user's domain to the context of this library
         let info = [DOMAIN_PREFIX, domain].concat();
 
-        let encapped_key = <KEM as Kem>::EncappedKey::from_bytes(encap_key)?;
+        let encapped_key = <KEM as Kem>::EncappedKey::from_bytes(encap_key)
+            .map_err(|err| Error::OpenFailed(err.to_string()))?;
         let ctx = hpke::setup_receiver::<AEAD, KDF, KEM>(
             &hpke::OpModeR::Base,
             &self.inner,
             &encapped_key,
             &info,
-        )?;
+        )
+        .map_err(|err| Error::OpenFailed(err.to_string()))?;
         Ok(Receiver { inner: ctx })
     }
 }
@@ -220,43 +257,50 @@ impl PublicKey {
     ///
     /// This validates the ML-KEM-768 component by checking that all polynomial
     /// coefficients are in the valid range [0, 3329). This matches Go's validation.
-    pub fn from_bytes(bin: &[u8; PUBLIC_KEY_SIZE]) -> Result<Self, Box<dyn Error>> {
+    pub fn from_bytes(bin: &[u8; PUBLIC_KEY_SIZE]) -> Result<Self, Error> {
         // Validate ML-KEM-768 encapsulation key (first 1184 bytes).
         // The key contains 3 polynomials of 256 coefficients each, encoded as 12-bit values.
         // Each coefficient must be < 3329 (the modulus q).
         validate_mlkem768_encapsulation_key(&bin[..1184])?;
 
-        let inner = <KEM as Kem>::PublicKey::from_bytes(bin)?;
+        let inner = <KEM as Kem>::PublicKey::from_bytes(bin)
+            .map_err(|err| Error::MalformedKey(err.to_string()))?;
         Ok(Self { inner })
     }
 
     /// from_der parses a DER buffer into a public key.
-    pub fn from_der(der: &[u8]) -> Result<Self, Box<dyn Error>> {
+    pub fn from_der(der: &[u8]) -> Result<Self, Error> {
         // Parse the DER encoded container
         let info: SubjectPublicKeyInfo<AlgorithmIdentifier<AnyRef>, BitStringRef> =
-            SubjectPublicKeyInfo::from_der(der)?;
+            SubjectPublicKeyInfo::from_der(der)
+                .map_err(|err| Error::MalformedKey(err.to_string()))?;
 
         // Reject trailing data by verifying re-encoded length matches input
-        if info.encoded_len()?.try_into() != Ok(der.len()) {
-            return Err("trailing data in public key".into());
+        let length = info
+            .encoded_len()
+            .map_err(|err| Error::MalformedKey(err.to_string()))?;
+        if length.try_into() != Ok(der.len()) {
+            return Err(Error::TrailingData);
         }
         // Ensure the algorithm OID matches X-Wing and extract the actual public key
         if info.algorithm.oid != OID {
-            return Err("not an X-Wing public key".into());
+            return Err(Error::UnexpectedAlgorithm);
         }
         let key = info.subject_public_key.as_bytes().unwrap();
 
         // Public key extracted, return the wrapper
-        let bytes: [u8; 1216] = key.try_into()?;
+        let bytes: [u8; 1216] = key
+            .try_into()
+            .map_err(|_| Error::MalformedKey("public key not 1216 bytes".into()))?;
         PublicKey::from_bytes(&bytes)
     }
 
     /// from_pem parses a PEM string into a public key.
-    pub fn from_pem(pem_str: &str) -> Result<Self, Box<dyn Error>> {
+    pub fn from_pem(pem_str: &str) -> Result<Self, Error> {
         // Crack open the PEM to get to the public key info
         let (kind, data) = pem::decode(pem_str.as_bytes())?;
         if kind != "PUBLIC KEY" {
-            return Err(format!("invalid PEM tag {}", kind).into());
+            return Err(Error::UnexpectedPemTag(kind));
         }
         // Parse the DER content
         Self::from_der(&data)
@@ -315,7 +359,7 @@ impl PublicKey {
         msg_to_seal: &[u8],
         msg_to_auth: &[u8],
         domain: &[u8],
-    ) -> Result<([u8; ENCAP_KEY_SIZE], Vec<u8>), HpkeError> {
+    ) -> Result<([u8; ENCAP_KEY_SIZE], Vec<u8>), Error> {
         // Restrict the user's domain to the context of this library
         let info = [DOMAIN_PREFIX, domain].concat();
 
@@ -330,10 +374,13 @@ impl PublicKey {
             &self.inner,
             &info,
             &mut rng,
-        )?;
+        )
+        .map_err(|err| Error::SealFailed(err.to_string()))?;
 
         // Encrypt the messages and seal all the crypto details into a nice box
-        let enc = ctx.seal(msg_to_seal, msg_to_auth)?;
+        let enc = ctx
+            .seal(msg_to_seal, msg_to_auth)
+            .map_err(|err| Error::SealFailed(err.to_string()))?;
 
         let mut encap_key = [0u8; 1120];
         encap_key.copy_from_slice(&key.to_bytes());
@@ -349,7 +396,7 @@ impl PublicKey {
     ///
     /// Note: X-Wing uses Base mode (no sender authentication). The recipient
     /// cannot verify the sender's identity from the context alone.
-    pub fn new_sender(&self, domain: &[u8]) -> Result<(Sender, [u8; ENCAP_KEY_SIZE]), HpkeError> {
+    pub fn new_sender(&self, domain: &[u8]) -> Result<(Sender, [u8; ENCAP_KEY_SIZE]), Error> {
         // Restrict the user's domain to the context of this library
         let info = [DOMAIN_PREFIX, domain].concat();
 
@@ -363,7 +410,8 @@ impl PublicKey {
             &self.inner,
             &info,
             &mut rng,
-        )?;
+        )
+        .map_err(|err| Error::SealFailed(err.to_string()))?;
 
         let mut encap_key = [0u8; ENCAP_KEY_SIZE];
         encap_key.copy_from_slice(&key.to_bytes());
@@ -384,8 +432,10 @@ pub struct Sender {
 
 impl Sender {
     /// seal encrypts a message using the next nonce in the sequence.
-    pub fn seal(&mut self, msg_to_seal: &[u8], msg_to_auth: &[u8]) -> Result<Vec<u8>, HpkeError> {
-        self.inner.seal(msg_to_seal, msg_to_auth)
+    pub fn seal(&mut self, msg_to_seal: &[u8], msg_to_auth: &[u8]) -> Result<Vec<u8>, Error> {
+        self.inner
+            .seal(msg_to_seal, msg_to_auth)
+            .map_err(|err| Error::SealFailed(err.to_string()))
     }
 }
 
@@ -401,8 +451,10 @@ pub struct Receiver {
 
 impl Receiver {
     /// open decrypts a message using the next nonce in the sequence.
-    pub fn open(&mut self, msg_to_open: &[u8], msg_to_auth: &[u8]) -> Result<Vec<u8>, HpkeError> {
-        self.inner.open(msg_to_open, msg_to_auth)
+    pub fn open(&mut self, msg_to_open: &[u8], msg_to_auth: &[u8]) -> Result<Vec<u8>, Error> {
+        self.inner
+            .open(msg_to_open, msg_to_auth)
+            .map_err(|err| Error::OpenFailed(err.to_string()))
     }
 }
 
@@ -505,7 +557,7 @@ impl crate::cbor::Decode for Fingerprint {
 ///
 /// The encapsulation key is 1184 bytes: 3 polynomials × 256 coefficients × 12 bits
 /// = 1152 bytes for the coefficient vectors, plus 32 bytes for the seed ρ.
-fn validate_mlkem768_encapsulation_key(key: &[u8]) -> Result<(), Box<dyn Error>> {
+fn validate_mlkem768_encapsulation_key(key: &[u8]) -> Result<(), Error> {
     const Q: u16 = 3329;
 
     // Process 3 bytes at a time (24 bits = 2 coefficients of 12 bits each)
@@ -517,10 +569,16 @@ fn validate_mlkem768_encapsulation_key(key: &[u8]) -> Result<(), Box<dyn Error>>
         let coeff2 = (u16::from(chunk[1]) >> 4) | (u16::from(chunk[2]) << 4);
 
         if coeff1 >= Q {
-            return Err(format!("invalid ML-KEM coefficient: {} >= {}", coeff1, Q).into());
+            return Err(Error::MalformedKey(format!(
+                "invalid ML-KEM coefficient: {} >= {}",
+                coeff1, Q
+            )));
         }
         if coeff2 >= Q {
-            return Err(format!("invalid ML-KEM coefficient: {} >= {}", coeff2, Q).into());
+            return Err(Error::MalformedKey(format!(
+                "invalid ML-KEM coefficient: {} >= {}",
+                coeff2, Q
+            )));
         }
     }
     Ok(())

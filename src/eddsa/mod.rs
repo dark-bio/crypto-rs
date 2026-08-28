@@ -15,14 +15,13 @@ use der::asn1::OctetString;
 use der::{Decode, Encode};
 use ed25519_dalek::ed25519::signature::rand_core::OsRng;
 use ed25519_dalek::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePublicKey};
-use ed25519_dalek::{SignatureError, Signer, Verifier};
+use ed25519_dalek::{Signer, Verifier};
 use pkcs8::PrivateKeyInfo;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use sha2::Digest;
 use spki::der::AnyRef;
 use spki::der::asn1::BitStringRef;
 use spki::{AlgorithmIdentifier, ObjectIdentifier, SubjectPublicKeyInfo};
-use std::error::Error;
 use zeroize::Zeroizing;
 
 /// OID is the ASN.1 object identifier for Ed25519.
@@ -39,6 +38,23 @@ pub const SIGNATURE_SIZE: usize = 64;
 
 /// Size of a fingerprint in bytes.
 pub const FINGERPRINT_SIZE: usize = 32;
+
+/// Error is the failures that can occur during EdDSA operations.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum Error {
+    #[error("pem: {0}")]
+    Pem(#[from] pem::Error),
+    #[error("invalid PEM tag {0}")]
+    UnexpectedPemTag(String),
+    #[error("not an Ed25519 key")]
+    UnexpectedAlgorithm,
+    #[error("malformed key: {0}")]
+    MalformedKey(String),
+    #[error("trailing data in key encoding")]
+    TrailingData,
+    #[error("signature verification failed")]
+    InvalidSignature,
+}
 
 /// SecretKey contains an Ed25519 private key usable for signing.
 #[derive(Clone)]
@@ -63,25 +79,37 @@ impl SecretKey {
     }
 
     /// from_der parses a DER buffer into a private key.
-    pub fn from_der(der: &[u8]) -> Result<Self, Box<dyn Error>> {
-        let info = PrivateKeyInfo::try_from(der)?;
+    pub fn from_der(der: &[u8]) -> Result<Self, Error> {
+        let info =
+            PrivateKeyInfo::try_from(der).map_err(|err| Error::MalformedKey(err.to_string()))?;
 
         // Reject trailing data by verifying re-encoded length matches input
-        if info.encoded_len()?.try_into() != Ok(der.len()) {
-            return Err("trailing data in private key".into());
+        let length = info
+            .encoded_len()
+            .map_err(|err| Error::MalformedKey(err.to_string()))?;
+        if length.try_into() != Ok(der.len()) {
+            return Err(Error::TrailingData);
         }
+        // Ensure the algorithm OID matches Ed25519
+        if info.algorithm.oid != OID {
+            return Err(Error::UnexpectedAlgorithm);
+        }
+        // Reject v2 keys. The decoder only ever yields v1 keys without or v2
+        // keys with an embedded public key, all other combinations fail to
+        // parse, so public key presence is an exact v2 marker.
         if info.public_key.is_some() {
-            return Err("embedded public key not supported".into());
+            return Err(Error::MalformedKey("unsupported PKCS#8 version".into()));
         }
-        let inner = ed25519_dalek::SigningKey::from_pkcs8_der(der)?;
+        let inner = ed25519_dalek::SigningKey::from_pkcs8_der(der)
+            .map_err(|err| Error::MalformedKey(err.to_string()))?;
         Ok(Self { inner })
     }
 
     /// from_pem parses a PEM string into a private key.
-    pub fn from_pem(pem_str: &str) -> Result<Self, Box<dyn Error>> {
+    pub fn from_pem(pem_str: &str) -> Result<Self, Error> {
         let (kind, data) = pem::decode(pem_str.as_bytes())?;
         if kind != "PRIVATE KEY" {
-            return Err(format!("invalid PEM tag {}", kind).into());
+            return Err(Error::UnexpectedPemTag(kind));
         }
         Self::from_der(&Zeroizing::new(data))
     }
@@ -141,28 +169,38 @@ pub struct PublicKey {
 
 impl PublicKey {
     /// from_bytes converts a 32-byte array into a public key.
-    pub fn from_bytes(bin: &[u8; PUBLIC_KEY_SIZE]) -> Result<Self, Box<dyn Error>> {
-        let inner = ed25519_dalek::VerifyingKey::from_bytes(bin)?;
+    pub fn from_bytes(bin: &[u8; PUBLIC_KEY_SIZE]) -> Result<Self, Error> {
+        let inner = ed25519_dalek::VerifyingKey::from_bytes(bin)
+            .map_err(|err| Error::MalformedKey(err.to_string()))?;
         Ok(Self { inner })
     }
 
     /// from_der parses a DER buffer into a public key.
-    pub fn from_der(der: &[u8]) -> Result<Self, Box<dyn Error>> {
+    pub fn from_der(der: &[u8]) -> Result<Self, Error> {
         // Parse with SPKI to check for trailing data
         let info: SubjectPublicKeyInfo<AlgorithmIdentifier<AnyRef>, BitStringRef> =
-            SubjectPublicKeyInfo::from_der(der)?;
-        if info.encoded_len()?.try_into() != Ok(der.len()) {
-            return Err("trailing data in public key".into());
+            SubjectPublicKeyInfo::from_der(der)
+                .map_err(|err| Error::MalformedKey(err.to_string()))?;
+        let length = info
+            .encoded_len()
+            .map_err(|err| Error::MalformedKey(err.to_string()))?;
+        if length.try_into() != Ok(der.len()) {
+            return Err(Error::TrailingData);
         }
-        let inner = ed25519_dalek::VerifyingKey::from_public_key_der(der)?;
+        // Ensure the algorithm OID matches Ed25519
+        if info.algorithm.oid != OID {
+            return Err(Error::UnexpectedAlgorithm);
+        }
+        let inner = ed25519_dalek::VerifyingKey::from_public_key_der(der)
+            .map_err(|err| Error::MalformedKey(err.to_string()))?;
         Ok(Self { inner })
     }
 
     /// from_pem parses a PEM string into a public key.
-    pub fn from_pem(pem_str: &str) -> Result<Self, Box<dyn Error>> {
+    pub fn from_pem(pem_str: &str) -> Result<Self, Error> {
         let (kind, data) = pem::decode(pem_str.as_bytes())?;
         if kind != "PUBLIC KEY" {
-            return Err(format!("invalid PEM tag {}", kind).into());
+            return Err(Error::UnexpectedPemTag(kind));
         }
         Self::from_der(&data)
     }
@@ -191,9 +229,11 @@ impl PublicKey {
     }
 
     /// verify verifies a digital signature.
-    pub fn verify(&self, message: &[u8], signature: &Signature) -> Result<(), SignatureError> {
+    pub fn verify(&self, message: &[u8], signature: &Signature) -> Result<(), Error> {
         let sig = ed25519_dalek::Signature::from_bytes(&signature.to_bytes());
-        self.inner.verify(message, &sig)
+        self.inner
+            .verify(message, &sig)
+            .map_err(|_| Error::InvalidSignature)
     }
 }
 

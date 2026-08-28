@@ -17,7 +17,6 @@ use der::{AnyRef, Decode, Encode};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use sha2::Digest;
 use spki::{AlgorithmIdentifier, ObjectIdentifier, SubjectPublicKeyInfo};
-use std::error::Error;
 use zeroize::Zeroizing;
 
 /// Prefix is the byte encoding of "CompositeAlgorithmSignatures2025" per the
@@ -44,6 +43,23 @@ pub const SIGNATURE_SIZE: usize = 3373;
 
 /// Size of a key fingerprint in bytes.
 pub const FINGERPRINT_SIZE: usize = 32;
+
+/// Error is the failures that can occur during xDSA operations.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum Error {
+    #[error("pem: {0}")]
+    Pem(#[from] pem::Error),
+    #[error("invalid PEM tag {0}")]
+    UnexpectedPemTag(String),
+    #[error("not a composite ML-DSA-65-Ed25519-SHA512 key")]
+    UnexpectedAlgorithm,
+    #[error("malformed key: {0}")]
+    MalformedKey(String),
+    #[error("trailing data in key encoding")]
+    TrailingData,
+    #[error("signature verification failed")]
+    InvalidSignature,
+}
 
 /// SecretKey is an ML-DSA-65 private key paired with an Ed25519 private key for
 /// creating and verifying quantum resistant digital signatures.    
@@ -86,34 +102,43 @@ impl SecretKey {
     }
 
     /// from_der parses a DER buffer into a private key.
-    pub fn from_der(der: &[u8]) -> Result<Self, Box<dyn Error>> {
+    pub fn from_der(der: &[u8]) -> Result<Self, Error> {
         // Parse the DER encoded container
-        let info = pkcs8::PrivateKeyInfo::from_der(der)?;
+        let info = pkcs8::PrivateKeyInfo::from_der(der)
+            .map_err(|err| Error::MalformedKey(err.to_string()))?;
 
         // Reject trailing data by verifying re-encoded length matches input
-        if info.encoded_len()?.try_into() != Ok(der.len()) {
-            return Err("trailing data in private key".into());
+        let length = info
+            .encoded_len()
+            .map_err(|err| Error::MalformedKey(err.to_string()))?;
+        if length.try_into() != Ok(der.len()) {
+            return Err(Error::TrailingData);
         }
         // Ensure the algorithm OID matches MLDSA65-Ed25519-SHA512
         if info.algorithm.oid != OID {
-            return Err("not a composite ML-DSA-65-Ed25519-SHA512 private key".into());
+            return Err(Error::UnexpectedAlgorithm);
+        }
+        // Reject v2 keys. The decoder only ever yields v1 keys without or v2
+        // keys with an embedded public key, all other combinations fail to
+        // parse, so public key presence is an exact v2 marker.
+        if info.public_key.is_some() {
+            return Err(Error::MalformedKey("unsupported PKCS#8 version".into()));
         }
         // Private key is ML-DSA seed (32) || Ed25519 seed (32) = 64 bytes
-        let seed: Zeroizing<[u8; 64]> = Zeroizing::new(
-            info.private_key
-                .try_into()
-                .map_err(|_| "composite private key must be 64 bytes")?,
-        );
+        let seed: Zeroizing<[u8; 64]> =
+            Zeroizing::new(info.private_key.try_into().map_err(|_| {
+                Error::MalformedKey("composite private key must be 64 bytes".into())
+            })?);
 
         Ok(Self::from_bytes(&seed))
     }
 
     /// from_pem parses a PEM string into a private key.
-    pub fn from_pem(pem_str: &str) -> Result<Self, Box<dyn Error>> {
+    pub fn from_pem(pem_str: &str) -> Result<Self, Error> {
         // Crack open the PEM to get to the private key info
         let (kind, data) = pem::decode(pem_str.as_bytes())?;
         if kind != "PRIVATE KEY" {
-            return Err(format!("invalid PEM tag {}", kind).into());
+            return Err(Error::UnexpectedPemTag(kind));
         }
         // Parse the DER content
         Self::from_der(&Zeroizing::new(data))
@@ -198,47 +223,52 @@ impl PublicKey {
     }
 
     /// from_bytes converts a 1984-byte array into a public key.
-    pub fn from_bytes(bytes: &[u8; PUBLIC_KEY_SIZE]) -> Result<Self, Box<dyn Error>> {
+    pub fn from_bytes(bytes: &[u8; PUBLIC_KEY_SIZE]) -> Result<Self, Error> {
         let ml_bytes: [u8; 1952] = bytes[..1952].try_into().unwrap();
         let ed_bytes: [u8; 32] = bytes[1952..].try_into().unwrap();
 
         Ok(Self {
             ml_key: mldsa::PublicKey::from_bytes(&ml_bytes),
-            ed_key: eddsa::PublicKey::from_bytes(&ed_bytes)?,
+            ed_key: eddsa::PublicKey::from_bytes(&ed_bytes)
+                .map_err(|err| Error::MalformedKey(err.to_string()))?,
         })
     }
 
     /// from_der parses a DER buffer into a public key.
-    pub fn from_der(der: &[u8]) -> Result<Self, Box<dyn Error>> {
+    pub fn from_der(der: &[u8]) -> Result<Self, Error> {
         // Parse the DER encoded container
         let info: SubjectPublicKeyInfo<AlgorithmIdentifier<AnyRef>, BitStringRef> =
-            SubjectPublicKeyInfo::from_der(der)?;
+            SubjectPublicKeyInfo::from_der(der)
+                .map_err(|err| Error::MalformedKey(err.to_string()))?;
 
         // Reject trailing data by verifying re-encoded length matches input
-        if info.encoded_len()?.try_into() != Ok(der.len()) {
-            return Err("trailing data in public key".into());
+        let length = info
+            .encoded_len()
+            .map_err(|err| Error::MalformedKey(err.to_string()))?;
+        if length.try_into() != Ok(der.len()) {
+            return Err(Error::TrailingData);
         }
         // Ensure the algorithm OID matches MLDSA65-Ed25519-SHA512
         if info.algorithm.oid != OID {
-            return Err("not a composite ML-DSA-65-Ed25519-SHA512 public key".into());
+            return Err(Error::UnexpectedAlgorithm);
         }
         // Public key is ML-DSA-65 (1952 bytes) || Ed25519 (32 bytes) = 1984 bytes
         let key_bytes: [u8; 1984] = info
             .subject_public_key
             .as_bytes()
-            .ok_or("invalid public key bit string")?
+            .ok_or_else(|| Error::MalformedKey("invalid public key bit string".into()))?
             .try_into()
-            .map_err(|_| "composite public key must be 1984 bytes")?;
+            .map_err(|_| Error::MalformedKey("composite public key must be 1984 bytes".into()))?;
 
         Self::from_bytes(&key_bytes)
     }
 
     /// from_pem parses a PEM string into a public key.
-    pub fn from_pem(pem_str: &str) -> Result<Self, Box<dyn Error>> {
+    pub fn from_pem(pem_str: &str) -> Result<Self, Error> {
         // Crack open the PEM to get to the public key info
         let (kind, data) = pem::decode(pem_str.as_bytes())?;
         if kind != "PUBLIC KEY" {
-            return Err(format!("invalid PEM tag {}", kind).into());
+            return Err(Error::UnexpectedPemTag(kind));
         }
         // Parse the DER content
         Self::from_der(&data)
@@ -284,7 +314,7 @@ impl PublicKey {
     }
 
     /// verify verifies a digital signature.
-    pub fn verify(&self, message: &[u8], signature: &Signature) -> Result<(), Box<dyn Error>> {
+    pub fn verify(&self, message: &[u8], signature: &Signature) -> Result<(), Error> {
         // Construct M' = Prefix || Label || len(ctx) || ctx || PH(M)
         // where ctx is empty and PH is SHA512
         let mut hasher = sha2::Sha512::new();
@@ -301,8 +331,12 @@ impl PublicKey {
         // Split and verify both signatures
         let (ml_sig, ed_sig) = signature.split();
 
-        self.ml_key.verify(&m_prime, SIGNATURE_DOMAIN, &ml_sig)?;
-        self.ed_key.verify(&m_prime, &ed_sig)?;
+        self.ml_key
+            .verify(&m_prime, SIGNATURE_DOMAIN, &ml_sig)
+            .map_err(|_| Error::InvalidSignature)?;
+        self.ed_key
+            .verify(&m_prime, &ed_sig)
+            .map_err(|_| Error::InvalidSignature)?;
 
         Ok(())
     }
