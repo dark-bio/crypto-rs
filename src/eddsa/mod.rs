@@ -20,7 +20,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use sha2::Digest;
 use spki::der::AnyRef;
 use spki::der::asn1::BitStringRef;
-use spki::{AlgorithmIdentifier, ObjectIdentifier, SubjectPublicKeyInfo};
+use spki::{ObjectIdentifier, SubjectPublicKeyInfo};
 use zeroize::Zeroizing;
 
 /// OID is the ASN.1 object identifier for Ed25519.
@@ -98,6 +98,12 @@ impl SecretKey {
         // parse, so public key presence is an exact v2 marker.
         if info.public_key.is_some() {
             return Err(Error::MalformedKey("unsupported PKCS#8 version".into()));
+        }
+        // Ensure no algorithm parameters are present, none are allowed
+        if info.algorithm.parameters.is_some() {
+            return Err(Error::MalformedKey(
+                "unexpected algorithm parameters".into(),
+            ));
         }
         let inner = ed25519_dalek::SigningKey::from_pkcs8_der(der)
             .map_err(|err| Error::MalformedKey(err.to_string()))?;
@@ -177,9 +183,8 @@ impl PublicKey {
     /// from_der parses a DER buffer into a public key.
     pub fn from_der(der: &[u8]) -> Result<Self, Error> {
         // Parse with SPKI to check for trailing data
-        let info: SubjectPublicKeyInfo<AlgorithmIdentifier<AnyRef>, BitStringRef> =
-            SubjectPublicKeyInfo::from_der(der)
-                .map_err(|err| Error::MalformedKey(err.to_string()))?;
+        let info: SubjectPublicKeyInfo<AnyRef, BitStringRef> = SubjectPublicKeyInfo::from_der(der)
+            .map_err(|err| Error::MalformedKey(err.to_string()))?;
         let length = info
             .encoded_len()
             .map_err(|err| Error::MalformedKey(err.to_string()))?;
@@ -189,6 +194,12 @@ impl PublicKey {
         // Ensure the algorithm OID matches Ed25519
         if info.algorithm.oid != OID {
             return Err(Error::UnexpectedAlgorithm);
+        }
+        // Ensure no algorithm parameters are present, none are allowed
+        if info.algorithm.parameters.is_some() {
+            return Err(Error::MalformedKey(
+                "unexpected algorithm parameters".into(),
+            ));
         }
         let inner = ed25519_dalek::VerifyingKey::from_public_key_der(der)
             .map_err(|err| Error::MalformedKey(err.to_string()))?;
@@ -476,5 +487,50 @@ MCowBQYDK2VwAyEAGb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE=
                 .verify(tt.message, &signature)
                 .unwrap_or_else(|e| panic!("failed to verify message: {}", e));
         }
+    }
+
+    // Tests that a public key whose algorithm identifier carries parameters is
+    // rejected.
+    #[test]
+    fn test_publickey_der_rejects_params() {
+        // Rebuild a valid public key with injected NULL algorithm parameters
+        let key = SecretKey::from_bytes(&[7; 32]).public_key();
+        let der = key.to_der();
+
+        let mut info: SubjectPublicKeyInfo<AnyRef, BitStringRef> =
+            SubjectPublicKeyInfo::from_der(&der).unwrap();
+        info.algorithm.parameters = Some(AnyRef::NULL);
+        let der_bad = info.to_der().unwrap();
+
+        let err = PublicKey::from_der(&der_bad);
+        assert!(matches!(err, Err(Error::MalformedKey(_))));
+    }
+
+    // Tests that a private key whose algorithm identifier carries parameters is
+    // rejected.
+    #[test]
+    fn test_secretkey_der_rejects_params() {
+        // Rebuild a valid private key with NULL algorithm parameters spliced in
+        let der = SecretKey::from_bytes(&[7; 32]).to_der().to_vec();
+        let long = der[1] == 0x82;
+        let algid_pos = if long { 7 } else { 5 };
+        let algid_len = der[algid_pos + 1] as usize;
+        let oid_pos = algid_pos + 2;
+        let oid_len = 2 + der[oid_pos + 1] as usize;
+        let after_oid = oid_pos + oid_len;
+
+        let mut bad = der.clone();
+        bad.splice(after_oid..after_oid, [0x05, 0x00]);
+        bad[algid_pos + 1] = (algid_len + 2) as u8;
+        if long {
+            let grown = (((der[2] as usize) << 8) | der[3] as usize) + 2;
+            bad[2] = (grown >> 8) as u8;
+            bad[3] = (grown & 0xff) as u8;
+        } else {
+            bad[1] = (der[1] as usize + 2) as u8;
+        }
+
+        let err = SecretKey::from_der(&bad);
+        assert!(matches!(err, Err(Error::MalformedKey(_))));
     }
 }

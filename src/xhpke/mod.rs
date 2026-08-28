@@ -136,6 +136,12 @@ impl SecretKey {
         if info.public_key.is_some() {
             return Err(Error::MalformedKey("unsupported PKCS#8 version".into()));
         }
+        // Ensure no algorithm parameters are present, none are allowed
+        if info.algorithm.parameters.is_some() {
+            return Err(Error::MalformedKey(
+                "unexpected algorithm parameters".into(),
+            ));
+        }
         let bytes: Zeroizing<[u8; 32]> = Zeroizing::new(
             info.private_key
                 .as_bytes()
@@ -283,9 +289,8 @@ impl PublicKey {
     /// from_der parses a DER buffer into a public key.
     pub fn from_der(der: &[u8]) -> Result<Self, Error> {
         // Parse the DER encoded container
-        let info: SubjectPublicKeyInfo<AlgorithmIdentifier<AnyRef>, BitStringRef> =
-            SubjectPublicKeyInfo::from_der(der)
-                .map_err(|err| Error::MalformedKey(err.to_string()))?;
+        let info: SubjectPublicKeyInfo<AnyRef, BitStringRef> = SubjectPublicKeyInfo::from_der(der)
+            .map_err(|err| Error::MalformedKey(err.to_string()))?;
 
         // Reject trailing data by verifying re-encoded length matches input
         let length = info
@@ -298,7 +303,16 @@ impl PublicKey {
         if info.algorithm.oid != OID {
             return Err(Error::UnexpectedAlgorithm);
         }
-        let key = info.subject_public_key.as_bytes().unwrap();
+        // Ensure no algorithm parameters are present, none are allowed
+        if info.algorithm.parameters.is_some() {
+            return Err(Error::MalformedKey(
+                "unexpected algorithm parameters".into(),
+            ));
+        }
+        let key = info
+            .subject_public_key
+            .as_bytes()
+            .ok_or_else(|| Error::MalformedKey("invalid public key bit string".into()))?;
 
         // Public key extracted, return the wrapper
         let bytes: [u8; 1216] = key
@@ -905,5 +919,68 @@ OhMjnzQvynZVtuquhFoiHOs+Z/VjnGGT9v3u9X45m4CLfzqitXQKre2QFj3F13XJ
             .open(&ct, b"correct-aad")
             .expect("should open with correct AAD");
         assert_eq!(pt, b"secret");
+    }
+
+    // Tests that a public key whose algorithm identifier carries parameters is
+    // rejected.
+    #[test]
+    fn test_publickey_der_rejects_params() {
+        // Rebuild a valid public key with injected NULL algorithm parameters
+        let key = SecretKey::generate().public_key();
+        let der = key.to_der();
+
+        let mut info: SubjectPublicKeyInfo<AnyRef, BitStringRef> =
+            SubjectPublicKeyInfo::from_der(&der).unwrap();
+        info.algorithm.parameters = Some(AnyRef::NULL);
+        let der_bad = info.to_der().unwrap();
+
+        let err = PublicKey::from_der(&der_bad);
+        assert!(matches!(err, Err(Error::MalformedKey(_))));
+    }
+
+    // Tests that a public key whose BIT STRING claims unused bits (non
+    // byte-aligned) is rejected rather than panicking the extractor.
+    #[test]
+    fn test_publickey_der_rejects_unused_bits() {
+        let key = SecretKey::generate().public_key();
+        let mut der = key.to_der().to_vec();
+        // Locate the public key BIT STRING header and flip its unused-bits octet
+        let pos = der
+            .windows(4)
+            .position(|w| w == [0x03, 0x82, 0x04, 0xC1])
+            .expect("bit string header present");
+        assert_eq!(der[pos + 4], 0x00);
+        der[pos + 4] = 0x01;
+
+        let err = PublicKey::from_der(&der);
+        assert!(matches!(err, Err(Error::MalformedKey(_))));
+    }
+
+    // Tests that a private key whose algorithm identifier carries parameters is
+    // rejected.
+    #[test]
+    fn test_secretkey_der_rejects_params() {
+        // Rebuild a valid private key with NULL algorithm parameters spliced in
+        let der = SecretKey::from_bytes(&[7; 32]).to_der().to_vec();
+        let long = der[1] == 0x82;
+        let algid_pos = if long { 7 } else { 5 };
+        let algid_len = der[algid_pos + 1] as usize;
+        let oid_pos = algid_pos + 2;
+        let oid_len = 2 + der[oid_pos + 1] as usize;
+        let after_oid = oid_pos + oid_len;
+
+        let mut bad = der.clone();
+        bad.splice(after_oid..after_oid, [0x05, 0x00]);
+        bad[algid_pos + 1] = (algid_len + 2) as u8;
+        if long {
+            let grown = (((der[2] as usize) << 8) | der[3] as usize) + 2;
+            bad[2] = (grown >> 8) as u8;
+            bad[3] = (grown & 0xff) as u8;
+        } else {
+            bad[1] = (der[1] as usize + 2) as u8;
+        }
+
+        let err = SecretKey::from_der(&bad);
+        assert!(matches!(err, Err(Error::MalformedKey(_))));
     }
 }
