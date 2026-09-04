@@ -18,7 +18,7 @@ jobs:
         os: [ ubuntu-latest, windows-latest, macOS-latest ]
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Build
         run: cargo build --verbose
@@ -45,7 +45,7 @@ jobs:
           - wasm32-wasip1
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install wasmtime and wasm-bindgen-cli
         run: |
@@ -74,17 +74,17 @@ jobs:
   format:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - run: cargo fmt --all -- --check
 
   clippy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - run: cargo clippy --all-features -- -D warnings
 
   docs:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - run: cargo doc --all-features --no-deps
