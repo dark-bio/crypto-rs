@@ -59,7 +59,6 @@ xhpke = [
     "dep:sha2",
     "dep:spki",
     "dep:subtle",
-    "dep:x-wing", # Only listed to enable zeroize on the X-Wing keys that hpke wraps
     "dep:zeroize",
 ]
 
@@ -73,7 +72,7 @@ ed25519-dalek = { version = "3.0.0", features = ["pem", "rand_core", "zeroize"],
 getrandom = { version = "0.4.3", features = ["wasm_js"] } # wasm_js also needs the getrandom_backend cfg set in .cargo/config.toml
 getrandom02 = { package = "getrandom", version = "0.2", features = ["js"] } # Only listed to enable the js feature on the getrandom 0.2 that rsa pulls in
 hkdf = { version = "0.13.0", optional = true }
-hpke = { version = "0.14.0", default-features = false, features = ["alloc", "mlkem", "x25519", "chacha", "hkdfsha2", "getrandom"], optional = true }
+hpke = { version = "0.14.1", default-features = false, features = ["alloc", "mlkem", "x25519", "chacha", "hkdfsha2", "getrandom"], optional = true }
 ml-dsa = { version = "0.1.1", features = ["rand_core", "zeroize"], optional = true }
 pin-project = { version = "1.1.13", optional = true }
 pkcs8 = { version = "0.11.0", features = ["std"], optional = true }
@@ -85,7 +84,6 @@ spki = { version = "0.8.0", features = ["alloc"], optional = true }
 subtle = { version = "2.6.1", optional = true }
 thiserror = { version = "2.0", optional = true }
 web-time = "1.1.0"
-x-wing = { version = "0.1.0", features = ["zeroize"], optional = true } # Only listed to enable zeroize on the X-Wing keys that hpke wraps
 zeroize = { version = "1.8.2", optional = true }
 
 [dev-dependencies]

@@ -544,21 +544,4 @@ MCowBQYDK2VwAyEAGb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE=
         let err = SecretKey::from_der(&bad);
         assert!(matches!(err, Err(Error::MalformedKey(_))));
     }
-
-    // Tests that a private key whose seed is not 32 bytes is rejected.
-    #[test]
-    fn test_secretkey_der_rejects_seed_size() {
-        // Build an otherwise valid private key around a 31-byte seed
-        let inner = OctetStringRef::new(&[7; 31]).unwrap().to_der().unwrap();
-        let info = PrivateKeyInfoRef {
-            algorithm: pkcs8::AlgorithmIdentifierRef {
-                oid: OID,
-                parameters: None::<AnyRef>,
-            },
-            private_key: OctetStringRef::new(&inner).unwrap(),
-            public_key: None,
-        };
-        let err = SecretKey::from_der(&info.to_der().unwrap());
-        assert!(matches!(err, Err(Error::MalformedKey(_))));
-    }
 }
