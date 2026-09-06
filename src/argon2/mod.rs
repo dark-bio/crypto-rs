@@ -8,7 +8,8 @@
 //!
 //! https://datatracker.ietf.org/doc/html/rfc9106
 
-use argon2::{Algorithm, Argon2, Params, Version};
+use argon2::{Algorithm, Argon2, Block, Params, Version};
+use zeroize::{Zeroize, Zeroizing};
 
 /// Key derives a key from the password, salt, and cost parameters using
 /// Argon2id returning a fixed-size byte array that can be used as a
@@ -18,7 +19,7 @@ use argon2::{Algorithm, Argon2, Params, Version};
 /// For example, you can get a derived key for e.g. AES-256 (which needs a
 /// 32-byte key) by doing:
 ///
-///   let key: [u8; 32] = argon2::key(b"password", b"salt", 1, 64*1024, 4);
+///   let key = argon2::key::<32>(b"password", b"salt", 1, 64*1024, 4);
 ///
 /// [RFC 9106 Section 7.4] recommends time=1, and memory=2048*1024 as a sensible
 /// number. If using that amount of memory (2GB) is not possible in some contexts
@@ -37,14 +38,12 @@ pub fn key<const N: usize>(
     time: u32,
     memory: u32,
     threads: u32,
-) -> [u8; N] {
+) -> Zeroizing<[u8; N]> {
     let params = Params::new(memory, time, threads, Some(N)).unwrap();
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
 
-    let mut output = [0u8; N];
-    argon2
-        .hash_password_into(password, salt, &mut output)
-        .unwrap();
+    let mut output = Zeroizing::new([0u8; N]);
+    hash(&argon2, password, salt, output.as_mut());
     output
 }
 
@@ -81,15 +80,33 @@ pub fn key_with_len(
     memory: u32,
     threads: u32,
     out: usize,
-) -> Vec<u8> {
+) -> Zeroizing<Vec<u8>> {
     let params = Params::new(memory, time, threads, Some(out)).unwrap();
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
 
-    let mut output = vec![0u8; out];
-    argon2
-        .hash_password_into(password, salt, &mut output)
-        .unwrap();
+    let mut output = Zeroizing::new(vec![0u8; out]);
+    hash(&argon2, password, salt, &mut output);
     output
+}
+
+/// hash runs Argon2id over the password and salt into the output buffer using
+/// working memory owned by this crate, which gets wiped before returning.
+fn hash(argon2: &Argon2, password: &[u8], salt: &[u8], output: &mut [u8]) {
+    // The allocating Argon2 API never wipes its working memory, so own it here.
+    // Reserving first keeps an allocation failure a panic instead of an abort.
+    let count = argon2.params().block_count();
+    let mut blocks = Vec::new();
+    blocks.try_reserve_exact(count).unwrap();
+    blocks.resize(count, Block::new());
+
+    let result =
+        argon2.hash_password_into_with_memory(password, salt, output, blocks.as_mut_slice());
+
+    // Wipe through the word slices, the Block impl goes word by word instead
+    for block in blocks.iter_mut() {
+        block.as_mut().zeroize();
+    }
+    result.unwrap();
 }
 
 #[cfg(test)]
@@ -162,7 +179,7 @@ mod tests {
 
         for v in tests {
             let want = hex::decode(v.hash).unwrap();
-            let have: [u8; 24] = key(password, salt, v.time, v.memory, v.threads);
+            let have = key::<24>(password, salt, v.time, v.memory, v.threads);
             assert_eq!(have.as_slice(), want.as_slice());
 
             let have = key_with_len(password, salt, v.time, v.memory, v.threads, 24);

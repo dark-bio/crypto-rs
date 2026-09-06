@@ -11,9 +11,9 @@
 use crate::pem;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use der::asn1::{OctetString, OctetStringRef};
+use der::asn1::OctetStringRef;
 use der::{Decode, Encode};
-use ed25519_dalek::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePublicKey};
+use ed25519_dalek::pkcs8::{DecodePublicKey, EncodePublicKey};
 use ed25519_dalek::{Signer, Verifier};
 use pkcs8::PrivateKeyInfoRef;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
@@ -105,9 +105,15 @@ impl SecretKey {
                 "unexpected algorithm parameters".into(),
             ));
         }
-        let inner = ed25519_dalek::SigningKey::from_pkcs8_der(der)
+        // The private key field contains an OCTET STRING wrapping the seed
+        let seed = <&OctetStringRef>::from_der(info.private_key.as_bytes())
             .map_err(|err| Error::MalformedKey(err.to_string()))?;
-        Ok(Self { inner })
+        let seed: Zeroizing<[u8; SECRET_KEY_SIZE]> = Zeroizing::new(
+            seed.as_bytes()
+                .try_into()
+                .map_err(|_| Error::MalformedKey("seed not 32 bytes".into()))?,
+        );
+        Ok(Self::from_bytes(&seed))
     }
 
     /// from_pem parses a PEM string into a private key.
@@ -116,7 +122,7 @@ impl SecretKey {
         if kind != "PRIVATE KEY" {
             return Err(Error::UnexpectedPemTag(kind));
         }
-        Self::from_der(&Zeroizing::new(data))
+        Self::from_der(&data)
     }
 
     /// to_bytes converts a private key into a 32-byte array.
@@ -127,8 +133,13 @@ impl SecretKey {
     /// to_der serializes a private key into a DER buffer.
     pub fn to_der(&self) -> Zeroizing<Vec<u8>> {
         // The private key field contains an OCTET STRING wrapping the seed
-        let seed = OctetString::new(self.inner.to_bytes()).unwrap();
-        let inner = Zeroizing::new(seed.to_der().unwrap());
+        let seed = self.to_bytes();
+        let inner = Zeroizing::new(
+            OctetStringRef::new(seed.as_slice())
+                .unwrap()
+                .to_der()
+                .unwrap(),
+        );
 
         let alg = pkcs8::AlgorithmIdentifierRef {
             oid: OID,
@@ -436,7 +447,7 @@ MCowBQYDK2VwAyEAGb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE=
 
         // Round trip the secret key der
         let (_, der) = pem::decode(ietf_vectors::SECKEY_PEM.as_bytes()).unwrap();
-        assert_eq!(*key.to_der(), der);
+        assert_eq!(*key.to_der(), *der);
 
         // Verify the expected public key
         assert_eq!(
@@ -450,7 +461,7 @@ MCowBQYDK2VwAyEAGb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE=
 
         // Round trip the public key der
         let (_, der) = pem::decode(ietf_vectors::PUBKEY_PEM.as_bytes()).unwrap();
-        assert_eq!(key.to_der(), der);
+        assert_eq!(key.to_der(), *der);
     }
 
     // Tests that the RFC 8410 v2 private key vector carrying an attribute and

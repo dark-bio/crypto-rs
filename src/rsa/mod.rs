@@ -89,18 +89,21 @@ impl SecretKey {
 
         let n = &p * &q;
 
+        // Assemble the key before validating it. The rsa crate wipes a dropped
+        // key, so the components get zeroized on every exit path.
+        let key = RsaPrivateKey::from_components(n, e, d, vec![p, q])
+            .map_err(|err| Error::MalformedKey(err.to_string()))?;
+
         // The modulus must be exactly 2048 bits
-        if n.bits() != 2048 {
+        if key.n().bits() != 2048 {
             return Err(Error::MalformedKey("modulus not 2048 bits".into()));
         }
         // Whilst the RSA algorithm permits different exponents, every modern
         // system only ever uses 65537 and most also enforce this. Might as
         // well do the same.
-        if e != BigUint::from(65537u32) {
+        if *key.e() != BigUint::from(65537u32) {
             return Err(Error::MalformedKey("exponent not 65537".into()));
         }
-        let key = RsaPrivateKey::from_components(n, e, d, vec![p, q])
-            .map_err(|err| Error::MalformedKey(err.to_string()))?;
         let sig = rsa::pkcs1v15::SigningKey::<Sha256>::new(key);
         Ok(Self { inner: sig })
     }
@@ -152,7 +155,7 @@ impl SecretKey {
             return Err(Error::UnexpectedPemTag(kind));
         }
         // Parse the DER content
-        Self::from_der(&Zeroizing::new(data))
+        Self::from_der(&data)
     }
 
     /// to_bytes serializes a private key into a 520-byte array.

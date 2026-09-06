@@ -14,7 +14,6 @@
 use crate::pem;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use hpke::rand_core::SeedableRng;
 use hpke::{Deserializable, Kem, Serializable};
 use pkcs8::PrivateKeyInfoRef;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
@@ -98,13 +97,10 @@ impl Eq for SecretKey {}
 impl SecretKey {
     /// generate creates a new, random private key.
     pub fn generate() -> SecretKey {
-        // Create a random number stream that works in WASM
-        let mut seed = [0u8; 32];
-        getrandom::fill(&mut seed).expect("Failed to get random seed");
-        let mut rng = rand_chacha::ChaCha20Rng::from_seed(seed);
+        let mut seed = Zeroizing::new([0u8; SECRET_KEY_SIZE]);
+        getrandom::fill(seed.as_mut()).unwrap();
 
-        let (key, _) = KEM::gen_keypair_with_rng(&mut rng);
-        Self { inner: key }
+        Self::from_bytes(&seed)
     }
 
     /// from_bytes converts a 32-byte seed into a private key.
@@ -159,7 +155,7 @@ impl SecretKey {
             return Err(Error::UnexpectedPemTag(kind));
         }
         // Parse the DER content
-        Self::from_der(&Zeroizing::new(data))
+        Self::from_der(&data)
     }
 
     /// to_bytes converts a private key into a 32-byte seed.
@@ -389,19 +385,10 @@ impl PublicKey {
         // Restrict the user's domain to the context of this library
         let info = [DOMAIN_PREFIX, domain].concat();
 
-        // Create a random number stream that works in WASM
-        let mut seed = [0u8; 32];
-        getrandom::fill(&mut seed).expect("Failed to get random seed");
-        let mut rng = rand_chacha::ChaCha20Rng::from_seed(seed);
-
         // Create a sender session using Base mode (X-Wing doesn't support Auth mode)
-        let (key, mut ctx) = hpke::setup_sender_with_rng::<AEAD, KDF, KEM>(
-            &hpke::OpModeS::Base,
-            &self.inner,
-            &info,
-            &mut rng,
-        )
-        .map_err(|err| Error::SealFailed(err.to_string()))?;
+        let (key, mut ctx) =
+            hpke::setup_sender::<AEAD, KDF, KEM>(&hpke::OpModeS::Base, &self.inner, &info)
+                .map_err(|err| Error::SealFailed(err.to_string()))?;
 
         // Encrypt the messages and seal all the crypto details into a nice box
         let enc = ctx
@@ -426,18 +413,9 @@ impl PublicKey {
         // Restrict the user's domain to the context of this library
         let info = [DOMAIN_PREFIX, domain].concat();
 
-        // Create a random number stream that works in WASM
-        let mut seed = [0u8; 32];
-        getrandom::fill(&mut seed).expect("Failed to get random seed");
-        let mut rng = rand_chacha::ChaCha20Rng::from_seed(seed);
-
-        let (key, ctx) = hpke::setup_sender_with_rng::<AEAD, KDF, KEM>(
-            &hpke::OpModeS::Base,
-            &self.inner,
-            &info,
-            &mut rng,
-        )
-        .map_err(|err| Error::SealFailed(err.to_string()))?;
+        let (key, ctx) =
+            hpke::setup_sender::<AEAD, KDF, KEM>(&hpke::OpModeS::Base, &self.inner, &info)
+                .map_err(|err| Error::SealFailed(err.to_string()))?;
 
         let mut encap_key = [0u8; ENCAP_KEY_SIZE];
         encap_key.copy_from_slice(&key.to_bytes());
@@ -669,7 +647,7 @@ OhMjnzQvynZVtuquhFoiHOs+Z/VjnGGT9v3u9X45m4CLfzqitXQKre2QFj3F13XJ
 
         // Round trip the secret key der
         let (_, der) = pem::decode(ietf_vectors::SECKEY_PEM.as_bytes()).unwrap();
-        assert_eq!(*key.to_der(), der);
+        assert_eq!(*key.to_der(), *der);
 
         // Verify the expected public key
         assert_eq!(
@@ -683,7 +661,7 @@ OhMjnzQvynZVtuquhFoiHOs+Z/VjnGGT9v3u9X45m4CLfzqitXQKre2QFj3F13XJ
 
         // Round trip the public key der
         let (_, der) = pem::decode(ietf_vectors::PUBKEY_PEM.as_bytes()).unwrap();
-        assert_eq!(key.to_der(), der);
+        assert_eq!(key.to_der(), *der);
     }
 
     // Tests that a private key can be serialized to bytes and parsed back.

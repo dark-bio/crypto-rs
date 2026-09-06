@@ -169,7 +169,7 @@ fn test_cctv_vectors() {
             continue;
         }
         // Derive the payload key and decrypt, collecting released plaintext
-        let key: [u8; 32] = hkdf::key(&filekey, &paysec[..16], b"payload");
+        let key = hkdf::key::<32>(&filekey, &paysec[..16], b"payload");
         let ciphertext = &paysec[16..];
 
         let mut reader = Stream::decrypt(PayloadKey::from_bytes(&key), ciphertext);
