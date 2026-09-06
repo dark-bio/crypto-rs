@@ -8,6 +8,7 @@
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use zeroize::Zeroizing;
 
 const PEM_HEADER: &[u8] = b"-----BEGIN ";
 const PEM_FOOTER: &[u8] = b"-----END ";
@@ -44,8 +45,8 @@ pub enum Error {
 ///   - Strict base64 decoding (no padding errors, etc.)
 ///   - No trailing data after the PEM block
 ///
-/// Returns (kind, data) tuple on success.
-pub fn decode(data: &[u8]) -> Result<(String, Vec<u8>), Error> {
+/// Returns (kind, data) tuple on success, with the data wiped on drop.
+pub fn decode(data: &[u8]) -> Result<(String, Zeroizing<Vec<u8>>), Error> {
     // Must start with header immediately (no leading whitespace)
     if !data.starts_with(PEM_HEADER) {
         return Err(Error::MissingHeader);
@@ -114,31 +115,40 @@ pub fn decode(data: &[u8]) -> Result<(String, Vec<u8>), Error> {
     let body = &body[..body.len() - line_ending.len()];
 
     // Strip line endings and decode
-    let b64: Vec<u8> = body
-        .split(|&b| b == b'\n')
-        .flat_map(|line| {
-            if line.ends_with(b"\r") {
-                &line[..line.len() - 1]
-            } else {
-                line
-            }
-        })
-        .copied()
-        .collect();
+    let b64: Zeroizing<Vec<u8>> = Zeroizing::new(
+        body.split(|&b| b == b'\n')
+            .flat_map(|line| {
+                if line.ends_with(b"\r") {
+                    &line[..line.len() - 1]
+                } else {
+                    line
+                }
+            })
+            .copied()
+            .collect(),
+    );
 
     let decoded = STANDARD
         .decode(&b64)
         .map_err(|err| Error::MalformedPayload(err.to_string()))?;
 
-    Ok((kind, decoded))
+    Ok((kind, Zeroizing::new(decoded)))
 }
 
 /// Encodes data as a PEM block with the given type.
 /// Lines are 64 characters, using \n line endings.
 pub fn encode(kind: &str, data: &[u8]) -> String {
-    let b64 = STANDARD.encode(data);
+    let b64 = Zeroizing::new(STANDARD.encode(data));
 
-    let mut buf = String::new();
+    // Size the output up front so appending never leaves stale copies behind
+    let lines = b64.len().div_ceil(64);
+    let mut buf = String::with_capacity(
+        PEM_HEADER.len()
+            + PEM_FOOTER.len()
+            + 2 * (kind.len() + PEM_ENDING.len() + 1)
+            + b64.len()
+            + lines,
+    );
     buf.push_str("-----BEGIN ");
     buf.push_str(kind);
     buf.push_str("-----\n");

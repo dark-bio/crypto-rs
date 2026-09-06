@@ -9,6 +9,7 @@
 //! https://datatracker.ietf.org/doc/html/rfc9106
 
 use argon2::{Algorithm, Argon2, Params, Version};
+use zeroize::Zeroizing;
 
 /// Key derives a key from the password, salt, and cost parameters using
 /// Argon2id returning a fixed-size byte array that can be used as a
@@ -18,7 +19,7 @@ use argon2::{Algorithm, Argon2, Params, Version};
 /// For example, you can get a derived key for e.g. AES-256 (which needs a
 /// 32-byte key) by doing:
 ///
-///   let key: [u8; 32] = argon2::key(b"password", b"salt", 1, 64*1024, 4);
+///   let key = argon2::key::<32>(b"password", b"salt", 1, 64*1024, 4);
 ///
 /// [RFC 9106 Section 7.4] recommends time=1, and memory=2048*1024 as a sensible
 /// number. If using that amount of memory (2GB) is not possible in some contexts
@@ -37,13 +38,13 @@ pub fn key<const N: usize>(
     time: u32,
     memory: u32,
     threads: u32,
-) -> [u8; N] {
+) -> Zeroizing<[u8; N]> {
     let params = Params::new(memory, time, threads, Some(N)).unwrap();
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
 
-    let mut output = [0u8; N];
+    let mut output = Zeroizing::new([0u8; N]);
     argon2
-        .hash_password_into(password, salt, &mut output)
+        .hash_password_into(password, salt, output.as_mut())
         .unwrap();
     output
 }
@@ -81,11 +82,11 @@ pub fn key_with_len(
     memory: u32,
     threads: u32,
     out: usize,
-) -> Vec<u8> {
+) -> Zeroizing<Vec<u8>> {
     let params = Params::new(memory, time, threads, Some(out)).unwrap();
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
 
-    let mut output = vec![0u8; out];
+    let mut output = Zeroizing::new(vec![0u8; out]);
     argon2
         .hash_password_into(password, salt, &mut output)
         .unwrap();
@@ -162,7 +163,7 @@ mod tests {
 
         for v in tests {
             let want = hex::decode(v.hash).unwrap();
-            let have: [u8; 24] = key(password, salt, v.time, v.memory, v.threads);
+            let have = key::<24>(password, salt, v.time, v.memory, v.threads);
             assert_eq!(have.as_slice(), want.as_slice());
 
             let have = key_with_len(password, salt, v.time, v.memory, v.threads, 24);

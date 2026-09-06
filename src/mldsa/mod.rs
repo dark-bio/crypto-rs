@@ -10,7 +10,7 @@
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use der::asn1::{OctetString, OctetStringRef};
+use der::asn1::OctetStringRef;
 use der::{Decode, Encode, Sequence};
 use ml_dsa::{EncodedVerifyingKey, MlDsa65};
 use pkcs8::PrivateKeyInfoRef;
@@ -41,9 +41,9 @@ pub const FINGERPRINT_SIZE: usize = 32;
 
 /// ML-DSA-65 private key inner structure.
 #[derive(Clone, Eq, PartialEq, Sequence)]
-struct MlDsa65PrivateKeyInner {
-    seed: OctetString,
-    expanded: OctetString,
+struct MlDsa65PrivateKeyInner<'a> {
+    seed: &'a OctetStringRef,
+    expanded: &'a OctetStringRef,
 }
 
 /// Error is the failures that can occur during ML-DSA operations.
@@ -128,31 +128,32 @@ impl SecretKey {
         let inner_key = MlDsa65PrivateKeyInner::from_der(info.private_key.as_bytes())
             .map_err(|err| Error::MalformedKey(err.to_string()))?;
 
-        let seed: ml_dsa::Seed = inner_key
-            .seed
-            .as_bytes()
-            .try_into()
-            .map_err(|_| Error::MalformedKey("seed not 32 bytes".into()))?;
-        let mut expanded: [u8; 4032] = inner_key
-            .expanded
-            .as_bytes()
-            .try_into()
-            .map_err(|_| Error::MalformedKey("expanded key not 4032 bytes".into()))?;
-
+        let seed: Zeroizing<[u8; SECRET_KEY_SIZE]> = Zeroizing::new(
+            inner_key
+                .seed
+                .as_bytes()
+                .try_into()
+                .map_err(|_| Error::MalformedKey("seed not 32 bytes".into()))?,
+        );
+        let expanded: Zeroizing<[u8; 4032]> = Zeroizing::new(
+            inner_key
+                .expanded
+                .as_bytes()
+                .try_into()
+                .map_err(|_| Error::MalformedKey("expanded key not 4032 bytes".into()))?,
+        );
         // Generate key from seed and validate it matches the expanded key in DER
-        let inner = ml_dsa::SigningKey::<MlDsa65>::from_seed(&seed);
+        let key = Self::from_bytes(&seed);
 
         #[allow(deprecated)] // to_expanded is wasteful, but that's the DER spec
-        let mut enc = inner.expanded_key().to_expanded();
-        let mismatch: bool = enc.as_slice().ct_ne(&expanded).into();
-        expanded.zeroize();
-        enc.as_mut_slice().zeroize();
+        let enc = Zeroizing::new(key.inner.expanded_key().to_expanded());
+        let mismatch: bool = enc.as_slice().ct_ne(expanded.as_slice()).into();
         if mismatch {
             return Err(Error::MalformedKey(
                 "expanded key does not match seed".into(),
             ));
         }
-        Ok(Self { inner, seed })
+        Ok(key)
     }
 
     /// from_pem parses a PEM string into a private key.
@@ -163,7 +164,7 @@ impl SecretKey {
             return Err(Error::UnexpectedPemTag(kind));
         }
         // Parse the DER content
-        Self::from_der(&Zeroizing::new(data))
+        Self::from_der(&data)
     }
 
     /// to_bytes returns the 32-byte seed of the private key.
@@ -176,13 +177,12 @@ impl SecretKey {
     /// to_der serializes a private key into a DER buffer.
     pub fn to_der(&self) -> Zeroizing<Vec<u8>> {
         #[allow(deprecated)] // to_expanded is wasteful, but that's the DER spec
-        let mut enc = self.inner.expanded_key().to_expanded();
+        let enc = Zeroizing::new(self.inner.expanded_key().to_expanded());
 
         let inner_key = MlDsa65PrivateKeyInner {
-            seed: OctetString::new(self.seed.as_slice()).unwrap(),
-            expanded: OctetString::new(enc.as_slice()).unwrap(),
+            seed: OctetStringRef::new(self.seed.as_slice()).unwrap(),
+            expanded: OctetStringRef::new(enc.as_slice()).unwrap(),
         };
-        enc.as_mut_slice().zeroize();
         let inner = Zeroizing::new(inner_key.to_der().unwrap());
 
         let alg = pkcs8::AlgorithmIdentifierRef {

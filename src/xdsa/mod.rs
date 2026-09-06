@@ -147,7 +147,7 @@ impl SecretKey {
             return Err(Error::UnexpectedPemTag(kind));
         }
         // Parse the DER content
-        Self::from_der(&Zeroizing::new(data))
+        Self::from_der(&data)
     }
 
     /// to_bytes converts a secret key into a 64-byte array.
