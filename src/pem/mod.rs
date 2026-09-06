@@ -114,25 +114,20 @@ pub fn decode(data: &[u8]) -> Result<(String, Zeroizing<Vec<u8>>), Error> {
     }
     let body = &body[..body.len() - line_ending.len()];
 
-    // Strip line endings and decode
-    let b64: Zeroizing<Vec<u8>> = Zeroizing::new(
-        body.split(|&b| b == b'\n')
-            .flat_map(|line| {
-                if line.ends_with(b"\r") {
-                    &line[..line.len() - 1]
-                } else {
-                    line
-                }
-            })
-            .copied()
-            .collect(),
-    );
+    // Reserve the full body length so stripping line endings cannot reallocate
+    // and leave unwiped copies of the encoded secret behind.
+    let mut b64 = Zeroizing::new(Vec::with_capacity(body.len()));
+    for line in body.split(|&b| b == b'\n') {
+        b64.extend_from_slice(line.strip_suffix(b"\r").unwrap_or(line));
+    }
 
-    let decoded = STANDARD
-        .decode(&b64)
+    // Guard the destination before decoding so partial output is wiped on error.
+    let mut decoded = Zeroizing::new(Vec::new());
+    STANDARD
+        .decode_vec(&b64, &mut decoded)
         .map_err(|err| Error::MalformedPayload(err.to_string()))?;
 
-    Ok((kind, Zeroizing::new(decoded)))
+    Ok((kind, decoded))
 }
 
 /// Encodes data as a PEM block with the given type.

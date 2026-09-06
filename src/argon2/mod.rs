@@ -8,8 +8,8 @@
 //!
 //! https://datatracker.ietf.org/doc/html/rfc9106
 
-use argon2::{Algorithm, Argon2, Params, Version};
-use zeroize::Zeroizing;
+use argon2::{Algorithm, Argon2, Block, Params, Version};
+use zeroize::{Zeroize, Zeroizing};
 
 /// Key derives a key from the password, salt, and cost parameters using
 /// Argon2id returning a fixed-size byte array that can be used as a
@@ -43,9 +43,7 @@ pub fn key<const N: usize>(
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
 
     let mut output = Zeroizing::new([0u8; N]);
-    argon2
-        .hash_password_into(password, salt, output.as_mut())
-        .unwrap();
+    hash(&argon2, password, salt, output.as_mut());
     output
 }
 
@@ -87,10 +85,28 @@ pub fn key_with_len(
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
 
     let mut output = Zeroizing::new(vec![0u8; out]);
-    argon2
-        .hash_password_into(password, salt, &mut output)
-        .unwrap();
+    hash(&argon2, password, salt, &mut output);
     output
+}
+
+/// hash runs Argon2id over the password and salt into the output buffer using
+/// working memory owned by this crate, which gets wiped before returning.
+fn hash(argon2: &Argon2, password: &[u8], salt: &[u8], output: &mut [u8]) {
+    // The allocating Argon2 API never wipes its working memory, so own it here.
+    // Reserving first keeps an allocation failure a panic instead of an abort.
+    let count = argon2.params().block_count();
+    let mut blocks = Vec::new();
+    blocks.try_reserve_exact(count).unwrap();
+    blocks.resize(count, Block::new());
+
+    let result =
+        argon2.hash_password_into_with_memory(password, salt, output, blocks.as_mut_slice());
+
+    // Wipe through the word slices, the Block impl goes word by word instead
+    for block in blocks.iter_mut() {
+        block.as_mut().zeroize();
+    }
+    result.unwrap();
 }
 
 #[cfg(test)]
