@@ -1,6 +1,6 @@
 [package]
 name = "darkbio-crypto"
-version = "0.18.0"
+version = "0.18.1"
 authors = ["Péter Szilágyi <peter@dark.bio>"]
 description = "Cryptography primitives and wrappers"
 repository = "https://github.com/dark-bio/crypto-rs"
@@ -66,7 +66,7 @@ xhpke = [
 argon2 = { version = "0.6.0", features = ["zeroize"], optional = true }
 base64 = { version = "0.23.1", optional = true }
 chacha20poly1305 = { version = "0.11.0", features = ["zeroize"], optional = true }
-darkbio-crypto-cbor-derive = { version = "0.18.0", path = "src/cbor/derive", optional = true }
+darkbio-crypto-cbor-derive = { version = "0.18.1", path = "src/cbor/derive", optional = true }
 der = { version = "0.8.1", features = ["derive"], optional = true }
 ed25519-dalek = { version = "3.0.0", features = ["pem", "rand_core", "zeroize"], optional = true }
 getrandom = { version = "0.4.3", features = ["wasm_js"] } # wasm_js also needs the getrandom_backend cfg set in .cargo/config.toml
