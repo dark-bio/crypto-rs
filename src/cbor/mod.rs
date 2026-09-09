@@ -371,7 +371,7 @@ impl<'a> Decoder<'a> {
             return Err(Error::InvalidMajorType(major, MAJOR_BYTES));
         }
         // Check that the length matches the expected array size
-        if len as usize != N {
+        if len != N as u64 {
             return Err(Error::UnexpectedItemCount(len, N));
         }
         // Retrieve the bytes and copy into the fixed-size array
@@ -1409,18 +1409,16 @@ fn verify_object(decoder: &mut Decoder, depth: usize) -> Result<(), Error> {
         }
         MAJOR_ARRAY => {
             // Recursively verify each array element
-            let len = value as usize;
-            for _ in 0..len {
+            for _ in 0..value {
                 verify_object(decoder, depth - 1)?;
             }
             Ok(())
         }
         MAJOR_MAP => {
             // Verify map has integer keys in deterministic order
-            let len = value as usize;
             let mut prev_key: Option<i64> = None;
 
-            for _ in 0..len {
+            for _ in 0..value {
                 // Decode and verify the key is an integer
                 let key = decoder.decode_int()?;
 
@@ -1837,6 +1835,36 @@ mod tests {
             Error::UnexpectedItemCount(4, 2) => {} // Expected error
             other => panic!("Expected UnexpectedItemCount(4, 2) error, got {:?}", other),
         }
+    }
+
+    // Tests that a byte-string length cannot wrap to the expected fixed size
+    // on 32-bit targets, including when the bytes are nested in an array.
+    #[test]
+    fn test_fixed_bytes_wide_length() {
+        fn check<const N: usize>() {
+            let bytes = [0xa5; N];
+            let valid = encode(&bytes).unwrap();
+            assert_eq!(decode::<[u8; N]>(&valid).unwrap(), bytes);
+
+            let len = (1u64 << 32) + N as u64;
+            let mut encoded = vec![0x5b];
+            encoded.extend_from_slice(&len.to_be_bytes());
+            encoded.extend_from_slice(&bytes);
+            assert_eq!(
+                decode::<[u8; N]>(&encoded),
+                Err(Error::UnexpectedItemCount(len, N))
+            );
+
+            encoded.insert(0, 0x81);
+            assert_eq!(
+                decode::<([u8; N],)>(&encoded),
+                Err(Error::UnexpectedItemCount(len, N))
+            );
+        }
+
+        check::<0>();
+        check::<1>();
+        check::<32>();
     }
 
     // Tests that UTF-8 strings encode correctly on a bunch of samples.
@@ -2528,6 +2556,33 @@ mod tests {
         match verify(&invalid_info).unwrap_err() {
             Error::InvalidAdditionalInfo(28) => {}
             other => panic!("Expected InvalidAdditionalInfo(28) error, got {:?}", other),
+        }
+    }
+
+    // Tests that verification preserves the full array/map count on 32-bit
+    // targets instead of accepting only the low 32 bits' worth of items.
+    #[test]
+    fn test_verify_wide_container_length() {
+        for major in [MAJOR_ARRAY, MAJOR_MAP] {
+            for count in [0u8, 1, 3] {
+                let mut payload = Vec::new();
+                for item in 0..count {
+                    payload.push(item);
+                    if major == MAJOR_MAP {
+                        payload.push(0xf6);
+                    }
+                }
+
+                let mut valid = vec![major << 5 | count];
+                valid.extend_from_slice(&payload);
+                assert_eq!(verify(&valid), Ok(()));
+
+                let len = (1u64 << 32) + u64::from(count);
+                let mut encoded = vec![major << 5 | INFO_UINT64];
+                encoded.extend_from_slice(&len.to_be_bytes());
+                encoded.extend_from_slice(&payload);
+                assert_eq!(verify(&encoded), Err(Error::UnexpectedEof));
+            }
         }
     }
 
