@@ -22,7 +22,7 @@ members = [".", "src/cbor/derive"]
 default = []
 argon2 = ["dep:argon2", "dep:getrandom", "dep:zeroize"] # getrandom only listed to enable wasm_js on the getrandom that password-hash pulls in
 cbor = ["dep:thiserror", "dep:darkbio-crypto-cbor-derive"]
-cose = ["cbor", "xdsa", "xhpke"]
+cose = ["cbor", "xdsa", "xhpke", "dep:web-time"]
 cwt = ["cose"]
 eddsa = [
     "pem",
@@ -87,7 +87,7 @@ sha2 = { version = "0.11.0", features = ["zeroize"], optional = true }
 spki = { version = "0.8.0", features = ["alloc"], optional = true }
 subtle = { version = "2.6.1", optional = true }
 thiserror = { version = "2.0", optional = true }
-web-time = "1.1.0"
+web-time = { version = "1.1.0", optional = true }
 zeroize = { version = "1.8.2", optional = true }
 
 [dev-dependencies]

@@ -8,6 +8,8 @@
 #![doc = include_str!("../README.md")]
 // Enable the experimental doc_cfg feature
 #![cfg_attr(docsrs, feature(doc_cfg))]
+// The crate only composes other libraries and never needs unsafe itself
+#![forbid(unsafe_code)]
 
 // Allow derive macros to reference this crate as `darkbio_crypto` even when
 // used internally (proc macros can't distinguish internal vs external use).
