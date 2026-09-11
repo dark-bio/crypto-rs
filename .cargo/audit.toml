@@ -1,0 +1,9 @@
+# Settings for cargo-audit, which the audit CI job runs against Cargo.lock.
+
+[advisories]
+# RUSTSEC-2023-0071 is the Marvin timing attack on private key operations in
+# rsa 0.9. Verification only uses public keys and is unaffected. The single
+# private key use in the ecosystem is the cloud signing its Firebase service
+# account tokens, over claims it chooses itself. The upstream fix arrives with
+# rsa 0.10, which is still a release candidate. Drop this entry when it ships.
+ignore = ["RUSTSEC-2023-0071"]

@@ -39,6 +39,9 @@
 //! // Encodes as: [x, y]
 //! ```
 
+// The macros only emit tokens and never need unsafe
+#![forbid(unsafe_code)]
+
 mod cbor;
 
 use cbor::cbor_key_bytes;
