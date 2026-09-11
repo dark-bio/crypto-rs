@@ -81,7 +81,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - run: cargo clippy --all-features -- -D warnings
+      - run: cargo clippy --all-features --all-targets -- -D warnings
 
   docs:
     runs-on: ubuntu-latest

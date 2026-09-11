@@ -717,7 +717,7 @@ df0b68ce2f17835c36ad7abc86fffecbbf145eb285be596b02818022dadb\
 20e5f963f436ab205ad477f6676d669ea6523771c70ba69097ef37b9eb72\
 2495db2f6e2f7f501a8f378993a0a975";
 
-        let der = hex::decode(&input).unwrap();
+        let der = hex::decode(input).unwrap();
         let key = SecretKey::from_der(&der).unwrap();
         assert_eq!(hex::encode(key.to_der()), input);
     }
@@ -743,7 +743,7 @@ e63b4690e757a1d234b252ee94f5f03eaabb4f3b80ff9945510c99822d2c\
 609a05d72e2d81910d1bdb2f053ae0ff2630572f82acf675159ff9cc31a1\
 610f198bdd967d02ebc1f7801107432fb9987d0203010001";
 
-        let der = hex::decode(&input).unwrap();
+        let der = hex::decode(input).unwrap();
         let key = PublicKey::from_der(&der).unwrap();
         assert_eq!(hex::encode(key.to_der()), input);
     }
