@@ -6,8 +6,86 @@
 
 //! COSE wrappers for xDSA and xHPKE.
 //!
-//! https://datatracker.ietf.org/doc/html/rfc8152
-//! https://datatracker.ietf.org/doc/html/draft-ietf-cose-hpke
+//! <https://datatracker.ietf.org/doc/html/rfc9052>
+//! <https://datatracker.ietf.org/doc/html/draft-ietf-cose-hpke>
+//!
+//! Signatures are [`CoseSign1`] envelopes carrying the signer's fingerprint and
+//! a timestamp in the protected header. Encryption is [`CoseEncrypt0`] around a
+//! signed envelope, so every message created by [`seal`] is also signed.
+//! Payloads and authenticated messages can be any types implementing the crate's
+//! CBOR traits. Signing, verification, encryption, and decryption use an
+//! application domain, prefixed with [`DOMAIN_PREFIX`], which both sides must
+//! agree on.
+//!
+//! ```
+//! use darkbio_crypto::{cose, xdsa, xhpke};
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let signer = xdsa::SecretKey::generate();
+//!
+//! // Sign a payload, binding a second message supplied separately
+//! let envelope = cose::sign("hello".to_string(), "context", &signer, b"example")?;
+//! let payload: String =
+//!     cose::verify(&envelope, "context", &signer.public_key(), b"example", Some(60))?;
+//! assert_eq!(payload, "hello");
+//!
+//! // Sign and encrypt to a recipient in one step, then open and verify it back
+//! let recipient = xhpke::SecretKey::generate();
+//! let sealed = cose::seal(
+//!     "secret".to_string(),
+//!     "context",
+//!     &signer,
+//!     &recipient.public_key(),
+//!     b"example",
+//! )?;
+//! let opened: String = cose::open(
+//!     &sealed,
+//!     "context",
+//!     &recipient,
+//!     &signer.public_key(),
+//!     b"example",
+//!     Some(60),
+//! )?;
+//! assert_eq!(opened, "secret");
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Domain separation and freshness
+//!
+//! Choose distinct domains for distinct application operations. Domains prevent
+//! a message for one purpose from being accepted for another; they do not stop
+//! repeated use within the same domain. Verification accepts a signature whose
+//! timestamp is at most `max_drift` seconds in the past or future. `None` skips
+//! this timestamp check. Applications that require one-time acceptance must
+//! also track a message identifier, nonce, or challenge to reject replays.
+//!
+//! # Wire profile
+//!
+//! Interoperating implementations must match these Dark Bio conventions:
+//!
+//! - Envelopes are untagged [`CoseSign1`] and [`CoseEncrypt0`] arrays. CBOR tags
+//!   are not accepted. Headers use this crate's deterministic integer-key maps.
+//! - The private algorithm IDs are [`ALGORITHM_ID_XDSA`] (`-70000`) and
+//!   [`ALGORITHM_ID_XHPKE`] (`-70001`). The protected `kid` is the appropriate
+//!   public key's fingerprint. Signatures require the private timestamp header
+//!   [`HEADER_TIMESTAMP`] (`-70002`) and name it in `crit`.
+//! - For signatures, [`SigStructure::external_aad`] is the CBOR encoding of
+//!   `[bstr(DOMAIN_PREFIX || domain), msg_to_auth]`. An embedded payload is the
+//!   CBOR encoding of the caller's value.
+//! - For [`sign_detached`], the caller's message is authenticated in that
+//!   `external_aad`, while [`SigStructure::payload`] is an empty byte string
+//!   and the envelope payload is null. A generic COSE detached-payload API that
+//!   puts the caller's message in `Sig_structure.payload` must be adapted to
+//!   this convention.
+//! - For encryption, [`EncStructure::external_aad`] is the CBOR encoding of
+//!   `msg_to_auth`; the complete encoded `EncStructure` is passed as HPKE AAD.
+//!   HPKE key derivation uses `DOMAIN_PREFIX || domain` as its info. The X-Wing
+//!   encapsulated key is carried in unprotected header `-4`.
+//!
+//! Here `bstr` denotes a CBOR byte string and `||` denotes byte concatenation.
+//! The domain and `msg_to_auth` are not included in the returned envelope;
+//! both parties must know them or transmit them separately.
 
 mod types;
 
@@ -23,35 +101,54 @@ use web_time::{SystemTime, UNIX_EPOCH};
 use crate::cbor::{self, Decode, Encode, Raw};
 use crate::{xdsa, xhpke};
 
-/// DOMAIN_PREFIX is the prefix of a public string known to both parties during
-/// cryptographic operation, with the purpose of binding the keys used to some
-/// application context.
-///
-/// The final domain will be this prefix concatenated with another contextual one
-/// from an app layer action.
+/// DOMAIN_PREFIX is prepended to the caller's application domain for signature
+/// authentication and HPKE key derivation. Both parties must use the same bytes.
+/// Distinct domains separate application purposes; replay detection within a
+/// domain is the application's responsibility.
 pub const DOMAIN_PREFIX: &[u8] = crate::xhpke::DOMAIN_PREFIX;
 
 /// Error is the failures that can occur during COSE operations.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
+    /// The envelope, a header or a payload is not valid CBOR under this
+    /// crate's rules.
     #[error("cbor: {0}")]
     CborError(#[from] cbor::Error),
+    /// The protected header names the first algorithm where the second was
+    /// required. Also raised when the [`CritHeader`] list is not the expected
+    /// one.
     #[error("unexpected algorithm: have {0}, want {1}")]
     UnexpectedAlgorithm(i64, i64),
+    /// The envelope was signed by the first fingerprint, the verifier's key
+    /// has the second. [`signer`] looks the right key up without verifying.
     #[error("unexpected signing key: have {0:x?}, want {1:x?}")]
     UnexpectedSigningKey(xdsa::Fingerprint, xdsa::Fingerprint),
+    /// The xDSA signature does not verify. Carries the underlying error text.
     #[error("signature verification failed: {0}")]
     InvalidSignature(String),
+    /// The signature timestamp is the first number of seconds away from now,
+    /// more than the second, which is the allowed drift.
     #[error("signature stale: time drift {0}s exceeds max {1}s")]
     StaleSignature(u64, u64),
+    /// [`verify_detached`] found an embedded payload.
     #[error("unexpected payload in detached signature")]
     UnexpectedPayload,
+    /// [`verify`] or [`peek`] found no payload.
     #[error("missing payload in embedded signature")]
     MissingPayload,
+    /// The envelope was encrypted to the first fingerprint, the recipient's
+    /// key has the second. [`recipient`] looks the right key up without
+    /// decrypting.
     #[error("unexpected encryption key: have {0:x?}, want {1:x?}")]
     UnexpectedEncryptionKey(xhpke::Fingerprint, xhpke::Fingerprint),
+    /// The [`EncapKeyHeader`] carries an encapsulated key of the first size
+    /// where the second, [`xhpke::ENCAP_KEY_SIZE`], is required.
     #[error("invalid encapsulated key size: {0}, expected {1}")]
     InvalidEncapKeySize(usize, usize),
+    /// Opening the ciphertext failed, the wrong key, tampered data or a
+    /// mismatched authenticated message. Also raised when [`seal`] or [`encrypt`]
+    /// fails.
+    /// Carries the xHPKE error text.
     #[error("decryption failed: {0}")]
     DecryptionFailed(String),
 }
@@ -63,14 +160,17 @@ pub const ALGORITHM_ID_XDSA: i64 = -70000;
 pub const ALGORITHM_ID_XHPKE: i64 = -70001;
 
 /// sign_detached creates a COSE_Sign1 digital signature without an embedded
-/// payload (i.e. payload is empty).
+/// payload (the envelope payload is null).
+///
+/// The caller's message is included in `external_aad`, and the payload in the
+/// signature input is empty. See the module's wire profile for interoperability.
 ///
 /// Uses the current system time as the signature timestamp. For testing or custom
 /// timestamps, use [`sign_detached_at`].
 ///
 /// - `msg_to_auth`: The message to sign (not embedded in COSE_Sign1)
 /// - `signer`: The xDSA secret key to sign with
-/// - `domain`: Application domain for replay protection
+/// - `domain`: Application domain for separating protocol purposes
 ///
 /// Returns the serialized COSE_Sign1 structure.
 pub fn sign_detached<A: Encode>(
@@ -93,7 +193,7 @@ pub fn sign_detached<A: Encode>(
 /// - `msg_to_embed`: The message to sign (embedded in COSE_Sign1)
 /// - `msg_to_auth`: Additional authenticated data (not embedded, but signed)
 /// - `signer`: The xDSA secret key to sign with
-/// - `domain`: Application domain for replay protection
+/// - `domain`: Application domain for separating protocol purposes
 ///
 /// Returns the serialized COSE_Sign1 structure.
 pub fn sign<E: Encode, A: Encode>(
@@ -112,9 +212,11 @@ pub fn sign<E: Encode, A: Encode>(
 /// sign_detached_at creates a COSE_Sign1 digital signature without an embedded
 /// payload and with an explicit timestamp.
 ///
+/// Uses the same external-AAD convention as [`sign_detached`].
+///
 /// - `msg_to_auth`: The message to sign (not embedded in COSE_Sign1)
 /// - `signer`: The xDSA secret key to sign with
-/// - `domain`: Application domain for replay protection
+/// - `domain`: Application domain for separating protocol purposes
 /// - `timestamp`: Unix timestamp in seconds to embed in the protected header
 ///
 /// Returns the serialized COSE_Sign1 structure.
@@ -158,7 +260,7 @@ pub fn sign_detached_at<A: Encode>(
 /// - `msg_to_embed`: The message to sign (embedded in COSE_Sign1)
 /// - `msg_to_auth`: Additional authenticated data (not embedded, but signed)
 /// - `signer`: The xDSA secret key to sign with
-/// - `domain`: Application domain for replay protection
+/// - `domain`: Application domain for separating protocol purposes
 /// - `timestamp`: Unix timestamp in seconds to embed in the protected header
 ///
 /// Returns the serialized COSE_Sign1 structure.
@@ -207,8 +309,9 @@ pub fn sign_at<E: Encode, A: Encode>(
 /// - `msg_to_check`: The serialized COSE_Sign1 structure (with null payload)
 /// - `msg_to_auth`: The same message used during signing (verified but not embedded)
 /// - `verifier`: The xDSA public key to verify against
-/// - `domain`: Application domain for replay protection
-/// - `max_drift`: Signatures more in the past or future are rejected
+/// - `domain`: Application domain for separating protocol purposes
+/// - `max_drift`: Maximum allowed timestamp difference in seconds, past or future.
+///   `Some(n)` accepts differences up to and including `n`; `None` skips the check.
 pub fn verify_detached<A: Encode>(
     msg_to_check: &[u8],
     msg_to_auth: A,
@@ -229,8 +332,9 @@ pub fn verify_detached<A: Encode>(
 /// - `msg_to_check`: The serialized COSE_Sign1 structure (with null payload)
 /// - `msg_to_auth`: The same message used during signing (verified but not embedded)
 /// - `verifier`: The xDSA public key to verify against
-/// - `domain`: Application domain for replay protection
-/// - `max_drift`: Signatures more in the past or future are rejected
+/// - `domain`: Application domain for separating protocol purposes
+/// - `max_drift`: Maximum allowed timestamp difference in seconds, past or future.
+///   `Some(n)` accepts differences up to and including `n`; `None` skips the check.
 /// - `now`: Unix timestamp in seconds to use for drift checking
 pub fn verify_detached_at<A: Encode>(
     msg_to_check: &[u8],
@@ -285,8 +389,9 @@ pub fn verify_detached_at<A: Encode>(
 /// - `msg_to_check`: The serialized COSE_Sign1 structure
 /// - `msg_to_auth`: The same additional authenticated data used during signing
 /// - `verifier`: The xDSA public key to verify against
-/// - `domain`: Application domain for replay protection
-/// - `max_drift`: Signatures more in the past or future are rejected
+/// - `domain`: Application domain for separating protocol purposes
+/// - `max_drift`: Maximum allowed timestamp difference in seconds, past or future.
+///   `Some(n)` accepts differences up to and including `n`; `None` skips the check.
 ///
 /// Returns the CBOR-decoded embedded payload if verification succeeds.
 pub fn verify<E: Decode, A: Encode>(
@@ -309,8 +414,9 @@ pub fn verify<E: Decode, A: Encode>(
 /// - `msg_to_check`: The serialized COSE_Sign1 structure
 /// - `msg_to_auth`: The same additional authenticated data used during signing
 /// - `verifier`: The xDSA public key to verify against
-/// - `domain`: Application domain for replay protection
-/// - `max_drift`: Signatures more in the past or future are rejected
+/// - `domain`: Application domain for separating protocol purposes
+/// - `max_drift`: Maximum allowed timestamp difference in seconds, past or future.
+///   `Some(n)` accepts differences up to and including `n`; `None` skips the check.
 /// - `now`: Unix timestamp in seconds to use for drift checking
 ///
 /// Returns the CBOR-decoded embedded payload if verification succeeds.
@@ -516,7 +622,8 @@ pub fn encrypt<A: Encode>(
 /// - `recipient`: The xHPKE secret key to decrypt with
 /// - `sender`: The xDSA public key to verify the signature against
 /// - `domain`: Application domain for HPKE key derivation
-/// - `max_drift`: Signatures more in the past or future are rejected
+/// - `max_drift`: Maximum allowed timestamp difference in seconds, past or future.
+///   `Some(n)` accepts differences up to and including `n`; `None` skips the check.
 ///
 /// Returns the CBOR-decoded payload if decryption and verification succeed.
 pub fn open<E: Decode, A: Encode + Clone>(
@@ -550,7 +657,8 @@ pub fn open<E: Decode, A: Encode + Clone>(
 /// - `recipient`: The xHPKE secret key to decrypt with
 /// - `sender`: The xDSA public key to verify the signature against
 /// - `domain`: Application domain for HPKE key derivation
-/// - `max_drift`: Signatures more in the past or future are rejected
+/// - `max_drift`: Maximum allowed timestamp difference in seconds, past or future.
+///   `Some(n)` accepts differences up to and including `n`; `None` skips the check.
 /// - `now`: Unix timestamp in seconds to use for drift checking
 ///
 /// Returns the CBOR-decoded payload if decryption and verification succeed.

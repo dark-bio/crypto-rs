@@ -19,14 +19,14 @@ The library is opinionated. Parameters and primitives were selected to provide m
   - **xHPKE ([RFC-9180](https://datatracker.ietf.org/doc/html/rfc9180))**: `X-WING`, `HKDF`, `SHA256`, `ChaCha20`, `Poly1305`, `dark-bio-v1:` domain prefix
     - **X-WING ([RFC-DRAFT](https://datatracker.ietf.org/doc/html/draft-connolly-cfrg-xwing-kem))**: `MLKEM`, `ECC`
       - **ECC ([RFC-7748](https://datatracker.ietf.org/doc/html/rfc7748))**: `X25519`
-      - **MLKEM([RFC-DRAFT](https://datatracker.ietf.org/doc/html/draft-ietf-ipsecme-ikev2-mlkem))**: Security level 3 (`ML-KEM-768`)
+      - **MLKEM ([FIPS-203](https://csrc.nist.gov/pubs/fips/203/final))**: Security level 3 (`ML-KEM-768`)
   - **STREAM (*RFC N/A*, [Rage](https://github.com/str4d/rage))**: `ChaCha20`, `Poly1305`, `16B` tag, `64KB` chunk
 - Key derivation
   - **Argon2 ([RFC-9106](https://datatracker.ietf.org/doc/html/rfc9106))**: `id` variant
   - **HKDF ([RFC-5869](https://datatracker.ietf.org/doc/html/rfc5869))**: `SHA256`
 - Serialization
   - **CBOR ([RFC-8949](https://datatracker.ietf.org/doc/html/rfc8949))**: restricted to `bool`,`null`, `integer`, `text`, `bytes`, `array`, `map[int]`, `option`
-  - **COSE ([RFC-8152](https://datatracker.ietf.org/doc/html/rfc8152))**: `COSE_Sign1`, `COSE_Encrypt0`, `dark-bio-v1:` domain prefix
+  - **COSE ([RFC-9052](https://datatracker.ietf.org/doc/html/rfc9052))**: `COSE_Sign1`, `COSE_Encrypt0`, `dark-bio-v1:` domain prefix
 - Credential / Attestation
   - **CWT ([RFC-8392](https://datatracker.ietf.org/doc/html/rfc8392))**: `xDSA`, `xHPKE`
     - **EAT ([RFC-9711](https://datatracker.ietf.org/doc/html/rfc9711))**
@@ -37,6 +37,39 @@ its own `.cargo/config.toml`.
 
 *The entire library is hidden behind feature flags to allow selectively depending on it from the firmware, cloud and mobile app, each cherry-picking only what's needed.*
 
+## Quick start
+
+Signatures come from `xdsa`, encryption from `xhpke`, and `cose` wraps both into COSE envelopes using the Dark Bio wire profile documented in the `cose` module. Enabling the three pulls in everything they need.
+
+```toml
+[dependencies]
+darkbio-crypto = { version = "0.18", features = ["cose", "xdsa", "xhpke"] }
+```
+
+COSE signing and verification and xHPKE encryption and decryption use an application domain that both sides must agree on. It is prefixed with `dark-bio-v1:` internally and binds the operation to one purpose. Choose distinct domains for distinct purposes. Raw `xdsa` signatures carry no such application domain, which is why the `cose` envelopes are the recommended entry point.
+
+```rust
+# #[cfg(feature = "cose")] {
+use darkbio_crypto::{cose, xdsa, xhpke};
+
+// Long term identities, one for signing and one for receiving
+let signer = xdsa::SecretKey::generate();
+let recipient = xhpke::SecretKey::generate();
+
+// A detached signature over a message that travels separately
+let signature = cose::sign_detached("payload", &signer, b"example").unwrap();
+cose::verify_detached(&signature, "payload", &signer.public_key(), b"example", Some(60)).unwrap();
+
+// Sign and encrypt a payload to the recipient, then open and verify it back.
+// The second argument is authenticated but must be supplied separately.
+let sealed = cose::seal("payload".to_string(), "metadata", &signer, &recipient.public_key(), b"example").unwrap();
+let opened: String = cose::open(&sealed, "metadata", &recipient, &signer.public_key(), b"example", Some(60)).unwrap();
+assert_eq!(opened, "payload");
+# }
+```
+
+Each module's documentation opens with a runnable example of its own primitives.
+
 ## Feature gates
 
 As a starting point, you will most probably want `xdsa` for digital signatures, `xhpke` for asymmetric encryption and `cose` for proper enveloping. For the remainder for the features, please consult the list below:
@@ -45,7 +78,7 @@ As a starting point, you will most probably want `xdsa` for digital signatures, 
 |----------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------|
 | `argon2` | Argon2id password hashing ([RFC-9106](https://datatracker.ietf.org/doc/html/rfc9106))                                                                                       |                         |
 | `cbor`   | CBOR serialization with derive macros ([RFC-8949](https://datatracker.ietf.org/doc/html/rfc8949))                                                                           |                         |
-| `cose`   | COSE signed/encrypted envelopes ([RFC-8152](https://datatracker.ietf.org/doc/html/rfc8152))                                                                                 | `cbor`, `xdsa`, `xhpke` |
+| `cose`   | COSE signed/encrypted envelopes ([RFC-9052](https://datatracker.ietf.org/doc/html/rfc9052))                                                                                 | `cbor`, `xdsa`, `xhpke` |
 | `cwt`    | CWT signed credentials/attestations ([RFC-8392](https://datatracker.ietf.org/doc/html/rfc8392))                                                                             | `cose`                  |
 | `eddsa`  | Ed25519 signatures ([RFC-8032](https://datatracker.ietf.org/doc/html/rfc8032))                                                                                              | `pem`                   |
 | `hkdf`   | HKDF key derivation with SHA-256 ([RFC-5869](https://datatracker.ietf.org/doc/html/rfc5869))                                                                                |                         |
@@ -55,7 +88,7 @@ As a starting point, you will most probably want `xdsa` for digital signatures, 
 | `rsa`    | RSA-2048 signatures with SHA-256 ([RFC-8017](https://datatracker.ietf.org/doc/html/rfc8017))                                                                                | `pem`                   |
 | `stream` | STREAM chunked encryption (Age-compatible)                                                                                                                                  |                         |
 | `xdsa`   | Composite signatures (EdDSA + ML-DSA) ([DRAFT](https://datatracker.ietf.org/doc/html/draft-ietf-lamps-pq-composite-sigs))                                                   | `pem`, `eddsa`, `mldsa` |
-| `xhpke`  | Hybrid encryption with X-Wing KEM ([RFC-9180](https://datatracker.ietf.org/doc/html/rfc9180), [DRAFT](https://datatracker.ietf.org/doc/html/draft-connolly-cfrg-xwing-kem)) | `xdsa`                  |
+| `xhpke`  | Hybrid encryption with X-Wing KEM ([RFC-9180](https://datatracker.ietf.org/doc/html/rfc9180), [DRAFT](https://datatracker.ietf.org/doc/html/draft-connolly-cfrg-xwing-kem)) | `pem`                   |
 
 ## Derive Cbor
 

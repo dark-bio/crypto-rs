@@ -4,6 +4,13 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//! Random bytes from the operating system's secure source.
+//!
+//! ```
+//! let nonce = darkbio_crypto::rand::generate(32);
+//! assert_eq!(nonce.len(), 32);
+//! ```
+
 /// generate creates an arbitrarily large buffer filled with randomness.
 pub fn generate(bytes: usize) -> Vec<u8> {
     // Create a random buffer with a WASM friendly source

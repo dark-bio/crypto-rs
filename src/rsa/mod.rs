@@ -6,7 +6,23 @@
 
 //! RSA cryptography wrappers and parametrization.
 //!
-//! https://datatracker.ietf.org/doc/html/rfc8017
+//! <https://datatracker.ietf.org/doc/html/rfc8017>
+//!
+//! RSA-2048 with PKCS#1 v1.5 padding over SHA-256, the classical scheme kept
+//! for places where a boot ROM or a legacy system dictates it. New designs
+//! should use the `xdsa` module. Only 2048 bit moduli with the exponent 65537
+//! are accepted, and encryption is deliberately not exposed.
+//!
+//! ```no_run
+//! use darkbio_crypto::rsa;
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let secret = rsa::SecretKey::generate();
+//! let signature = secret.sign(b"hello");
+//! secret.public_key().verify(b"hello", &signature)?;
+//! # Ok(())
+//! # }
+//! ```
 
 use crate::pem;
 use base64::Engine;
@@ -47,14 +63,29 @@ pub const FINGERPRINT_SIZE: usize = 32;
 /// Error is the failures that can occur during RSA operations.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
+    /// The PEM wrapper is malformed. The inner error names the rule it broke.
+    /// Raised by [`SecretKey::from_pem`] and [`PublicKey::from_pem`].
     #[error("pem: {0}")]
     Pem(#[from] pem::Error),
+    /// The PEM block type is not the expected one, `PRIVATE KEY` for
+    /// [`SecretKey::from_pem`] and `PUBLIC KEY` for [`PublicKey::from_pem`].
+    /// Carries the type found.
     #[error("invalid PEM tag {0}")]
     UnexpectedPemTag(String),
+    /// The DER key names an algorithm other than RSA, see [`OID`].
+    /// Raised by [`SecretKey::from_der`]
+    /// and [`PublicKey::from_der`], and through them by the PEM parsers.
     #[error("not an RSA key")]
     UnexpectedAlgorithm,
+    /// The key parsed but its contents are unusable, a modulus that is not
+    /// 2048 bits, an exponent other than 65537, a non-canonical encoding or an
+    /// unsupported PKCS#8 version. The message names the problem. Raised by
+    /// every key constructor.
     #[error("malformed key: {0}")]
     MalformedKey(String),
+    /// The signature does not verify under the key for this message or hash,
+    /// or it is not a well formed RSA-2048 signature at all. Raised by
+    /// [`PublicKey::verify`] and [`PublicKey::verify_hash`].
     #[error("signature verification failed")]
     InvalidSignature,
 }

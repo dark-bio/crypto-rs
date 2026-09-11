@@ -85,6 +85,8 @@ jobs:
 
   docs:
     runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: -D warnings
     steps:
       - uses: actions/checkout@v7
       - run: cargo doc --all-features --no-deps

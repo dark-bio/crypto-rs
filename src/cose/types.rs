@@ -12,7 +12,7 @@ use crate::{xdsa, xhpke};
 /// Private COSE header label for Unix timestamp.
 pub const HEADER_TIMESTAMP: i64 = -70002;
 
-/// Protected header for COSE_Sign1.
+/// Protected header for [`CoseSign1`].
 #[derive(Debug, Clone, PartialEq, Eq, Cbor)]
 pub struct SigProtectedHeader {
     /// Algorithm identifier (COSE header label 1)
@@ -38,7 +38,7 @@ pub struct CritHeader {
     pub timestamp: i64,
 }
 
-/// Protected header for COSE_Encrypt0.
+/// Protected header for [`CoseEncrypt0`].
 #[derive(Debug, Clone, PartialEq, Eq, Cbor)]
 pub struct EncProtectedHeader {
     /// Algorithm identifier (COSE header label 1)
@@ -49,11 +49,11 @@ pub struct EncProtectedHeader {
     pub kid: xhpke::Fingerprint,
 }
 
-/// Empty unprotected header map (for COSE_Sign1).
+/// Empty unprotected header map (for [`CoseSign1`]).
 #[derive(Debug, Clone, PartialEq, Eq, Cbor)]
 pub struct EmptyHeader {}
 
-/// Unprotected header containing the encapsulated key (for COSE_Encrypt0).
+/// Unprotected header containing the encapsulated key (for [`CoseEncrypt0`]).
 #[derive(Debug, Clone, PartialEq, Eq, Cbor)]
 pub struct EncapKeyHeader {
     /// Encapsulated key (COSE header label -4)
@@ -116,9 +116,15 @@ pub struct CoseEncrypt0 {
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SigStructure<'a> {
+    /// Fixed context string, `Signature1` for [`CoseSign1`].
     pub context: &'static str,
+    /// The protected header, already CBOR encoded.
     pub protected: &'a [u8],
+    /// Data authenticated but not transmitted, the domain and the caller's
+    /// message.
     pub external_aad: &'a [u8],
+    /// The signed payload bytes. This crate's detached convention uses an empty
+    /// payload and authenticates the caller's message through `external_aad`.
     pub payload: &'a [u8],
 }
 
@@ -144,8 +150,11 @@ impl crate::cbor::Encode for SigStructure<'_> {
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EncStructure<'a> {
+    /// Fixed context string, `Encrypt0` for [`CoseEncrypt0`].
     pub context: &'static str,
+    /// The protected header, already CBOR encoded.
     pub protected: &'a [u8],
+    /// Data authenticated but not transmitted, the caller's message.
     pub external_aad: &'a [u8],
 }
 

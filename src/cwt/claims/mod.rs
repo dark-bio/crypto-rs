@@ -20,6 +20,7 @@ use crate::xhpke;
 /// Issuer identifies the principal that issued the token (key 1).
 #[derive(Clone, Debug, PartialEq, Eq, Cbor)]
 pub struct Issuer {
+    /// Issuer identity, a URI or any string the ecosystem agrees on.
     #[cbor(key = 1)]
     pub iss: String,
 }
@@ -27,6 +28,7 @@ pub struct Issuer {
 /// Subject identifies the principal that is the subject of the token (key 2).
 #[derive(Clone, Debug, PartialEq, Eq, Cbor)]
 pub struct Subject {
+    /// Subject identity, for a device its serial or attestation subject.
     #[cbor(key = 2)]
     pub sub: String,
 }
@@ -34,6 +36,7 @@ pub struct Subject {
 /// Audience identifies the recipients the token is intended for (key 3).
 #[derive(Clone, Debug, PartialEq, Eq, Cbor)]
 pub struct Audience {
+    /// Intended audience, a URI or any string the ecosystem agrees on.
     #[cbor(key = 3)]
     pub aud: String,
 }
@@ -41,6 +44,7 @@ pub struct Audience {
 /// Expiration is the time on or after which the token must not be accepted (key 4).
 #[derive(Clone, Debug, PartialEq, Eq, Cbor)]
 pub struct Expiration {
+    /// Expiration time, seconds since the Unix epoch. Rejected at or after.
     #[cbor(key = 4)]
     pub exp: u64,
 }
@@ -48,6 +52,7 @@ pub struct Expiration {
 /// NotBefore is the time before which the token must not be accepted (key 5).
 #[derive(Clone, Debug, PartialEq, Eq, Cbor)]
 pub struct NotBefore {
+    /// Not-before time, seconds since the Unix epoch. Rejected before.
     #[cbor(key = 5)]
     pub nbf: u64,
 }
@@ -55,6 +60,7 @@ pub struct NotBefore {
 /// IssuedAt is the time at which the token was issued (key 6).
 #[derive(Clone, Debug, PartialEq, Eq, Cbor)]
 pub struct IssuedAt {
+    /// Issue time, seconds since the Unix epoch.
     #[cbor(key = 6)]
     pub iat: u64,
 }
@@ -62,6 +68,7 @@ pub struct IssuedAt {
 /// TokenID is a unique identifier for the token (key 7).
 #[derive(Clone, Debug, PartialEq, Eq, Cbor)]
 pub struct TokenId {
+    /// Token identifier, opaque bytes unique per token.
     #[cbor(key = 7)]
     pub cti: Vec<u8>,
 }
@@ -129,6 +136,10 @@ impl ConfirmKey for xhpke::PublicKey {}
 
 /// Confirm binds a public key to the token via the cnf claim (key 8, RFC 8747).
 /// The COSE_Key wrapping is handled internally.
+///
+/// A verified token authenticates this key binding, but does not prove that
+/// the presenter possesses the corresponding private key. Applications must
+/// check that separately using their protocol's proof-of-possession mechanism.
 #[derive(Clone, Debug)]
 pub struct Confirm<T: ConfirmKey> {
     key: T,

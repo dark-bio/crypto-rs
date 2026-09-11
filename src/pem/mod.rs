@@ -5,6 +5,25 @@
 // license that can be found in the LICENSE file.
 
 //! Strict PEM encoding and decoding.
+//!
+//! One block per input, no leading whitespace, and strict base64. Body lines
+//! may mix LF and CRLF; [`decode`] documents the rules at the block boundaries.
+//! Only an optional final newline may follow the footer. The decoded payload
+//! is wiped when dropped, since it usually is a private key.
+//!
+//! ```
+//! use darkbio_crypto::pem;
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let encoded = pem::encode("EXAMPLE", b"hello");
+//! assert!(encoded.starts_with("-----BEGIN EXAMPLE-----\n"));
+//!
+//! let (kind, data) = pem::decode(encoded.as_bytes())?;
+//! assert_eq!(kind, "EXAMPLE");
+//! assert_eq!(*data, b"hello");
+//! # Ok(())
+//! # }
+//! ```
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
@@ -14,23 +33,35 @@ const PEM_HEADER: &[u8] = b"-----BEGIN ";
 const PEM_FOOTER: &[u8] = b"-----END ";
 const PEM_ENDING: &[u8] = b"-----";
 
-/// Error is the failures that can occur during PEM operations.
+/// Error is the failures that can occur while parsing PEM with [`decode`].
+/// Encoding cannot fail.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
+    /// The input does not start with `-----BEGIN `. Leading whitespace counts
+    /// as missing.
     #[error("missing PEM header")]
     MissingHeader,
+    /// The first line is not a complete `-----BEGIN TYPE-----` header. The
+    /// message says what is missing.
     #[error("malformed PEM header: {0}")]
     MalformedHeader(String),
+    /// The header names no block type.
     #[error("empty PEM block type")]
     EmptyBlockType,
+    /// The block type is not valid UTF-8.
     #[error("malformed PEM block type")]
     MalformedBlockType,
+    /// No `-----END TYPE-----` footer matches the header's block type.
     #[error("missing PEM footer")]
     MissingFooter,
+    /// Bytes follow the footer other than a single line ending matching the header.
     #[error("trailing data after PEM block")]
     TrailingData,
+    /// The body between header and footer is empty or does not end in a line
+    /// ending. The message says which.
     #[error("malformed PEM body: {0}")]
     MalformedBody(String),
+    /// The body is not strict base64. Carries the decoder's reason.
     #[error("malformed base64 payload: {0}")]
     MalformedPayload(String),
 }
@@ -38,12 +69,13 @@ pub enum Error {
 /// Decodes a single PEM block with strict validation.
 ///
 /// Rules:
-///   - Header must start at byte 0 (no leading whitespace)
-///   - Footer must end the data (only optional line ending after)
-///   - Line endings must be consistent (\n or \r\n throughout)
-///   - Base64 lines contain only base64 characters
-///   - Strict base64 decoding (no padding errors, etc.)
-///   - No trailing data after the PEM block
+///
+/// - Header must start at byte 0, with no leading whitespace.
+/// - Footer must end the data, apart from an optional line ending matching
+///   the header's LF or CRLF.
+/// - Body lines may mix LF and CRLF. If the header uses CRLF, the line ending
+///   immediately before the footer must also be CRLF.
+/// - Base64 lines contain only base64 characters, with strict padding validation.
 ///
 /// Returns (kind, data) tuple on success, with the data wiped on drop.
 pub fn decode(data: &[u8]) -> Result<(String, Zeroizing<Vec<u8>>), Error> {
