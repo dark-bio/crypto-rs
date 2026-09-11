@@ -31,7 +31,9 @@ The library is opinionated. Parameters and primitives were selected to provide m
   - **CWT ([RFC-8392](https://datatracker.ietf.org/doc/html/rfc8392))**: `xDSA`, `xHPKE`
     - **EAT ([RFC-9711](https://datatracker.ietf.org/doc/html/rfc9711))**
 
-All functionality is WASM ready.
+All functionality is WASM ready. Targeting `wasm32-unknown-unknown` needs the
+`getrandom_backend="wasm_js"` config passed to rustc, as this repository does in
+its own `.cargo/config.toml`.
 
 *The entire library is hidden behind feature flags to allow selectively depending on it from the firmware, cloud and mobile app, each cherry-picking only what's needed.*
 

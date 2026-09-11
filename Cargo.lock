@@ -221,7 +221,7 @@ dependencies = [
 
 [[package]]
 name = "darkbio-crypto"
-version = "0.18.1"
+version = "0.18.2"
 dependencies = [
  "argon2",
  "base64",
@@ -252,7 +252,7 @@ dependencies = [
 
 [[package]]
 name = "darkbio-crypto-cbor-derive"
-version = "0.18.1"
+version = "0.18.2"
 dependencies = [
  "proc-macro2",
  "quote",
