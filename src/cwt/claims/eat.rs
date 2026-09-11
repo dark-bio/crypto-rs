@@ -7,6 +7,13 @@
 //! EAT (Entity Attestation Token) claims.
 //!
 //! <https://datatracker.ietf.org/doc/html/rfc9711>
+//!
+//! These types encode claims and validate their supported wire representations.
+//! Applications must evaluate the claims against their attestation policy and
+//! enforce RFC 9711's relationships between claims. For example, `hwmodel` and
+//! `oemboot` require `oemid`, `hwversion` requires `hwmodel`, and `swversion`
+//! requires `swname`. [`DebugState::DisabledPermanently`] also requires `oemid`.
+//! These relationships are not checked by [`crate::cwt::verify`].
 
 use crate::cbor::{
     self, Cbor, Decode, Encode, MapDecode, MapEncode, MapEncodeBuffer, MapEntryAccess,
@@ -15,6 +22,10 @@ use crate::cbor::{
 /// UEID is a globally unique device identifier such as a serial number
 /// or IMEI (key 256). The value is an opaque byte string including a
 /// type prefix byte per RFC 9711 Section 4.2.1.
+///
+/// A RAND UEID uses prefix `0x01` followed by 16, 24, or 32 bytes of random
+/// identifier data provisioned once for the device. This type stores the bytes
+/// as supplied; callers must validate the prefix, length, and identifier policy.
 #[derive(Clone, Debug, PartialEq, Eq, Cbor)]
 pub struct Ueid {
     /// Opaque device identifier, its first byte the RFC 9711 type prefix.
@@ -295,9 +306,12 @@ pub enum DebugState {
     Disabled = 1,
     /// Debug was disabled at boot and has not been enabled since.
     DisabledSinceBoot = 2,
-    /// Debug is disabled and cannot be re-enabled.
+    /// All debug has been disabled since boot. End users and developers cannot
+    /// re-enable it, but the manufacturer identified by `oemid` may do so.
+    /// The `oemid` claim must be present; the application must enforce this.
     DisabledPermanently = 3,
-    /// All debug, including DMA-based, is permanently disabled.
+    /// All debug facilities are permanently disabled, including manufacturer
+    /// facilities; none can be re-enabled.
     DisabledFullyPermanently = 4,
 }
 

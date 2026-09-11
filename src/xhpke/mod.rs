@@ -9,10 +9,10 @@
 //! <https://datatracker.ietf.org/doc/html/rfc9180>
 //!
 //! Messages are encrypted to a public key with X-Wing, a hybrid of ML-KEM-768
-//! and X25519, and sealed with ChaCha20-Poly1305. Every operation takes a
-//! domain string, prefixed with [`DOMAIN_PREFIX`], which both sides must agree
-//! on. The ciphertext also authenticates a second message that travels in the
-//! clear.
+//! and X25519, and sealed with ChaCha20-Poly1305. Encryption and decryption use
+//! an application domain, prefixed with [`DOMAIN_PREFIX`], which both sides
+//! must agree on. The ciphertext also authenticates a second message that must
+//! be supplied separately.
 //!
 //! ```
 //! use darkbio_crypto::xhpke;
@@ -32,7 +32,8 @@
 //! ```
 //!
 //! A [`Sender`] and [`Receiver`] pair shares one encapsulated key across many
-//! messages, which must be opened in the order they were sealed.
+//! messages, which must be opened in the order they were sealed. The domain is
+//! fixed when the contexts are created.
 //!
 //! ```
 //! use darkbio_crypto::xhpke;
@@ -120,16 +121,16 @@ pub enum Error {
     /// and [`PublicKey::from_der`], and through them by the PEM parsers.
     #[error("not an X-Wing key")]
     UnexpectedAlgorithm,
-    /// The key parsed but its contents are unusable, a wrong size, an ML-KEM
-    /// coefficient out of range, unexpected algorithm parameters or an
-    /// unsupported PKCS#8 version. The message names the problem. Raised by
-    /// every key constructor apart from [`SecretKey::from_bytes`], which cannot
-    /// fail.
+    /// The key encoding cannot be parsed or its contents are unusable, such
+    /// as a wrong size, an ML-KEM coefficient out of range, unexpected algorithm
+    /// parameters, trailing DER bytes, or an unsupported PKCS#8 version. The
+    /// message names the problem. Raised by the fallible key constructors.
     #[error("malformed key: {0}")]
     MalformedKey(String),
-    /// Bytes follow the DER key encoding. Nothing may. Raised by
-    /// [`SecretKey::from_der`] and [`PublicKey::from_der`], and through them by
-    /// the PEM parsers.
+    /// A parsed DER key re-encodes to a different length than the input.
+    /// This is a fallback consistency check in the DER constructors. The DER
+    /// parser rejects appended bytes first and reports [`Error::MalformedKey`]
+    /// instead, including when called through the PEM constructors.
     #[error("trailing data in key encoding")]
     TrailingData,
     /// Encrypting to the public key failed. Carries the HPKE error text. Raised

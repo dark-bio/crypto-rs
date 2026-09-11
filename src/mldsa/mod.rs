@@ -10,7 +10,7 @@
 //!
 //! ML-DSA-65 on its own, the post-quantum half of the composite scheme in the
 //! `xdsa` module. Signing takes a context string that verification must
-//! repeat, and an empty one is valid.
+//! repeat. Contexts may contain 0 to 255 bytes; signing panics for longer ones.
 //!
 //! ```
 //! use darkbio_crypto::mldsa;
@@ -78,16 +78,17 @@ pub enum Error {
     /// and [`PublicKey::from_der`], and through them by the PEM parsers.
     #[error("not an ML-DSA-65 key")]
     UnexpectedAlgorithm,
-    /// The key parsed as DER but its contents are unusable, wrong seed or
-    /// key sizes, an expanded key that does not match its seed, unexpected
-    /// algorithm parameters or an unsupported PKCS#8 version. The message
-    /// names the problem. Raised by the DER and PEM parsers, the byte
-    /// constructors cannot fail.
+    /// The key encoding cannot be parsed or its contents are unusable, such
+    /// as wrong seed or key sizes, an expanded key that does not match its
+    /// seed, unexpected algorithm parameters, trailing DER bytes, or an
+    /// unsupported PKCS#8 version. The message names the problem. Raised by
+    /// the DER and PEM parsers; the byte constructors cannot fail.
     #[error("malformed key: {0}")]
     MalformedKey(String),
-    /// Bytes follow the DER key encoding. Nothing may. Raised by
-    /// [`SecretKey::from_der`] and [`PublicKey::from_der`], and through them by
-    /// the PEM parsers.
+    /// A parsed DER key re-encodes to a different length than the input.
+    /// This is a fallback consistency check in the DER constructors. The DER
+    /// parser rejects appended bytes first and reports [`Error::MalformedKey`]
+    /// instead, including when called through the PEM constructors.
     #[error("trailing data in key encoding")]
     TrailingData,
     /// The signature does not verify under the key for this message and
@@ -250,6 +251,12 @@ impl SecretKey {
     }
 
     /// sign creates a digital signature of the message with an optional context string.
+    ///
+    /// Pass an empty slice for no context. Verification must use the same bytes.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `ctx` is longer than 255 bytes.
     pub fn sign(&self, message: &[u8], ctx: &[u8]) -> Signature {
         let sig = self
             .inner
@@ -359,6 +366,9 @@ impl PublicKey {
     }
 
     /// verify verifies a digital signature with an optional context string.
+    ///
+    /// The context must match the one used for signing. A context longer than
+    /// 255 bytes is rejected with [`Error::InvalidSignature`].
     pub fn verify(&self, message: &[u8], ctx: &[u8], signature: &Signature) -> Result<(), Error> {
         let sig = ml_dsa::Signature::<MlDsa65>::try_from(signature.to_bytes().as_slice())
             .map_err(|_| Error::InvalidSignature)?;

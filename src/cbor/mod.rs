@@ -140,10 +140,18 @@
 //!
 //! # Encoding rules
 //!
-//! All output is deterministic (RFC 8949 Section 4.2.1): canonical shortest-form
-//! integers, map keys sorted by encoded bytes, no indefinite lengths, no floats,
-//! no tags. Decoders reject non-canonical input, duplicate keys, and out-of-order
-//! keys.
+//! Built-in types and derived structs use deterministic encoding (RFC 8949
+//! Section 4.2.1): shortest-form integers, map keys sorted by encoded bytes, no
+//! indefinite lengths, no floats, and no tags. Their decoders enforce these
+//! rules for the values they decode and reject unknown struct fields.
+//!
+//! [`Raw`] is an exception. Encoding copies its bytes without validation, and
+//! decoding only walks enough structure to find an item's boundaries. A raw
+//! item can contain duplicate or unsorted map keys, non-integer map keys, or
+//! invalid UTF-8. Use [`verify`] to validate the complete CBOR item, including
+//! any raw fields, when the deterministic encoding rules are required. Custom
+//! [`Encode`] and [`Decode`] implementations are responsible for their own
+//! validation too.
 
 pub use darkbio_crypto_cbor_derive::Cbor;
 
@@ -231,6 +239,9 @@ pub enum Error {
 
 /// encode attempts to encode a generic Rust value to CBOR using the tiny, strict
 /// subset of types permitted by this package.
+///
+/// Validation depends on the value's [`Encode`] implementation. In particular,
+/// [`Raw`] copies bytes verbatim; use [`verify`] to check the resulting encoding.
 pub fn encode<T: Encode>(value: T) -> Result<Vec<u8>, Error> {
     let mut buf = Vec::with_capacity(128);
     value.encode_cbor_to(&mut buf)?;
@@ -239,12 +250,19 @@ pub fn encode<T: Encode>(value: T) -> Result<Vec<u8>, Error> {
 
 /// decode attempts to decode a CBOR blob into a generic Rust type using the tiny,
 /// strict subset of types permitted by this package.
+///
+/// Validation depends on the target's [`Decode`] implementation. [`Raw`] fields
+/// are only structurally traversed; use [`verify`] first to validate their contents.
 pub fn decode<T: Decode>(data: &[u8]) -> Result<T, Error> {
     T::decode_cbor(data)
 }
 
 /// verify does a dry-run decoding to verify that only the tiny, strict subset of
 /// types permitted by this package were used.
+///
+/// Checks exactly one complete item, including UTF-8 text, deterministic integer
+/// and length encodings, integer map keys in order without duplicates, and the
+/// nesting limit. It does not validate application-specific schemas or values.
 pub fn verify(data: &[u8]) -> Result<(), Error> {
     let mut decoder = Decoder::new(data);
     verify_object(&mut decoder, MAX_DEPTH)?;
@@ -1303,6 +1321,12 @@ impl<'a, 'b, E: MapEntryAccess<'a>> MapEntryAccess<'a> for MapEntriesScoped<'a, 
 
 /// Raw is a placeholder type to allow only partially parsing CBOR objects when
 /// some part might depend on another (e.g. version tag, method in an RPC, etc).
+///
+/// Encoding copies the bytes verbatim, without checking that they contain even
+/// one valid CBOR item. Decoding traverses one item's structure and checks its
+/// headers, lengths, supported types, and nesting depth, but does not validate
+/// text as UTF-8 or check map key types, order, or duplicates. Use [`verify`] on
+/// the bytes when full validation of this crate's CBOR subset is required.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Raw(pub Vec<u8>);
 

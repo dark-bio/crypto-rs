@@ -10,7 +10,7 @@
 //!
 //! A key signs a message with ML-DSA-65 and Ed25519 at once, and a signature
 //! verifies only if both halves do. Keys and signatures round trip through
-//! fixed size byte arrays, DER and PEM.
+//! fixed size byte arrays. Keys also support DER and PEM serialization.
 //!
 //! ```
 //! use darkbio_crypto::xdsa;
@@ -83,15 +83,16 @@ pub enum Error {
     /// and [`PublicKey::from_der`], and through them by the PEM parsers.
     #[error("not a composite ML-DSA-65-Ed25519-SHA512 key")]
     UnexpectedAlgorithm,
-    /// The key parsed as DER but its contents are unusable, wrong component
-    /// sizes, unexpected algorithm parameters or an unsupported PKCS#8
-    /// version. The message names the problem. Raised by every key constructor
-    /// apart from [`SecretKey::from_bytes`], which cannot fail.
+    /// The key encoding cannot be parsed or its contents are unusable, such
+    /// as invalid component keys or sizes, unexpected algorithm parameters,
+    /// trailing DER bytes, or an unsupported PKCS#8 version. The message names
+    /// the problem. Raised by the fallible key constructors.
     #[error("malformed key: {0}")]
     MalformedKey(String),
-    /// Bytes follow the DER key encoding. Nothing may. Raised by
-    /// [`SecretKey::from_der`] and [`PublicKey::from_der`], and through them by
-    /// the PEM parsers.
+    /// A parsed DER key re-encodes to a different length than the input.
+    /// This is a fallback consistency check in the DER constructors. The DER
+    /// parser rejects appended bytes first and reports [`Error::MalformedKey`]
+    /// instead, including when called through the PEM constructors.
     #[error("trailing data in key encoding")]
     TrailingData,
     /// The signature does not verify under the key for this message. Either
@@ -440,6 +441,27 @@ impl crate::cbor::Decode for PublicKey {
 ///
 /// Use this when signing separately with individual ML-DSA and Ed25519 keys
 /// before composing the signatures with [`Signature::compose`].
+/// The empty `ctx` above belongs to the composite message format. The ML-DSA
+/// signing operation must separately use [`SIGNATURE_DOMAIN`] as its context.
+///
+/// ```
+/// use darkbio_crypto::xdsa;
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let secret = xdsa::SecretKey::generate();
+/// let public = secret.public_key();
+/// let (ml_key, ed_key) = secret.split();
+///
+/// let message = b"hello";
+/// let signing_message = xdsa::split_signing_message(message);
+/// let signature = xdsa::Signature::compose(
+///     ml_key.sign(&signing_message, xdsa::SIGNATURE_DOMAIN),
+///     ed_key.sign(&signing_message),
+/// );
+/// public.verify(message, &signature)?;
+/// # Ok(())
+/// # }
+/// ```
 pub fn split_signing_message(message: &[u8]) -> Vec<u8> {
     let mut hasher = sha2::Sha512::new();
     hasher.update(message);

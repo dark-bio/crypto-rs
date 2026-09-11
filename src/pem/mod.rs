@@ -6,9 +6,10 @@
 
 //! Strict PEM encoding and decoding.
 //!
-//! One block per input, no leading whitespace, no trailing data, consistent
-//! line endings and strict base64. The decoded payload is wiped when dropped,
-//! since it usually is a private key.
+//! One block per input, no leading whitespace, and strict base64. Body lines
+//! may mix LF and CRLF; [`decode`] documents the rules at the block boundaries.
+//! Only an optional final newline may follow the footer. The decoded payload
+//! is wiped when dropped, since it usually is a private key.
 //!
 //! ```
 //! use darkbio_crypto::pem;
@@ -53,7 +54,7 @@ pub enum Error {
     /// No `-----END TYPE-----` footer matches the header's block type.
     #[error("missing PEM footer")]
     MissingFooter,
-    /// Bytes follow the footer beyond a single line ending.
+    /// Bytes follow the footer other than a single line ending matching the header.
     #[error("trailing data after PEM block")]
     TrailingData,
     /// The body between header and footer is empty or does not end in a line
@@ -68,12 +69,13 @@ pub enum Error {
 /// Decodes a single PEM block with strict validation.
 ///
 /// Rules:
-///   - Header must start at byte 0 (no leading whitespace)
-///   - Footer must end the data (only optional line ending after)
-///   - Line endings must be consistent (\n or \r\n throughout)
-///   - Base64 lines contain only base64 characters
-///   - Strict base64 decoding (no padding errors, etc.)
-///   - No trailing data after the PEM block
+///
+/// - Header must start at byte 0, with no leading whitespace.
+/// - Footer must end the data, apart from an optional line ending matching
+///   the header's LF or CRLF.
+/// - Body lines may mix LF and CRLF. If the header uses CRLF, the line ending
+///   immediately before the footer must also be CRLF.
+/// - Base64 lines contain only base64 characters, with strict padding validation.
 ///
 /// Returns (kind, data) tuple on success, with the data wiped on drop.
 pub fn decode(data: &[u8]) -> Result<(String, Zeroizing<Vec<u8>>), Error> {

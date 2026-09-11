@@ -18,29 +18,45 @@ use zeroize::{Zeroize, Zeroizing};
 
 /// key derives a key from the password, salt, and cost parameters using
 /// Argon2id returning a fixed-size byte array that can be used as a
-/// cryptographic key. The CPU cost and parallelism degree must be greater
-/// than zero.
+/// cryptographic key.
 ///
-/// For example, a 32 byte key for a cipher like AES-256 or ChaCha20:
+/// For example, a 32 byte key using RFC 9106's recommended profile for
+/// memory-constrained environments:
 ///
 /// ```
 /// use darkbio_crypto::argon2;
 ///
-/// let key = argon2::key::<32>(b"password", b"random salt", 1, 64 * 1024, 4);
+/// // Example salt only; generate and store a fresh random 16-byte salt in real code.
+/// let salt = b"example salt1234";
+/// let key = argon2::key::<32>(b"password", salt, 3, 64 * 1024, 4);
 /// assert_eq!(key.len(), 32);
 /// ```
 ///
-/// [RFC 9106 Section 7.4] recommends time=1, and memory=2048*1024 as a sensible
-/// number. If using that amount of memory (2GB) is not possible in some contexts
-/// then the time parameter can be increased to compensate.
+/// [RFC 9106 Section 4] recommends `time = 1`, `memory = 2 * 1024 * 1024`
+/// (2 GiB), and `threads = 4`. Its second recommendation uses `time = 3`,
+/// `memory = 64 * 1024` (64 MiB), and `threads = 4`. Both use a random 16-byte
+/// salt and a 32-byte output.
 ///
-/// The time parameter specifies the number of passes over the memory and the
-/// memory parameter specifies the size of the memory in KiB. The number of threads
-/// can be adjusted to the numbers of available CPUs. The cost parameters should be
-/// increased as memory latency and CPU parallelism increases. Remember to get a
-/// good random salt.
+/// `time` is the number of passes and `memory` is the total working memory in
+/// KiB. `threads` is Argon2's lane count, an algorithm parameter that changes
+/// the derived key. This crate configures its Argon2 dependency for serial
+/// execution; this argument does not select an OS thread count. Store the salt
+/// and all cost parameters so the same key can be reproduced on other devices.
 ///
-/// [RFC 9106 Section 7.4]: https://www.rfc-editor.org/rfc/rfc9106.html#section-7.4
+/// # Panics
+///
+/// Panics if any of these input limits are violated:
+///
+/// - `time` must be at least 1.
+/// - `threads` must be in `1..=0x00ff_ffff`.
+/// - `memory` must be at least `8 * threads` KiB.
+/// - `salt` must contain 8 to `u32::MAX` bytes.
+/// - `password` must contain at most `u32::MAX` bytes.
+/// - `N` must be in `4..=u32::MAX`.
+///
+/// Also panics if allocation of the working memory fails.
+///
+/// [RFC 9106 Section 4]: https://www.rfc-editor.org/rfc/rfc9106.html#section-4
 pub fn key<const N: usize>(
     password: &[u8],
     salt: &[u8],
@@ -58,24 +74,17 @@ pub fn key<const N: usize>(
 
 /// key_with_len derives a key from the password, salt, and cost parameters
 /// using Argon2id returning a byte vector that can be used as a cryptographic
-/// key. The CPU cost and parallelism degree must be greater than zero.
-///
-/// [RFC 9106 Section 7.4] recommends time=1, and memory=2048*1024 as a sensible
-/// number. If using that amount of memory (2GB) is not possible in some contexts
-/// then the time parameter can be increased to compensate.
-///
-/// The time parameter specifies the number of passes over the memory and the
-/// memory parameter specifies the size of the memory in KiB. The number of threads
-/// can be adjusted to the numbers of available CPUs. The cost parameters should be
-/// increased as memory latency and CPU parallelism increases. Remember to get a
-/// good random salt.
-///
-/// [RFC 9106 Section 7.4]: https://www.rfc-editor.org/rfc/rfc9106.html#section-7.4
+/// key. See [`key`] for parameter meanings and recommended profiles.
 ///
 /// This method is analogous to [`key`] but takes the output size as a parameter
 /// and returns a vector instead of a fixed-sized array. Its purpose is to be
 /// used on FFI interfaces where generics break composability. Do not use it in
 /// Rust code.
+///
+/// # Panics
+///
+/// Panics for the same invalid inputs as [`key`], with `out` in place of `N`,
+/// or if allocation of the working memory fails.
 pub fn key_with_len(
     password: &[u8],
     salt: &[u8],

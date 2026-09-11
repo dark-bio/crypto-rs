@@ -69,15 +69,16 @@ pub enum Error {
     /// and [`PublicKey::from_der`], and through them by the PEM parsers.
     #[error("not an Ed25519 key")]
     UnexpectedAlgorithm,
-    /// The key parsed as DER but its contents are unusable, a seed or point
-    /// of the wrong size, unexpected algorithm parameters or an unsupported
-    /// PKCS#8 version. The message names the problem. Raised by every key
-    /// constructor apart from [`SecretKey::from_bytes`], which cannot fail.
+    /// The key encoding cannot be parsed or its contents are unusable, such
+    /// as a seed or point of the wrong size, unexpected algorithm parameters,
+    /// trailing DER bytes, or an unsupported PKCS#8 version. The message names
+    /// the problem. Raised by the fallible key constructors.
     #[error("malformed key: {0}")]
     MalformedKey(String),
-    /// Bytes follow the DER key encoding. Nothing may. Raised by
-    /// [`SecretKey::from_der`] and [`PublicKey::from_der`], and through them by
-    /// the PEM parsers.
+    /// A parsed DER key re-encodes to a different length than the input.
+    /// This is a fallback consistency check in the DER constructors. The DER
+    /// parser rejects appended bytes first and reports [`Error::MalformedKey`]
+    /// instead, including when called through the PEM constructors.
     #[error("trailing data in key encoding")]
     TrailingData,
     /// The signature does not verify under the key for this message. Raised by

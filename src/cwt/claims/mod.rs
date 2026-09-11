@@ -136,6 +136,10 @@ impl ConfirmKey for xhpke::PublicKey {}
 
 /// Confirm binds a public key to the token via the cnf claim (key 8, RFC 8747).
 /// The COSE_Key wrapping is handled internally.
+///
+/// A verified token authenticates this key binding, but does not prove that
+/// the presenter possesses the corresponding private key. Applications must
+/// check that separately using their protocol's proof-of-possession mechanism.
 #[derive(Clone, Debug)]
 pub struct Confirm<T: ConfirmKey> {
     key: T,

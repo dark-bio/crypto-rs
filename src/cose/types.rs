@@ -123,7 +123,8 @@ pub struct SigStructure<'a> {
     /// Data authenticated but not transmitted, the domain and the caller's
     /// message.
     pub external_aad: &'a [u8],
-    /// The signed payload bytes, empty for detached signatures.
+    /// The signed payload bytes. This crate's detached convention uses an empty
+    /// payload and authenticates the caller's message through `external_aad`.
     pub payload: &'a [u8],
 }
 

@@ -13,6 +13,12 @@
 //! [`claims::Subject`], etc.) that can be composed into application-specific
 //! token types.
 //!
+//! [`verify`] checks the signature against the supplied key and, when requested,
+//! the `nbf` and `exp` time bounds. Applications must establish trust in that key,
+//! check issuer and audience claims, and apply their own attestation policy.
+//! EAT claim relationships and proof of possession of a `cnf` key are not
+//! automatically checked.
+//!
 //! # Example
 //!
 //! ```
@@ -39,12 +45,16 @@
 //! let device = xdsa::SecretKey::generate();
 //! let now = 1_700_000_000;
 //!
+//! // Example RAND UEID from the generated identity: type 0x01 and 16 identifier bytes.
+//! // Provision it once and retain it for the device's lifetime, even if keys change.
+//! let ueid = [&[0x01][..], &device.fingerprint().to_bytes()[..16]].concat();
+//!
 //! let cert = DeviceCert {
 //!     sub: claims::Subject { sub: "ark-0001".into() },
 //!     exp: claims::Expiration { exp: now + 3600 },
 //!     nbf: claims::NotBefore { nbf: now },
 //!     cnf: claims::Confirm::new(device.public_key()),
-//!     ueid: vec![0x01, 0xaa, 0xbb],
+//!     ueid,
 //! };
 //! let token = cwt::issue(&cert, &issuer, b"device-cert")?;
 //!
@@ -142,6 +152,12 @@ pub fn issue_at(
 /// [`claims::NotBefore`]) must be present and `nbf <= now`, and if the exp claim
 /// (key 4, [`claims::Expiration`]) is present then `now < exp`. When `now` is
 /// `None`, temporal validation is skipped entirely.
+///
+/// The COSE signature timestamp is not checked; temporal validity comes from
+/// the CWT claims. `T` determines the accepted claim schema. Successful
+/// verification does not establish issuer trust, enforce an audience, evaluate
+/// attestation policy or EAT claim relationships, or prove possession of a
+/// [`claims::Confirm`] key. The application must perform those checks.
 pub fn verify<T: Decode>(
     data: &[u8],
     verifier: &xdsa::PublicKey,
