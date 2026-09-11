@@ -6,20 +6,29 @@
 
 //! Argon2id cryptography wrappers and parametrization.
 //!
-//! https://datatracker.ietf.org/doc/html/rfc9106
+//! <https://datatracker.ietf.org/doc/html/rfc9106>
+//!
+//! Turns a password and a salt into key material, made deliberately slow and
+//! memory hungry so guessing passwords is expensive. The output is wiped when
+//! dropped. For stretching a secret that is already random, see the `hkdf`
+//! module instead.
 
 use argon2::{Algorithm, Argon2, Block, Params, Version};
 use zeroize::{Zeroize, Zeroizing};
 
-/// Key derives a key from the password, salt, and cost parameters using
+/// key derives a key from the password, salt, and cost parameters using
 /// Argon2id returning a fixed-size byte array that can be used as a
 /// cryptographic key. The CPU cost and parallelism degree must be greater
 /// than zero.
 ///
-/// For example, you can get a derived key for e.g. AES-256 (which needs a
-/// 32-byte key) by doing:
+/// For example, a 32 byte key for a cipher like AES-256 or ChaCha20:
 ///
-///   let key = argon2::key::<32>(b"password", b"salt", 1, 64*1024, 4);
+/// ```
+/// use darkbio_crypto::argon2;
+///
+/// let key = argon2::key::<32>(b"password", b"random salt", 1, 64 * 1024, 4);
+/// assert_eq!(key.len(), 32);
+/// ```
 ///
 /// [RFC 9106 Section 7.4] recommends time=1, and memory=2048*1024 as a sensible
 /// number. If using that amount of memory (2GB) is not possible in some contexts
@@ -47,15 +56,9 @@ pub fn key<const N: usize>(
     output
 }
 
-/// Key derives a key from the password, salt, and cost parameters using
-/// Argon2id returning a fixed-size byte array that can be used as a
-/// cryptographic key. The CPU cost and parallelism degree must be greater
-/// than zero.
-///
-/// For example, you can get a derived key for e.g. AES-256 (which needs a
-/// 32-byte key) by doing:
-///
-///   let key = argon2::key_with_len(b"password", b"salt", 1, 64*1024, 4, 32);
+/// key_with_len derives a key from the password, salt, and cost parameters
+/// using Argon2id returning a byte vector that can be used as a cryptographic
+/// key. The CPU cost and parallelism degree must be greater than zero.
 ///
 /// [RFC 9106 Section 7.4] recommends time=1, and memory=2048*1024 as a sensible
 /// number. If using that amount of memory (2GB) is not possible in some contexts
@@ -69,7 +72,7 @@ pub fn key<const N: usize>(
 ///
 /// [RFC 9106 Section 7.4]: https://www.rfc-editor.org/rfc/rfc9106.html#section-7.4
 ///
-/// This method is analogous to `key` but takes the output size as a parameter
+/// This method is analogous to [`key`] but takes the output size as a parameter
 /// and returns a vector instead of a fixed-sized array. Its purpose is to be
 /// used on FFI interfaces where generics break composability. Do not use it in
 /// Rust code.

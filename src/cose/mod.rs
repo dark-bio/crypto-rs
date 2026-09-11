@@ -6,8 +6,49 @@
 
 //! COSE wrappers for xDSA and xHPKE.
 //!
-//! https://datatracker.ietf.org/doc/html/rfc8152
-//! https://datatracker.ietf.org/doc/html/draft-ietf-cose-hpke
+//! <https://datatracker.ietf.org/doc/html/rfc8152>
+//! <https://datatracker.ietf.org/doc/html/draft-ietf-cose-hpke>
+//!
+//! Signatures are [`CoseSign1`] envelopes carrying the signer's fingerprint and
+//! a timestamp in the protected header. Encryption is [`CoseEncrypt0`] around a
+//! signed envelope, so every sealed message is also signed. Payloads and the
+//! authenticated messages are any types implementing the crate's CBOR traits,
+//! and every operation takes a domain string, prefixed with [`DOMAIN_PREFIX`],
+//! which both sides must agree on.
+//!
+//! ```
+//! use darkbio_crypto::{cose, xdsa, xhpke};
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let signer = xdsa::SecretKey::generate();
+//!
+//! // Sign a payload, binding a second message that travels in the clear
+//! let envelope = cose::sign("hello".to_string(), "context", &signer, b"example")?;
+//! let payload: String =
+//!     cose::verify(&envelope, "context", &signer.public_key(), b"example", Some(60))?;
+//! assert_eq!(payload, "hello");
+//!
+//! // Sign and encrypt to a recipient in one step, then open and verify it back
+//! let recipient = xhpke::SecretKey::generate();
+//! let sealed = cose::seal(
+//!     "secret".to_string(),
+//!     "context",
+//!     &signer,
+//!     &recipient.public_key(),
+//!     b"example",
+//! )?;
+//! let opened: String = cose::open(
+//!     &sealed,
+//!     "context",
+//!     &recipient,
+//!     &signer.public_key(),
+//!     b"example",
+//!     Some(60),
+//! )?;
+//! assert_eq!(opened, "secret");
+//! # Ok(())
+//! # }
+//! ```
 
 mod types;
 
@@ -34,24 +75,45 @@ pub const DOMAIN_PREFIX: &[u8] = crate::xhpke::DOMAIN_PREFIX;
 /// Error is the failures that can occur during COSE operations.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
+    /// The envelope, a header or a payload is not valid CBOR under this
+    /// crate's rules.
     #[error("cbor: {0}")]
     CborError(#[from] cbor::Error),
+    /// The protected header names the first algorithm where the second was
+    /// required. Also raised when the [`CritHeader`] list is not the expected
+    /// one.
     #[error("unexpected algorithm: have {0}, want {1}")]
     UnexpectedAlgorithm(i64, i64),
+    /// The envelope was signed by the first fingerprint, the verifier's key
+    /// has the second. [`signer`] looks the right key up without verifying.
     #[error("unexpected signing key: have {0:x?}, want {1:x?}")]
     UnexpectedSigningKey(xdsa::Fingerprint, xdsa::Fingerprint),
+    /// The xDSA signature does not verify. Carries the underlying error text.
     #[error("signature verification failed: {0}")]
     InvalidSignature(String),
+    /// The signature timestamp is the first number of seconds away from now,
+    /// more than the second, which is the allowed drift.
     #[error("signature stale: time drift {0}s exceeds max {1}s")]
     StaleSignature(u64, u64),
+    /// [`verify_detached`] found an embedded payload.
     #[error("unexpected payload in detached signature")]
     UnexpectedPayload,
+    /// [`verify`] or [`peek`] found no payload.
     #[error("missing payload in embedded signature")]
     MissingPayload,
+    /// The envelope was encrypted to the first fingerprint, the recipient's
+    /// key has the second. [`recipient`] looks the right key up without
+    /// decrypting.
     #[error("unexpected encryption key: have {0:x?}, want {1:x?}")]
     UnexpectedEncryptionKey(xhpke::Fingerprint, xhpke::Fingerprint),
+    /// The [`EncapKeyHeader`] carries an encapsulated key of the first size
+    /// where the second, [`xhpke::ENCAP_KEY_SIZE`], is required.
     #[error("invalid encapsulated key size: {0}, expected {1}")]
     InvalidEncapKeySize(usize, usize),
+    /// Opening the ciphertext failed, the wrong key, tampered data or a
+    /// mismatched authenticated message. Also raised when [`seal`] or [`encrypt`]
+    /// fails.
+    /// Carries the xHPKE error text.
     #[error("decryption failed: {0}")]
     DecryptionFailed(String),
 }

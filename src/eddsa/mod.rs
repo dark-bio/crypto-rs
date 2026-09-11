@@ -6,7 +6,21 @@
 
 //! EdDSA cryptography wrappers and parametrization.
 //!
-//! https://datatracker.ietf.org/doc/html/rfc8032
+//! <https://datatracker.ietf.org/doc/html/rfc8032>
+//!
+//! Ed25519 on its own, the classical half of the composite scheme in the
+//! `xdsa` module. Prefer that module unless a protocol demands plain Ed25519.
+//!
+//! ```
+//! use darkbio_crypto::eddsa;
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let secret = eddsa::SecretKey::generate();
+//! let signature = secret.sign(b"hello");
+//! secret.public_key().verify(b"hello", &signature)?;
+//! # Ok(())
+//! # }
+//! ```
 
 use crate::pem;
 use base64::Engine;
@@ -41,16 +55,33 @@ pub const FINGERPRINT_SIZE: usize = 32;
 /// Error is the failures that can occur during EdDSA operations.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
+    /// The PEM wrapper is malformed. The inner error names the rule it broke.
+    /// Raised by [`SecretKey::from_pem`] and [`PublicKey::from_pem`].
     #[error("pem: {0}")]
     Pem(#[from] pem::Error),
+    /// The PEM block type is not the expected one, `PRIVATE KEY` for
+    /// [`SecretKey::from_pem`] and `PUBLIC KEY` for [`PublicKey::from_pem`].
+    /// Carries the type found.
     #[error("invalid PEM tag {0}")]
     UnexpectedPemTag(String),
+    /// The DER key names an algorithm other than Ed25519, see [`OID`].
+    /// Raised by [`SecretKey::from_der`]
+    /// and [`PublicKey::from_der`], and through them by the PEM parsers.
     #[error("not an Ed25519 key")]
     UnexpectedAlgorithm,
+    /// The key parsed as DER but its contents are unusable, a seed or point
+    /// of the wrong size, unexpected algorithm parameters or an unsupported
+    /// PKCS#8 version. The message names the problem. Raised by every key
+    /// constructor apart from [`SecretKey::from_bytes`], which cannot fail.
     #[error("malformed key: {0}")]
     MalformedKey(String),
+    /// Bytes follow the DER key encoding. Nothing may. Raised by
+    /// [`SecretKey::from_der`] and [`PublicKey::from_der`], and through them by
+    /// the PEM parsers.
     #[error("trailing data in key encoding")]
     TrailingData,
+    /// The signature does not verify under the key for this message. Raised by
+    /// [`PublicKey::verify`].
     #[error("signature verification failed")]
     InvalidSignature,
 }

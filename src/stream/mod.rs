@@ -9,6 +9,31 @@
 //! The implementation lives in the `inner` module, which is a maintained
 //! verbatim fork of age's stream primitive. This module wraps it with the
 //! crate's own public API surface.
+//!
+//! Plaintext is split into 64 KiB chunks, each sealed with ChaCha20-Poly1305
+//! under a nonce that counts up and marks the final chunk, so truncation and
+//! reordering are detected. [`StreamWriter::finish`] must be called for the
+//! last chunk to be written out.
+//!
+//! ```
+//! use darkbio_crypto::stream::{PayloadKey, Stream};
+//! use std::io::{Read, Write};
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! // Derive a fresh key per stream in real code, never reuse one
+//! let key = [7u8; 32];
+//!
+//! let mut writer = Stream::encrypt(PayloadKey::from_bytes(&key), Vec::new());
+//! writer.write_all(b"hello stream")?;
+//! let ciphertext = writer.finish()?;
+//!
+//! let mut reader = Stream::decrypt(PayloadKey::from_bytes(&key), ciphertext.as_slice());
+//! let mut plaintext = Vec::new();
+//! reader.read_to_end(&mut plaintext)?;
+//! assert_eq!(plaintext, b"hello stream");
+//! # Ok(())
+//! # }
+//! ```
 
 mod inner;
 

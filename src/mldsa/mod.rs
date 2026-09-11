@@ -6,7 +6,22 @@
 
 //! ML-DSA cryptography wrappers and parametrization.
 //!
-//! https://datatracker.ietf.org/doc/html/rfc9881
+//! <https://datatracker.ietf.org/doc/html/rfc9881>
+//!
+//! ML-DSA-65 on its own, the post-quantum half of the composite scheme in the
+//! `xdsa` module. Signing takes a context string that verification must
+//! repeat, and an empty one is valid.
+//!
+//! ```
+//! use darkbio_crypto::mldsa;
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let secret = mldsa::SecretKey::generate();
+//! let signature = secret.sign(b"hello", b"example-context");
+//! secret.public_key().verify(b"hello", b"example-context", &signature)?;
+//! # Ok(())
+//! # }
+//! ```
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -49,16 +64,35 @@ struct MlDsa65PrivateKeyInner<'a> {
 /// Error is the failures that can occur during ML-DSA operations.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
+    /// The PEM wrapper is malformed. The inner error names the rule it broke.
+    /// Raised by [`SecretKey::from_pem`] and [`PublicKey::from_pem`].
     #[error("pem: {0}")]
     Pem(#[from] pem::Error),
+    /// The PEM block type is not the expected one, `PRIVATE KEY` for
+    /// [`SecretKey::from_pem`] and `PUBLIC KEY` for [`PublicKey::from_pem`].
+    /// Carries the type found.
     #[error("invalid PEM tag {0}")]
     UnexpectedPemTag(String),
+    /// The DER key names an algorithm other than ML-DSA-65, see [`OID`].
+    /// Raised by [`SecretKey::from_der`]
+    /// and [`PublicKey::from_der`], and through them by the PEM parsers.
     #[error("not an ML-DSA-65 key")]
     UnexpectedAlgorithm,
+    /// The key parsed as DER but its contents are unusable, wrong seed or
+    /// key sizes, an expanded key that does not match its seed, unexpected
+    /// algorithm parameters or an unsupported PKCS#8 version. The message
+    /// names the problem. Raised by the DER and PEM parsers, the byte
+    /// constructors cannot fail.
     #[error("malformed key: {0}")]
     MalformedKey(String),
+    /// Bytes follow the DER key encoding. Nothing may. Raised by
+    /// [`SecretKey::from_der`] and [`PublicKey::from_der`], and through them by
+    /// the PEM parsers.
     #[error("trailing data in key encoding")]
     TrailingData,
+    /// The signature does not verify under the key for this message and
+    /// context, or it is not a well formed ML-DSA-65 signature at all. Raised
+    /// by [`PublicKey::verify`].
     #[error("signature verification failed")]
     InvalidSignature,
 }

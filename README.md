@@ -37,6 +37,39 @@ its own `.cargo/config.toml`.
 
 *The entire library is hidden behind feature flags to allow selectively depending on it from the firmware, cloud and mobile app, each cherry-picking only what's needed.*
 
+## Quick start
+
+Signatures come from `xdsa`, encryption from `xhpke`, and `cose` wraps both into standard envelopes. Enabling the three pulls in everything they need.
+
+```toml
+[dependencies]
+darkbio-crypto = { version = "0.18", features = ["cose", "xdsa", "xhpke"] }
+```
+
+Every `cose` and `xhpke` operation takes a domain string that both sides must agree on. It is prefixed with `dark-bio-v1:` internally and binds the operation to one purpose, so an envelope made for one protocol is useless in another. Raw `xdsa` signatures carry no such domain, which is why the `cose` envelopes are the recommended entry point.
+
+```rust
+# #[cfg(feature = "cose")] {
+use darkbio_crypto::{cose, xdsa, xhpke};
+
+// Long term identities, one for signing and one for receiving
+let signer = xdsa::SecretKey::generate();
+let recipient = xhpke::SecretKey::generate();
+
+// A detached signature over a message that travels separately
+let signature = cose::sign_detached("payload", &signer, b"example").unwrap();
+cose::verify_detached(&signature, "payload", &signer.public_key(), b"example", Some(60)).unwrap();
+
+// Sign and encrypt a payload to the recipient, then open and verify it back.
+// The second argument is authenticated alongside but travels in the clear.
+let sealed = cose::seal("payload".to_string(), "metadata", &signer, &recipient.public_key(), b"example").unwrap();
+let opened: String = cose::open(&sealed, "metadata", &recipient, &signer.public_key(), b"example", Some(60)).unwrap();
+assert_eq!(opened, "payload");
+# }
+```
+
+Each module's documentation opens with a runnable example of its own primitives.
+
 ## Feature gates
 
 As a starting point, you will most probably want `xdsa` for digital signatures, `xhpke` for asymmetric encryption and `cose` for proper enveloping. For the remainder for the features, please consult the list below:

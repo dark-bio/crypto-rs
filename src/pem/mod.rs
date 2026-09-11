@@ -5,6 +5,24 @@
 // license that can be found in the LICENSE file.
 
 //! Strict PEM encoding and decoding.
+//!
+//! One block per input, no leading whitespace, no trailing data, consistent
+//! line endings and strict base64. The decoded payload is wiped when dropped,
+//! since it usually is a private key.
+//!
+//! ```
+//! use darkbio_crypto::pem;
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let encoded = pem::encode("EXAMPLE", b"hello");
+//! assert!(encoded.starts_with("-----BEGIN EXAMPLE-----\n"));
+//!
+//! let (kind, data) = pem::decode(encoded.as_bytes())?;
+//! assert_eq!(kind, "EXAMPLE");
+//! assert_eq!(*data, b"hello");
+//! # Ok(())
+//! # }
+//! ```
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
@@ -14,23 +32,35 @@ const PEM_HEADER: &[u8] = b"-----BEGIN ";
 const PEM_FOOTER: &[u8] = b"-----END ";
 const PEM_ENDING: &[u8] = b"-----";
 
-/// Error is the failures that can occur during PEM operations.
+/// Error is the failures that can occur while parsing PEM with [`decode`].
+/// Encoding cannot fail.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
+    /// The input does not start with `-----BEGIN `. Leading whitespace counts
+    /// as missing.
     #[error("missing PEM header")]
     MissingHeader,
+    /// The first line is not a complete `-----BEGIN TYPE-----` header. The
+    /// message says what is missing.
     #[error("malformed PEM header: {0}")]
     MalformedHeader(String),
+    /// The header names no block type.
     #[error("empty PEM block type")]
     EmptyBlockType,
+    /// The block type is not valid UTF-8.
     #[error("malformed PEM block type")]
     MalformedBlockType,
+    /// No `-----END TYPE-----` footer matches the header's block type.
     #[error("missing PEM footer")]
     MissingFooter,
+    /// Bytes follow the footer beyond a single line ending.
     #[error("trailing data after PEM block")]
     TrailingData,
+    /// The body between header and footer is empty or does not end in a line
+    /// ending. The message says which.
     #[error("malformed PEM body: {0}")]
     MalformedBody(String),
+    /// The body is not strict base64. Carries the decoder's reason.
     #[error("malformed base64 payload: {0}")]
     MalformedPayload(String),
 }

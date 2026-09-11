@@ -6,7 +6,29 @@
 
 //! Composite ML-DSA cryptography wrappers and parametrization.
 //!
-//! https://datatracker.ietf.org/doc/html/draft-ietf-lamps-pq-composite-sigs
+//! <https://datatracker.ietf.org/doc/html/draft-ietf-lamps-pq-composite-sigs>
+//!
+//! A key signs a message with ML-DSA-65 and Ed25519 at once, and a signature
+//! verifies only if both halves do. Keys and signatures round trip through
+//! fixed size byte arrays, DER and PEM.
+//!
+//! ```
+//! use darkbio_crypto::xdsa;
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let secret = xdsa::SecretKey::generate();
+//! let public = secret.public_key();
+//!
+//! let signature = secret.sign(b"hello");
+//! public.verify(b"hello", &signature)?;
+//! assert!(public.verify(b"tampered", &signature).is_err());
+//!
+//! let pem = public.to_pem();
+//! let restored = xdsa::PublicKey::from_pem(&pem)?;
+//! assert_eq!(restored.fingerprint(), public.fingerprint());
+//! # Ok(())
+//! # }
+//! ```
 
 use crate::pem;
 use crate::{eddsa, mldsa};
@@ -47,16 +69,34 @@ pub const FINGERPRINT_SIZE: usize = 32;
 /// Error is the failures that can occur during xDSA operations.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
+    /// The PEM wrapper is malformed. The inner error names the rule it broke.
+    /// Raised by [`SecretKey::from_pem`] and [`PublicKey::from_pem`].
     #[error("pem: {0}")]
     Pem(#[from] pem::Error),
+    /// The PEM block type is not the expected one, `PRIVATE KEY` for
+    /// [`SecretKey::from_pem`] and `PUBLIC KEY` for [`PublicKey::from_pem`].
+    /// Carries the type found.
     #[error("invalid PEM tag {0}")]
     UnexpectedPemTag(String),
+    /// The DER key names an algorithm other than composite
+    /// ML-DSA-65-Ed25519-SHA512, see [`OID`]. Raised by [`SecretKey::from_der`]
+    /// and [`PublicKey::from_der`], and through them by the PEM parsers.
     #[error("not a composite ML-DSA-65-Ed25519-SHA512 key")]
     UnexpectedAlgorithm,
+    /// The key parsed as DER but its contents are unusable, wrong component
+    /// sizes, unexpected algorithm parameters or an unsupported PKCS#8
+    /// version. The message names the problem. Raised by every key constructor
+    /// apart from [`SecretKey::from_bytes`], which cannot fail.
     #[error("malformed key: {0}")]
     MalformedKey(String),
+    /// Bytes follow the DER key encoding. Nothing may. Raised by
+    /// [`SecretKey::from_der`] and [`PublicKey::from_der`], and through them by
+    /// the PEM parsers.
     #[error("trailing data in key encoding")]
     TrailingData,
+    /// The signature does not verify under the key for this message. Either
+    /// half failing produces this, the halves are not told apart. Raised by
+    /// [`PublicKey::verify`].
     #[error("signature verification failed")]
     InvalidSignature,
 }
@@ -399,7 +439,7 @@ impl crate::cbor::Decode for PublicKey {
 ///     where ctx is empty and PH is SHA512.
 ///
 /// Use this when signing separately with individual ML-DSA and Ed25519 keys
-/// before composing the signatures.
+/// before composing the signatures with [`Signature::compose`].
 pub fn split_signing_message(message: &[u8]) -> Vec<u8> {
     let mut hasher = sha2::Sha512::new();
     hasher.update(message);

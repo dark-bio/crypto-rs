@@ -6,7 +6,50 @@
 
 //! HPKE cryptography wrappers and parametrization.
 //!
-//! https://datatracker.ietf.org/doc/html/rfc9180
+//! <https://datatracker.ietf.org/doc/html/rfc9180>
+//!
+//! Messages are encrypted to a public key with X-Wing, a hybrid of ML-KEM-768
+//! and X25519, and sealed with ChaCha20-Poly1305. Every operation takes a
+//! domain string, prefixed with [`DOMAIN_PREFIX`], which both sides must agree
+//! on. The ciphertext also authenticates a second message that travels in the
+//! clear.
+//!
+//! ```
+//! use darkbio_crypto::xhpke;
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let secret = xhpke::SecretKey::generate();
+//! let public = secret.public_key();
+//!
+//! let (encap_key, ciphertext) = public.seal(b"secret", b"header", b"example")?;
+//! let plaintext = secret.open(&encap_key, &ciphertext, b"header", b"example")?;
+//! assert_eq!(plaintext, b"secret");
+//!
+//! // A tampered header fails authentication
+//! assert!(secret.open(&encap_key, &ciphertext, b"other", b"example").is_err());
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! A [`Sender`] and [`Receiver`] pair shares one encapsulated key across many
+//! messages, which must be opened in the order they were sealed.
+//!
+//! ```
+//! use darkbio_crypto::xhpke;
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let secret = xhpke::SecretKey::generate();
+//!
+//! let (mut sender, encap_key) = secret.public_key().new_sender(b"example")?;
+//! let mut receiver = secret.new_receiver(&encap_key, b"example")?;
+//!
+//! for message in [b"first".as_slice(), b"second".as_slice()] {
+//!     let ciphertext = sender.seal(message, b"")?;
+//!     assert_eq!(receiver.open(&ciphertext, b"")?, message);
+//! }
+//! # Ok(())
+//! # }
+//! ```
 
 // Let us keep our all-caps abbreviations for the crypto suite parameters.
 #![allow(clippy::upper_case_acronyms)]
@@ -63,18 +106,40 @@ pub const FINGERPRINT_SIZE: usize = 32;
 /// Error is the failures that can occur during xHPKE operations.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
+    /// The PEM wrapper is malformed. The inner error names the rule it broke.
+    /// Raised by [`SecretKey::from_pem`] and [`PublicKey::from_pem`].
     #[error("pem: {0}")]
     Pem(#[from] pem::Error),
+    /// The PEM block type is not the expected one, `PRIVATE KEY` for
+    /// [`SecretKey::from_pem`] and `PUBLIC KEY` for [`PublicKey::from_pem`].
+    /// Carries the type found.
     #[error("invalid PEM tag {0}")]
     UnexpectedPemTag(String),
+    /// The DER key names an algorithm other than X-Wing, see [`OID`].
+    /// Raised by [`SecretKey::from_der`]
+    /// and [`PublicKey::from_der`], and through them by the PEM parsers.
     #[error("not an X-Wing key")]
     UnexpectedAlgorithm,
+    /// The key parsed but its contents are unusable, a wrong size, an ML-KEM
+    /// coefficient out of range, unexpected algorithm parameters or an
+    /// unsupported PKCS#8 version. The message names the problem. Raised by
+    /// every key constructor apart from [`SecretKey::from_bytes`], which cannot
+    /// fail.
     #[error("malformed key: {0}")]
     MalformedKey(String),
+    /// Bytes follow the DER key encoding. Nothing may. Raised by
+    /// [`SecretKey::from_der`] and [`PublicKey::from_der`], and through them by
+    /// the PEM parsers.
     #[error("trailing data in key encoding")]
     TrailingData,
+    /// Encrypting to the public key failed. Carries the HPKE error text. Raised
+    /// by [`PublicKey::seal`], [`PublicKey::new_sender`] and [`Sender::seal`].
     #[error("sealing failed: {0}")]
     SealFailed(String),
+    /// Decrypting failed, a malformed encapsulated key, the wrong secret key,
+    /// a tampered ciphertext or a mismatched authenticated message. Carries
+    /// the HPKE error text, which does not tell these apart. Raised by
+    /// [`SecretKey::open`], [`SecretKey::new_receiver`] and [`Receiver::open`].
     #[error("opening failed: {0}")]
     OpenFailed(String),
 }
@@ -235,7 +300,7 @@ impl SecretKey {
 
     /// new_receiver creates an HPKE receiver context for multi-message decryption
     /// using the given encapsulated key. Messages must be decrypted in the same
-    /// order they were encrypted by the corresponding sender.
+    /// order they were encrypted by the corresponding [`Sender`].
     ///
     /// Note: X-Wing uses Base mode (no sender authentication). The sender's
     /// identity cannot be verified from the context alone.
@@ -371,8 +436,8 @@ impl PublicKey {
     /// not included).
     ///
     /// The method returns the encapsulated session key and the ciphertext separately.
-    /// To open it on the other side needs transmitting both components along with
-    /// `msg_to_auth`.
+    /// Opening it on the other side with [`SecretKey::open`] needs both components
+    /// along with `msg_to_auth`.
     ///
     /// Note: X-Wing uses Base mode (no sender authentication). The recipient cannot
     /// verify the sender's identity from the ciphertext alone.
@@ -405,7 +470,7 @@ impl PublicKey {
     /// that must be transmitted to the recipient.
     ///
     /// Messages encrypted with the returned context must be decrypted in order
-    /// by the corresponding receiver context.
+    /// by the corresponding [`Receiver`] context.
     ///
     /// Note: X-Wing uses Base mode (no sender authentication). The recipient
     /// cannot verify the sender's identity from the context alone.

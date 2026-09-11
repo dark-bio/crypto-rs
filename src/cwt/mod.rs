@@ -15,11 +15,12 @@
 //!
 //! # Example
 //!
-//! ```ignore
+//! ```
 //! use darkbio_crypto::cbor::Cbor;
 //! use darkbio_crypto::cwt::{self, claims};
 //! use darkbio_crypto::xdsa;
 //!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! #[derive(Cbor)]
 //! struct DeviceCert {
 //!     #[cbor(embed)]
@@ -34,8 +35,29 @@
 //!     ueid: Vec<u8>,
 //! }
 //!
-//! let token = cwt::issue(&cert, &signer_key, b"device-cert").unwrap();
-//! let verified: DeviceCert = cwt::verify(&token, &issuer_pub, b"device-cert", Some(now)).unwrap();
+//! let issuer = xdsa::SecretKey::generate();
+//! let device = xdsa::SecretKey::generate();
+//! let now = 1_700_000_000;
+//!
+//! let cert = DeviceCert {
+//!     sub: claims::Subject { sub: "ark-0001".into() },
+//!     exp: claims::Expiration { exp: now + 3600 },
+//!     nbf: claims::NotBefore { nbf: now },
+//!     cnf: claims::Confirm::new(device.public_key()),
+//!     ueid: vec![0x01, 0xaa, 0xbb],
+//! };
+//! let token = cwt::issue(&cert, &issuer, b"device-cert")?;
+//!
+//! let verified: DeviceCert =
+//!     cwt::verify(&token, &issuer.public_key(), b"device-cert", Some(now + 60))?;
+//! assert_eq!(verified.sub.sub, "ark-0001");
+//! assert_eq!(verified.cnf.key().fingerprint(), device.fingerprint());
+//!
+//! // Outside the validity window the token is rejected
+//! let late = cwt::verify::<DeviceCert>(&token, &issuer.public_key(), b"device-cert", Some(now + 7200));
+//! assert!(late.is_err());
+//! # Ok(())
+//! # }
 //! ```
 
 pub mod claims;
@@ -46,21 +68,40 @@ use crate::{cose, xdsa};
 /// Error is the failures that can occur during CWT operations.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
+    /// The token or its claims are not valid CBOR under this crate's rules.
     #[error("cbor: {0}")]
     Cbor(#[from] cbor::Error),
+    /// The [`cose::CoseSign1`] envelope was rejected, a bad signature, the
+    /// wrong key or a malformed header.
     #[error("cose: {0}")]
     Cose(#[from] cose::Error),
+    /// [`verify`] was asked to check time but the claims carry no `nbf`, key 5.
     #[error("missing nbf claim")]
     MissingNbf,
+    /// The claims map carries a temporal claim key twice.
     #[error("duplicate claim key {0}")]
     DuplicateKey(i64),
+    /// The token's `nbf` ([`claims::NotBefore`]) lies after the time of the
+    /// check.
     #[error("token not yet valid: nbf {nbf} > now {now}")]
-    NotYetValid { nbf: u64, now: u64 },
+    NotYetValid {
+        /// Not-before claim, seconds since the Unix epoch.
+        nbf: u64,
+        /// Time of the check, seconds since the Unix epoch.
+        now: u64,
+    },
+    /// The token's `exp` ([`claims::Expiration`]) is at or before the time of
+    /// the check.
     #[error("token already expired: exp {exp} <= now {now}")]
-    AlreadyExpired { exp: u64, now: u64 },
+    AlreadyExpired {
+        /// Expiration claim, seconds since the Unix epoch.
+        exp: u64,
+        /// Time of the check, seconds since the Unix epoch.
+        now: u64,
+    },
 }
 
-/// issue signs a set of claims as a CWT using COSE Sign1.
+/// issue signs a set of claims as a CWT using [`cose::sign`].
 ///
 /// The claims value must be a struct whose fields encode as a CBOR map
 /// (using `#[cbor(key = N)]` tags and/or embedded claim types).
@@ -97,9 +138,10 @@ pub fn issue_at(
 /// verify verifies a CWT's COSE signature and temporal validity, then decodes
 /// the claims into T.
 ///
-/// When `now` is `Some`, temporal claims are validated: nbf (key 5) must be
-/// present and `nbf <= now`, and if exp (key 4) is present then `now < exp`.
-/// When `now` is `None`, temporal validation is skipped entirely.
+/// When `now` is `Some`, temporal claims are validated. The nbf claim (key 5,
+/// [`claims::NotBefore`]) must be present and `nbf <= now`, and if the exp claim
+/// (key 4, [`claims::Expiration`]) is present then `now < exp`. When `now` is
+/// `None`, temporal validation is skipped entirely.
 pub fn verify<T: Decode>(
     data: &[u8],
     verifier: &xdsa::PublicKey,
