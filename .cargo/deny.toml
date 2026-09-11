@@ -1,0 +1,21 @@
+# Settings for cargo-deny, which the licenses CI job runs against the full
+# dependency graph with every feature enabled.
+
+[graph]
+all-features = true
+
+[licenses]
+# Permissive licenses only. A dependency offering a choice passes with any one
+# of these, a dependency offering none of them fails the check. Entries no
+# dependency uses yet stay pre-approved without a warning on every run.
+unused-allowed-license = "allow"
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Zlib",
+]
