@@ -933,15 +933,15 @@ mod tests {
 
             let signed = match test.timestamp {
                 Some(ts) => sign_at(
-                    &test.msg_to_sign.to_vec(),
-                    &test.msg_to_auth.to_vec(),
+                    test.msg_to_sign.to_vec(),
+                    test.msg_to_auth.to_vec(),
                     &alice,
                     test.domain,
                     ts,
                 ),
                 None => sign(
-                    &test.msg_to_sign.to_vec(),
-                    &test.msg_to_auth.to_vec(),
+                    test.msg_to_sign.to_vec(),
+                    test.msg_to_auth.to_vec(),
                     &alice,
                     test.domain,
                 ),
@@ -953,14 +953,14 @@ mod tests {
             };
             let result: Result<Vec<u8>, _> = verify(
                 &signed.unwrap(),
-                &test.verifier_msg_to_auth.to_vec(),
+                test.verifier_msg_to_auth.to_vec(),
                 &verifier,
                 test.verifier_domain,
                 test.max_drift,
             );
 
             if test.want_ok {
-                let recovered = result.expect(&format!("test {}: expected success", i));
+                let recovered = result.unwrap_or_else(|_| panic!("test {}: expected success", i));
                 assert_eq!(recovered, test.msg_to_sign, "test {}: payload mismatch", i);
             } else {
                 assert!(result.is_err(), "test {}: expected error", i);
@@ -1106,8 +1106,8 @@ mod tests {
 
             let sealed = match test.timestamp {
                 Some(ts) => seal_at(
-                    &test.msg_to_seal.to_vec(),
-                    &test.msg_to_auth.to_vec(),
+                    test.msg_to_seal.to_vec(),
+                    test.msg_to_auth.to_vec(),
                     &alice,
                     &carol.public_key(),
                     test.domain,
@@ -1115,8 +1115,8 @@ mod tests {
                 )
                 .unwrap(),
                 None => seal(
-                    &test.msg_to_seal.to_vec(),
-                    &test.msg_to_auth.to_vec(),
+                    test.msg_to_seal.to_vec(),
+                    test.msg_to_auth.to_vec(),
                     &alice,
                     &carol.public_key(),
                     test.domain,
@@ -1139,7 +1139,7 @@ mod tests {
             );
 
             if test.want_ok {
-                let recovered = result.expect(&format!("test {}: expected success", i));
+                let recovered = result.unwrap_or_else(|_| panic!("test {}: expected success", i));
                 assert_eq!(recovered, test.msg_to_seal, "test {}: payload mismatch", i);
             } else {
                 assert!(result.is_err(), "test {}: expected error", i);

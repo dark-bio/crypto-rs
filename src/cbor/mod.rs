@@ -1585,15 +1585,15 @@ mod tests {
     // Tests that booleans encode correctly.
     #[test]
     fn test_bool_encoding() {
-        assert_eq!(encode(&false).unwrap(), vec![0xf4]);
-        assert_eq!(encode(&true).unwrap(), vec![0xf5]);
+        assert_eq!(encode(false).unwrap(), vec![0xf4]);
+        assert_eq!(encode(true).unwrap(), vec![0xf5]);
     }
 
     // Tests that booleans decode correctly.
     #[test]
     fn test_bool_decoding() {
-        assert_eq!(decode::<bool>(&[0xf4]).unwrap(), false);
-        assert_eq!(decode::<bool>(&[0xf5]).unwrap(), true);
+        assert!(!decode::<bool>(&[0xf4]).unwrap());
+        assert!(decode::<bool>(&[0xf5]).unwrap());
 
         // Invalid values should fail
         assert!(decode::<bool>(&[0xf6]).is_err()); // null
@@ -1603,8 +1603,8 @@ mod tests {
     // Tests that null encodes correctly.
     #[test]
     fn test_null_encoding() {
-        assert_eq!(encode(&None::<u64>).unwrap(), vec![0xf6]);
-        assert_eq!(encode(&Some(42u64)).unwrap(), encode(&42u64).unwrap());
+        assert_eq!(encode(None::<u64>).unwrap(), vec![0xf6]);
+        assert_eq!(encode(Some(42u64)).unwrap(), encode(42u64).unwrap());
     }
 
     // Tests that null decodes correctly.
@@ -1612,7 +1612,7 @@ mod tests {
     fn test_null_decoding() {
         assert_eq!(decode::<Option<u64>>(&[0xf6]).unwrap(), None);
         assert_eq!(
-            decode::<Option<u64>>(&encode(&42u64).unwrap()).unwrap(),
+            decode::<Option<u64>>(&encode(42u64).unwrap()).unwrap(),
             Some(42)
         );
 
@@ -1652,7 +1652,7 @@ mod tests {
 
         for (value, expected) in cases {
             assert_eq!(
-                encode(&value).unwrap(),
+                encode(value).unwrap(),
                 expected,
                 "encoding failed for value {}",
                 value
@@ -1785,7 +1785,7 @@ mod tests {
 
         for (value, expected) in cases {
             assert_eq!(
-                encode(&value).unwrap(),
+                encode(value).unwrap(),
                 expected,
                 "encoding failed for value {}",
                 value
@@ -1889,22 +1889,22 @@ mod tests {
         // Test &Vec<u8> reference
         let bytes_vec = vec![1, 2, 3];
         let bytes_vec_ref = &bytes_vec;
-        let encoded = encode(&bytes_vec_ref).unwrap();
+        let encoded = encode(bytes_vec_ref).unwrap();
         assert_eq!(encoded, vec![0x43, 1, 2, 3]);
 
         // Test &[u8] slice reference
         let bytes_slice: &[u8] = &[4, 5, 6];
-        let encoded = encode(&bytes_slice).unwrap();
+        let encoded = encode(bytes_slice).unwrap();
         assert_eq!(encoded, vec![0x43, 4, 5, 6]);
 
         // Test [u8; N] fixed-size array
         let bytes_array: [u8; 3] = [7, 8, 9];
-        let encoded = encode(&bytes_array).unwrap();
+        let encoded = encode(bytes_array).unwrap();
         assert_eq!(encoded, vec![0x43, 7, 8, 9]);
 
         // Test &[u8; N] fixed-size array reference
         let bytes_array_ref = &[10u8, 11, 12];
-        let encoded = encode(&bytes_array_ref).unwrap();
+        let encoded = encode(bytes_array_ref).unwrap();
         assert_eq!(encoded, vec![0x43, 10, 11, 12]);
     }
 
@@ -1967,7 +1967,7 @@ mod tests {
     fn test_fixed_bytes_wide_length() {
         fn check<const N: usize>() {
             let bytes = [0xa5; N];
-            let valid = encode(&bytes).unwrap();
+            let valid = encode(bytes).unwrap();
             assert_eq!(decode::<[u8; N]>(&valid).unwrap(), bytes);
 
             let len = (1u64 << 32) + N as u64;
@@ -1996,17 +1996,17 @@ mod tests {
     fn test_string_encoding() {
         // Empty string
         let empty = "";
-        let encoded = encode(&empty).unwrap();
+        let encoded = encode(empty).unwrap();
         assert_eq!(encoded, vec![0x60]); // major 3, length 0
 
         // 1 character
         let one_char = "a";
-        let encoded = encode(&one_char).unwrap();
+        let encoded = encode(one_char).unwrap();
         assert_eq!(encoded, vec![0x61, 0x61]); // major 3, length 1, 'a'
 
         // Longer string
         let long_string = "Peter says hi!";
-        let encoded = encode(&long_string).unwrap();
+        let encoded = encode(long_string).unwrap();
         assert_eq!(encoded[0], 0x60 | long_string.len() as u8); // major 3, length embedded
         assert_eq!(&encoded[1..], long_string.as_bytes());
 
@@ -2018,7 +2018,7 @@ mod tests {
 
         // Test &String type
         let string_ref = &"Peter says hi!".to_string();
-        let encoded = encode(&string_ref).unwrap();
+        let encoded = encode(string_ref).unwrap();
         assert_eq!(encoded[0], 0x60 | string_ref.len() as u8); // major 3, length embedded
         assert_eq!(&encoded[1..], string_ref.as_bytes());
     }
@@ -2073,12 +2073,12 @@ mod tests {
     fn test_tuple_encoding() {
         // 0-tuple
         let empty = ();
-        let encoded = encode(&empty).unwrap();
+        let encoded = encode(empty).unwrap();
         assert_eq!(encoded, vec![0x80]); // major 4, length 0 (empty array)
 
         // 1-tuple (wonky Rust syntax)
         let one_tuple = (42u64,);
-        let encoded = encode(&one_tuple).unwrap();
+        let encoded = encode(one_tuple).unwrap();
         assert_eq!(encoded[0], 0x81); // major 4, length 1 (array with 1 element)
         assert_eq!(encoded[1], 0x18); // major 0, INFO_UINT8
         assert_eq!(encoded[2], 42);
@@ -2100,19 +2100,18 @@ mod tests {
     fn test_tuple_decoding() {
         // 0-tuple
         let encoded = vec![0x80]; // empty array
-        let decoded = decode::<()>(&encoded).unwrap();
-        assert_eq!(decoded, ());
+        decode::<()>(&encoded).unwrap();
 
         // 1-tuple (wonky Rust syntax)
         let mut encoded = vec![0x81]; // array length 1
-        encoded.extend_from_slice(&encode(&42u64).unwrap()); // single element
+        encoded.extend_from_slice(&encode(42u64).unwrap()); // single element
         let decoded = decode::<(u64,)>(&encoded).unwrap();
         assert_eq!(decoded, (42u64,));
 
         // 2-tuple
         let mut encoded = vec![0x82]; // array length 2
-        encoded.extend_from_slice(&encode(&"hello".to_string()).unwrap()); // first element
-        encoded.extend_from_slice(&encode(&42u64).unwrap()); // second element
+        encoded.extend_from_slice(&encode("hello".to_string()).unwrap()); // first element
+        encoded.extend_from_slice(&encode(42u64).unwrap()); // second element
         let decoded = decode::<(String, u64)>(&encoded).unwrap();
         assert_eq!(decoded, ("hello".to_string(), 42u64));
     }
@@ -2123,7 +2122,7 @@ mod tests {
     fn test_tuple_rejection() {
         // Try to decode array with 1 element as 2-tuple
         let mut encoded = vec![0x81]; // array length 1
-        encoded.extend_from_slice(&encode(&42u64).unwrap()); // single element
+        encoded.extend_from_slice(&encode(42u64).unwrap()); // single element
         let result = decode::<(u64, u64)>(&encoded);
         assert!(result.is_err());
         match result.unwrap_err() {
@@ -2133,9 +2132,9 @@ mod tests {
 
         // Try to decode array with 3 elements as 2-tuple
         let mut encoded = vec![0x83]; // array length 3
-        encoded.extend_from_slice(&encode(&42u64).unwrap());
-        encoded.extend_from_slice(&encode(&"test".to_string()).unwrap());
-        encoded.extend_from_slice(&encode(&vec![1u8, 2]).unwrap());
+        encoded.extend_from_slice(&encode(42u64).unwrap());
+        encoded.extend_from_slice(&encode("test".to_string()).unwrap());
+        encoded.extend_from_slice(&encode(vec![1u8, 2]).unwrap());
         let result = decode::<(u64, String)>(&encoded);
         assert!(result.is_err());
         match result.unwrap_err() {
@@ -2145,7 +2144,7 @@ mod tests {
 
         // Try to decode array with 1 element as empty tuple
         let mut encoded = vec![0x81]; // array length 1
-        encoded.extend_from_slice(&encode(&42u64).unwrap());
+        encoded.extend_from_slice(&encode(42u64).unwrap());
         let result = decode::<()>(&encoded);
         assert!(result.is_err());
         match result.unwrap_err() {
@@ -2175,9 +2174,9 @@ mod tests {
 
         // Should be: [42, "hello", h'010203']
         let mut expected = vec![0x83]; // array with 3 elements
-        expected.extend_from_slice(&encode(&42u64).unwrap());
-        expected.extend_from_slice(&encode(&"hello".to_string()).unwrap());
-        expected.extend_from_slice(&encode(&vec![1u8, 2, 3]).unwrap());
+        expected.extend_from_slice(&encode(42u64).unwrap());
+        expected.extend_from_slice(&encode("hello".to_string()).unwrap());
+        expected.extend_from_slice(&encode(vec![1u8, 2, 3]).unwrap());
 
         assert_eq!(encoded, expected);
     }
@@ -2186,9 +2185,9 @@ mod tests {
     #[test]
     fn test_array_decoding() {
         let mut data = vec![0x83]; // array with 3 elements
-        data.extend_from_slice(&encode(&100u64).unwrap());
-        data.extend_from_slice(&encode(&"world".to_string()).unwrap());
-        data.extend_from_slice(&encode(&vec![4u8, 5, 6]).unwrap());
+        data.extend_from_slice(&encode(100u64).unwrap());
+        data.extend_from_slice(&encode("world".to_string()).unwrap());
+        data.extend_from_slice(&encode(vec![4u8, 5, 6]).unwrap());
 
         let decoded = decode::<TestArray>(&data).unwrap();
         assert_eq!(decoded.first, 100);
@@ -2201,8 +2200,8 @@ mod tests {
     fn test_array_rejection() {
         // Too few elements (2 instead of 3)
         let mut data = vec![0x82]; // array with 2 elements
-        data.extend_from_slice(&encode(&42u64).unwrap());
-        data.extend_from_slice(&encode(&"test".to_string()).unwrap());
+        data.extend_from_slice(&encode(42u64).unwrap());
+        data.extend_from_slice(&encode("test".to_string()).unwrap());
         let result = decode::<TestArray>(&data);
         assert!(result.is_err());
         match result.unwrap_err() {
@@ -2211,10 +2210,10 @@ mod tests {
         }
         // Too many elements (4 instead of 3)
         let mut data = vec![0x84]; // array with 4 elements
-        data.extend_from_slice(&encode(&42u64).unwrap());
-        data.extend_from_slice(&encode(&"test".to_string()).unwrap());
-        data.extend_from_slice(&encode(&vec![1u8]).unwrap());
-        data.extend_from_slice(&encode(&42u64).unwrap());
+        data.extend_from_slice(&encode(42u64).unwrap());
+        data.extend_from_slice(&encode("test".to_string()).unwrap());
+        data.extend_from_slice(&encode(vec![1u8]).unwrap());
+        data.extend_from_slice(&encode(42u64).unwrap());
         let result = decode::<TestArray>(&data);
         assert!(result.is_err());
         match result.unwrap_err() {
@@ -2262,7 +2261,7 @@ mod tests {
     #[test]
     fn test_map_decoding() {
         // Multiple entries (in correct deterministic order)
-        let decoded = decode::<TestMap>(&vec![
+        let decoded = decode::<TestMap>(&[
             0xa3, // map with 3 entries
             0x01, 0x18, 0x2a, // 1: 42
             0x02, 0x18, 0x43, // 2: 67
@@ -2278,7 +2277,7 @@ mod tests {
     #[test]
     fn test_map_rejection() {
         // Keys out of order: 2 before 1
-        let result = decode::<TestMap>(&vec![
+        let result = decode::<TestMap>(&[
             0xa3, // map with 3 entries
             0x02, 0x18, 0x43, // 2: 67 (should come after 1)
             0x01, 0x18, 0x2a, // 1: 42
@@ -2287,7 +2286,7 @@ mod tests {
         assert!(result.is_err());
 
         // Wrong key value
-        let result = decode::<TestMap>(&vec![
+        let result = decode::<TestMap>(&[
             0xa3, // map with 3 entries
             0x05, 0x18, 0x2a, // 5: 42 (should be 1)
             0x02, 0x18, 0x43, // 2: 67
@@ -2387,7 +2386,7 @@ mod tests {
     #[test]
     fn test_map_optional_decoding() {
         // Decode a map with required + nullable (null value), optionals absent
-        let decoded = decode::<TestMapOptional>(&vec![
+        let decoded = decode::<TestMapOptional>(&[
             0xa2, // map with 2 entries
             0x01, 0x18, 0x2a, // 1: 42
             0x03, 0xf6, // 3: null
@@ -2399,7 +2398,7 @@ mod tests {
         assert_eq!(decoded.optional2, None);
 
         // Decode a map with required + nullable + first optional
-        let decoded = decode::<TestMapOptional>(&vec![
+        let decoded = decode::<TestMapOptional>(&[
             0xa3, // map with 3 entries
             0x01, 0x00, // 1: 0
             0x02, 0x62, 0x68, 0x69, // 2: "hi"
@@ -2412,7 +2411,7 @@ mod tests {
         assert_eq!(decoded.optional2, None);
 
         // Decode a map with required + nullable + second optional (key -1)
-        let decoded = decode::<TestMapOptional>(&vec![
+        let decoded = decode::<TestMapOptional>(&[
             0xa3, // map with 3 entries
             0x01, 0x05, // 1: 5
             0x03, 0xf6, // 3: null
@@ -2425,7 +2424,7 @@ mod tests {
         assert_eq!(decoded.optional2, Some(vec![0xab]));
 
         // Decode with nullable absent must fail (it's required)
-        let result = decode::<TestMapOptional>(&vec![
+        let result = decode::<TestMapOptional>(&[
             0xa1, // map with 1 entry
             0x01, 0x18, 0x2a, // 1: 42 (key 3 missing)
         ]);
@@ -2436,7 +2435,7 @@ mod tests {
     #[test]
     fn test_map_optional_rejection() {
         // Too many entries
-        let result = decode::<TestMapOptional>(&vec![
+        let result = decode::<TestMapOptional>(&[
             0xa5, // map with 5 entries (max is 4)
             0x01, 0x00, // 1: 0
             0x02, 0x60, // 2: ""
@@ -2447,14 +2446,14 @@ mod tests {
         assert!(result.is_err());
 
         // Required field missing (map has optional keys but not the required one)
-        let result = decode::<TestMapOptional>(&vec![
+        let result = decode::<TestMapOptional>(&[
             0xa1, // map with 1 entry
             0x02, 0x60, // 2: "" (key 1 is required but missing)
         ]);
         assert!(result.is_err());
 
         // Nullable field missing (key 3 must always be present)
-        let result = decode::<TestMapOptional>(&vec![
+        let result = decode::<TestMapOptional>(&[
             0xa1, // map with 1 entry
             0x01, 0x18, 0x2a, // 1: 42 (key 3 missing)
         ]);
@@ -2542,13 +2541,13 @@ mod tests {
     #[test]
     fn test_verify() {
         // Valid types should pass
-        assert!(verify(&encode(&42u64).unwrap()).is_ok());
-        assert!(verify(&encode(&-42i64).unwrap()).is_ok());
-        assert!(verify(&encode(&"hello").unwrap()).is_ok());
-        assert!(verify(&encode(&vec![1u8, 2, 3]).unwrap()).is_ok());
-        assert!(verify(&encode(&()).unwrap()).is_ok());
-        assert!(verify(&encode(&(42u64, "test")).unwrap()).is_ok());
-        assert!(verify(&encode(&(-42i64, "test")).unwrap()).is_ok());
+        assert!(verify(&encode(42u64).unwrap()).is_ok());
+        assert!(verify(&encode(-42i64).unwrap()).is_ok());
+        assert!(verify(&encode("hello").unwrap()).is_ok());
+        assert!(verify(&encode(vec![1u8, 2, 3]).unwrap()).is_ok());
+        assert!(verify(&encode(()).unwrap()).is_ok());
+        assert!(verify(&encode((42u64, "test")).unwrap()).is_ok());
+        assert!(verify(&encode((-42i64, "test")).unwrap()).is_ok());
         assert!(
             verify(
                 &encode(&TestMap {
@@ -2571,7 +2570,7 @@ mod tests {
         assert!(verify(&large_nint).is_ok());
 
         // Trailing bytes
-        let mut bad_data = encode(&42u64).unwrap();
+        let mut bad_data = encode(42u64).unwrap();
         bad_data.push(0x00);
         assert!(verify(&bad_data).is_err());
         match verify(&bad_data).unwrap_err() {
@@ -2602,9 +2601,9 @@ mod tests {
         }
 
         // Booleans and null are now supported
-        assert!(verify(&encode(&false).unwrap()).is_ok());
-        assert!(verify(&encode(&true).unwrap()).is_ok());
-        assert!(verify(&encode(&None::<u64>).unwrap()).is_ok());
+        assert!(verify(&encode(false).unwrap()).is_ok());
+        assert!(verify(&encode(true).unwrap()).is_ok());
+        assert!(verify(&encode(None::<u64>).unwrap()).is_ok());
 
         // undefined (0xf7) is still unsupported
         let undefined_val = vec![0xf7];
@@ -2881,7 +2880,7 @@ mod tests {
         enc.encode_int(1);
         enc.encode_uint(99);
         enc.encode_int(2);
-        enc.extend(&encode(&"hi".to_string()).unwrap());
+        enc.extend(&encode("hi".to_string()).unwrap());
         let data = enc.finish();
         match decode::<Clash>(&data) {
             Err(Error::DuplicateMapKey(1)) => {}
@@ -3053,7 +3052,7 @@ mod tests {
         enc.encode_int(1);
         enc.encode_uint(1);
         enc.encode_int(2);
-        enc.extend(&encode(&"two".to_string()).unwrap());
+        enc.extend(&encode("two".to_string()).unwrap());
         enc.encode_int(3);
         enc.encode_uint(3);
         enc.encode_int(99);
@@ -3079,7 +3078,7 @@ mod tests {
         let mut enc = Encoder::new();
         enc.encode_map_header(3);
         enc.encode_int(2);
-        enc.extend(&encode(&"x".to_string()).unwrap());
+        enc.extend(&encode("x".to_string()).unwrap());
         enc.encode_int(1);
         enc.encode_uint(1);
         enc.encode_int(3);
@@ -3109,7 +3108,7 @@ mod tests {
         enc.encode_int(1);
         enc.encode_uint(2);
         enc.encode_int(2);
-        enc.extend(&encode(&"x".to_string()).unwrap());
+        enc.extend(&encode("x".to_string()).unwrap());
         enc.encode_int(3);
         enc.encode_uint(3);
         let data = enc.finish();
@@ -3808,11 +3807,11 @@ mod tests {
     #[test]
     fn test_generic_array_encoding() {
         // Empty array
-        assert_eq!(encode(&Array::<u64>(vec![])).unwrap(), vec![0x80]);
+        assert_eq!(encode(Array::<u64>(vec![])).unwrap(), vec![0x80]);
 
         // Array of unsigned integers
         assert_eq!(
-            encode(&Array(vec![1u64, 2, 3])).unwrap(),
+            encode(Array(vec![1u64, 2, 3])).unwrap(),
             vec![0x83, 0x01, 0x02, 0x03]
         );
 
@@ -3865,11 +3864,11 @@ mod tests {
     #[test]
     fn test_fixed_array_encoding() {
         // Empty fixed array
-        assert_eq!(encode(&FixedArray::<u64, 0>([])).unwrap(), vec![0x80]);
+        assert_eq!(encode(FixedArray::<u64, 0>([])).unwrap(), vec![0x80]);
 
         // Fixed array of unsigned integers
         assert_eq!(
-            encode(&FixedArray([1u64, 2, 3])).unwrap(),
+            encode(FixedArray([1u64, 2, 3])).unwrap(),
             vec![0x83, 0x01, 0x02, 0x03]
         );
 
