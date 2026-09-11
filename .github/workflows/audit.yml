@@ -22,3 +22,14 @@ jobs:
 
       - name: Check dependencies against the RustSec advisory database
         run: cargo audit
+
+  licenses:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check dependency licenses against the allowlist
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          arguments: --all-features --config .cargo/deny.toml
+          command: check licenses
