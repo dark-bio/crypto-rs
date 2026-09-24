@@ -37,7 +37,7 @@ use rsa::pkcs8::{
 use rsa::rand_core::OsRng;
 use rsa::sha2::{Digest, Sha256};
 use rsa::signature::hazmat::PrehashVerifier;
-use rsa::signature::{Keypair, SignatureEncoding, Signer, Verifier};
+use rsa::signature::{Keypair, RandomizedSigner, SignatureEncoding, Verifier};
 use rsa::traits::{PrivateKeyParts, PublicKeyParts};
 use rsa::{BigUint, RsaPrivateKey, RsaPublicKey};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
@@ -78,9 +78,10 @@ pub enum Error {
     #[error("not an RSA key")]
     UnexpectedAlgorithm,
     /// The key parsed but its contents are unusable, a modulus that is not
-    /// 2048 bits, an exponent other than 65537, a non-canonical encoding or an
-    /// unsupported PKCS#8 version. The message names the problem. Raised by
-    /// every key constructor.
+    /// 2048 bits, an exponent other than 65537, primes that are not both 1024
+    /// bits, a private exponent not below the modulus, primes without a CRT
+    /// coefficient, a non-canonical encoding or an unsupported PKCS#8 version.
+    /// The message names the problem. Raised by every key constructor.
     #[error("malformed key: {0}")]
     MalformedKey(String),
     /// The signature does not verify under the key for this message or hash,
@@ -122,7 +123,7 @@ impl SecretKey {
 
         // Assemble the key before validating it. The rsa crate wipes a dropped
         // key, so the components get zeroized on every exit path.
-        let key = RsaPrivateKey::from_components(n, e, d, vec![p, q])
+        let mut key = RsaPrivateKey::from_components(n, e, d, vec![p, q])
             .map_err(|err| Error::MalformedKey(err.to_string()))?;
 
         // The modulus must be exactly 2048 bits
@@ -135,6 +136,17 @@ impl SecretKey {
         if *key.e() != BigUint::from(65537u32) {
             return Err(Error::MalformedKey("exponent not 65537".into()));
         }
+        // The private exponent must be below the modulus, as RFC 8017 requires
+        if key.d() >= key.n() {
+            return Err(Error::MalformedKey(
+                "private exponent not below modulus".into(),
+            ));
+        }
+        // The rsa crate skips the CRT values if it cannot compute them, as for
+        // a repeated prime, leaving a key that later fails to encode as DER
+        key.precompute()
+            .map_err(|_| Error::MalformedKey("invalid CRT coefficient".into()))?;
+
         let sig = rsa::pkcs1v15::SigningKey::<Sha256>::new(key);
         Ok(Self { inner: sig })
     }
@@ -166,6 +178,17 @@ impl SecretKey {
         // well do the same.
         if *key.e() != BigUint::from(65537u32) {
             return Err(Error::MalformedKey("exponent not 65537".into()));
+        }
+        // Both primes must be exactly 1024 bits, as the raw encoding has no room
+        // for any other split of the modulus
+        if key.primes().iter().any(|prime| prime.bits() != 1024) {
+            return Err(Error::MalformedKey("primes not 1024 bits".into()));
+        }
+        // The private exponent must be below the modulus, as RFC 8017 requires
+        if key.d() >= key.n() {
+            return Err(Error::MalformedKey(
+                "private exponent not below modulus".into(),
+            ));
         }
         // The upstream rsa crate ignores CRT parameters (dP, dQ, qInv) and
         // recomputes them, accepting malformed values. We don't want to allow
@@ -243,7 +266,10 @@ impl SecretKey {
 
     /// sign creates a digital signature of the message.
     pub fn sign(&self, message: &[u8]) -> Signature {
-        let sig = self.inner.sign(message);
+        // Blind the private key operation with fresh randomness, so its timing
+        // does not correlate with the message. The signature is identical to an
+        // unblinded one.
+        let sig = self.inner.sign_with_rng(&mut OsRng, message);
         Signature(sig.to_bytes().as_ref().try_into().unwrap())
     }
 }
@@ -573,6 +599,78 @@ c9ab9ccdd77b098fc6c0c647ed663781";
         assert_eq!(hex::encode(key.to_bytes()), input);
     }
 
+    // Tests that a raw byte encoded RSA private key is rejected if its primes
+    // repeat, as it would fail to encode as DER, or if its private exponent is
+    // not below the modulus.
+    #[test]
+    fn test_secretkey_bytes_malformed() {
+        // A key with p = q = 2^1024 - 1 and d = 65537^-1 mod (p - 1)
+        let repeated_prime = "ff".repeat(128);
+        let repeated_priv_exp = "\
+000000000000000000000000000000000000000000000000000000000000\
+000000000000000000000000000000000000000000000000000000000000\
+000000000000000000000000000000000000000000000000000000000000\
+000000000000000000000000000000000000000000000000000000000000\
+00000000000000000000ffff0000ffff0000ffff0000ffff0000ffff0000\
+ffff0000ffff0000ffff0000ffff0000ffff0000ffff0000ffff0000ffff\
+0000ffff0000ffff0000ffff0000ffff0000ffff0000ffff0000ffff0000\
+ffff0000ffff0000ffff0000ffff0000ffff0000ffff0000ffff0000ffff\
+0000ffff0000ffff0000ffff0000ffff";
+
+        // A valid key with (p - 1)(q - 1) added to its private exponent
+        let oversized_prime1 = "\
+ff2ebde4fed03e0dfdc20c47dded8ddb9f925b6aeb37bc7a50033361a8fa\
+824626db9a72a56a1321c3071f5ca04bc37475296278ef27f719585e25da\
+0d7ed5d55038ba324f2d7111e12369c6021f92fa9d2146c7bed71d5ef1c5\
+6d8b6786538ba61ad8ee1daee3fc8f66d04a72a73ba83c609ab19fa8ff8d\
+64096f1feff8857f";
+        let oversized_prime2 = "\
+df0a39d23e32ef26b12c6acb405940d610dccbe903d69afafcdcd7888ec1\
+e809d8e9f50d8b3c7f636a800f527e3315afb5cfe1ec8457247f9f5e79f0\
+80c99615342a1c2e8a91a63f3a2d6d2ec4e1d8922e9415f60c2f22ed84cb\
+76e95774e26d743965d2ad74b8076569aa04ffde54e51148bf7306220754\
+70b4dcb83e8d0a17";
+        let oversized_priv_exp = "\
+e802c4c436ece5aea5342ca2c33ce0132ef77802ecfff9fa15a6e4d72066\
+b124e18e3524dac3d8d13dc9ae5dda7290b9d6f0ca5dde996b7b8c58ac02\
+267d74264d309859914aefaf869e6ed0171e5870fa7897b5000ee2d812b9\
+2b1b66ca5f73351209511e1e6add56040bf19d05b5ee88aa0b0ff6fd3afb\
+c181486be3d07b95776ce9eaeedb93ed23a0c5f261ca57d6314c9b4b38d3\
+23bb41db152862b84826ae6f63613e464230ae17b24848eac9a411a962e8\
+0f509ecad2b7f0beed2b37edbe5f0b67a76e0954de18a9acc852cea5d03d\
+b1501e0415867834d750dbcc31e4b4a8aae8e68dbe90655c1f44ef0023fa\
+ad60373d51a9cf92aa7ca7640ebf99e9";
+
+        let pub_exp = "0000000000010001";
+        let cases = [
+            (
+                "repeated prime",
+                [
+                    repeated_prime.as_str(),
+                    repeated_prime.as_str(),
+                    repeated_priv_exp,
+                    pub_exp,
+                ]
+                .concat(),
+            ),
+            (
+                "oversized private exponent",
+                [
+                    oversized_prime1,
+                    oversized_prime2,
+                    oversized_priv_exp,
+                    pub_exp,
+                ]
+                .concat(),
+            ),
+        ];
+        for (name, input) in cases {
+            let bytes: [u8; 520] = hex::decode(&input).unwrap().try_into().unwrap();
+            let result = SecretKey::from_bytes(&bytes);
+            assert!(matches!(result, Err(Error::MalformedKey(_))), "{name}");
+        }
+    }
+
     // Tests that a raw byte encoded RSA public key can be decoded and re-encoded
     // to the same bytes. The purpose is not to battle-test the implementation,
     // rather to ensure that the code implements the format other subsystems expect.
@@ -722,6 +820,60 @@ df0b68ce2f17835c36ad7abc86fffecbbf145eb285be596b02818022dadb\
         assert_eq!(hex::encode(key.to_der()), input);
     }
 
+    // Tests that a DER encoded RSA private key is rejected unless both its
+    // primes are 1024 bits and its private exponent is below the modulus, as
+    // the raw encoding could not hold it otherwise.
+    #[test]
+    fn test_privatekey_der_malformed() {
+        // A 1025-bit and a 1023-bit prime spanning a 2048-bit modulus
+        let large_prime = "\
+01cd1fa0a41d00ebcc15f70f4b179f7e01a9dccb1b7163cd7f03c0177e3b\
+20544aa83780cfd09e09891bd7d12371f036b6180f13a6848e6798dcb6b5\
+b21f097930d6a838ebacdd55d8f68b1d15003aaf6a8f00f41f79ef6fdbc7\
+81afd21ec76b71946698335ea1fa01b581a7df57e33b6d908bc31bb485b6\
+be7bd5e2d05d4e350d";
+        let small_prime = "\
+6298392646b5a24ffd64c2db91953dc51f21fa7a7882c183a145fa80d579\
+0972ddd90295048b693b09b76069ec2b3e00d9c92b6b91a716142eb66a56\
+b6d2388296d1f73a51e04d445b545b05cbb6d3eebdcfb47a865211d37e45\
+abdef989e4dee4057fbce75e611142bb5fcf2e82b7dbb46f84a570c280bf\
+e6dab8b74032f857";
+        let large = BigUint::from_bytes_be(&hex::decode(large_prime).unwrap());
+        let small = BigUint::from_bytes_be(&hex::decode(small_prime).unwrap());
+        let exponent = BigUint::from(65537u32);
+
+        // A valid key with (p - 1)(q - 1) shifted past 2048 bits added to its
+        // private exponent
+        let secret = SecretKey::generate();
+        let balanced: &RsaPrivateKey = secret.inner.as_ref();
+        let one = BigUint::from(1u32);
+        let totient = (&balanced.primes()[0] - &one) * (&balanced.primes()[1] - &one);
+        let oversized = RsaPrivateKey::from_components(
+            balanced.n().clone(),
+            balanced.e().clone(),
+            balanced.d() + (totient << 64),
+            balanced.primes().to_vec(),
+        )
+        .unwrap();
+
+        let cases = [
+            (
+                "1025-bit first prime",
+                RsaPrivateKey::from_p_q(large.clone(), small.clone(), exponent.clone()).unwrap(),
+            ),
+            (
+                "1025-bit second prime",
+                RsaPrivateKey::from_p_q(small, large, exponent).unwrap(),
+            ),
+            ("oversized private exponent", oversized),
+        ];
+        for (name, key) in cases {
+            let der = key.to_pkcs8_der().unwrap();
+            let result = SecretKey::from_der(der.as_bytes());
+            assert!(matches!(result, Err(Error::MalformedKey(_))), "{name}");
+        }
+    }
+
     // Tests that a DER encoded RSA public key can be decoded and re-encoded to
     // the same string. The purpose is not to battle-test the DER implementation,
     // rather to ensure that the code implements the DER format other subsystems
@@ -808,5 +960,56 @@ fQIDAQAB
                 .verify(tt.message, &signature)
                 .unwrap_or_else(|e| panic!("failed to verify message: {}", e));
         }
+    }
+
+    // Tests that signing yields the signature OpenSSL computes for the same key
+    // and message, as blinding the private key operation must not change it.
+    #[test]
+    fn test_sign_vector() {
+        // Generated with:
+        //   printf 'message to authenticate' | openssl dgst -sha256 -sign test.key | xxd -p
+        let key = "\
+-----BEGIN PRIVATE KEY-----
+MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQCwLLXTHaYT57yN
+HZT6BTnJIDaJ8GTnu05PnwQQcV7Xgom164T52qaMmvsK/PGlzMzQdo9YjYKsExZE
+EllJe4O1mVA1T/LyKLkPZgKqcp11/9UAkk3pHsPkb0YOb3g1721K6tQ78ufjeIOt
+5WJ+n+HJHOvhvyjmO0aQ51eh0jSyUu6U9fA+qrtPO4D/mUVRDJmCLSyGzIMd4Xan
+zTSWZ8JWLjahIdMPOZYUrGpICOxwt9Jaow37ogAalRVHnTb8PkklOo9pr0a3ZdQQ
+P3yV/A5gmgXXLi2BkQ0b2y8FOuD/JjBXL4Ks9nUVn/nMMaFhDxmL3ZZ9AuvB94AR
+B0MvuZh9AgMBAAECggEABoVaB1dURJhZDBV0OcI5iVWakr63md/F3kdDnlu+koDd
+/V63rG76izDmsQQYP3Zgt0TW1ehDcmP3ziDG2blycF5WKM2tqGcwlfBvypn8WEnH
+5eWEcEul5JFZ09C8b61N8sOALq01PzVOv8dCPu9jKzL19mfPofX4myKt4esKX2gy
+psId9QmgsrRRsCSvQeUxOA3Sqaa0a+atALZByPKZN8XzmZu1Ie5QPQvh/xYDJU1D
+GEiNgwZGy0eXL2Se5OjKAR40f4SzArbs/Jb2gRFHTjpdJ9g33GqoP94jZPcogtm2
+FHgI5vl9jL4uXiSJLkgl4FfFvoIXWuUi1xAC5NDT4QKBgQDnaxGFvt6vW8JKEyEq
+6Nf9K2Y2nQbvEmqnvS/RPwuqKuh66KCNG2rePFzXLHCplbYHt9hhF+Ity9lFzxSK
+ipRC6BD9aqaqF6qhm1nZWnXsPWjWDsFYzQHv8LA4pL8gmxbz+IOs1jbbIQAdq8X5
+uv7C1YSCrPkpm/nTljzwU/d/gwKBgQDC42in2DURf1+cU9Qw+hNDCy0EgkB7STzV
+dCreCAFXhSIzFwq9bjzOeSFtvZlWxKNJKNUiDXgN/grRREG/m1kW7EdHAMiOVVNK
+SbQ/+zHy6SMKNu0ArkokaCAEludVVRjkwh5GsyFvFaBINJBnp/zDYhNkkxStjCRf
+rW0/fmcH/wKBgF/IA9+caWShEOBB3Kd66fKiJNMT2QvYToaQmhr8AiLzUXeVkuX0
+ZB4JU8/HV/YIveeh4xAEp5uW1J29IN5ajxTGIkoQ+1xJIVl0CBMbCtW1cQ+v2byc
+VWHu97DqFyUyq6RcxnshymCV3wtozi8Xg1w2rXq8hv/+y78UXrKFvllrAoGAItrb
+F9GyRAvcxK+1boD7Ou1fwsOs1p/VknNxSz5xRv7Xi/2d/R0fIOpHEUJsjzkh3u6/
+l5SDGTWLJ7wmaidVeqUNZmR8egBGoi2mYB8D4ubRTn1eS9XgCrzYpRl8DCXpCtiw
+44IcA6sBfIhyHyfLLAJ5Z25qr1M2GiqBNG7d7G8CgYBoIYe3OeuqZn2T+eA3rmMv
+djLUQsO3CvmFYBDvNqmiwNx3OOV/YFQVvSAGaEP/5pJGVmAKUDaALgTveToLV6jq
+bS99QZDnrW+xkvJi6N1ZAlQpIOX5Y/Q2qyBa1Hf2Z21mnqZSN3HHC6aQl+83uety
+JJXbL24vf1AajzeJk6CpdQ==
+-----END PRIVATE KEY-----";
+        let signature = "\
+6512b84fec411edf385361a30817caa166c3a6451cc11c603bbb56d263a8\
+e11da34838ee443ac3b6eb75ccc290c66a89726a455395f36e5e11ab42dc\
+fe5d999692d24710f186b765d5f83ed9eb5ae82acecf5839ac6d15135c1a\
+4a3586bd14c71eba913caa3de9065f6e87fffd40729448882e80bb51074f\
+e2f72dbcecea89db62b8a9a241ea7381199786b34829e1fce7a9a61ef8dc\
+a01b6d8fa60453e9b48d1b33218b4bc6a14225f97ec372ae3bc98f360ac1\
+a5d3cf87d453640663e406de19624e2f5f06f5f04fdeb83ac1cca0e66fcf\
+7c95aa9f7b0d6e603b31cde5701a96d94690ce5cec9165f4885c27b50ba8\
+5615d143c89ef76f4ab69430c18cf6d0";
+
+        let key = SecretKey::from_pem(key).unwrap();
+        let signed = key.sign(b"message to authenticate");
+        assert_eq!(hex::encode(signed.to_bytes()), signature);
     }
 }
