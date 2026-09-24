@@ -37,7 +37,7 @@ use rsa::pkcs8::{
 use rsa::rand_core::OsRng;
 use rsa::sha2::{Digest, Sha256};
 use rsa::signature::hazmat::PrehashVerifier;
-use rsa::signature::{Keypair, SignatureEncoding, Signer, Verifier};
+use rsa::signature::{Keypair, RandomizedSigner, SignatureEncoding, Verifier};
 use rsa::traits::{PrivateKeyParts, PublicKeyParts};
 use rsa::{BigUint, RsaPrivateKey, RsaPublicKey};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
@@ -266,7 +266,10 @@ impl SecretKey {
 
     /// sign creates a digital signature of the message.
     pub fn sign(&self, message: &[u8]) -> Signature {
-        let sig = self.inner.sign(message);
+        // Blind the private key operation with fresh randomness, so its timing
+        // does not correlate with the message. The signature is identical to an
+        // unblinded one.
+        let sig = self.inner.sign_with_rng(&mut OsRng, message);
         Signature(sig.to_bytes().as_ref().try_into().unwrap())
     }
 }
@@ -957,5 +960,56 @@ fQIDAQAB
                 .verify(tt.message, &signature)
                 .unwrap_or_else(|e| panic!("failed to verify message: {}", e));
         }
+    }
+
+    // Tests that signing yields the signature OpenSSL computes for the same key
+    // and message, as blinding the private key operation must not change it.
+    #[test]
+    fn test_sign_vector() {
+        // Generated with:
+        //   printf 'message to authenticate' | openssl dgst -sha256 -sign test.key | xxd -p
+        let key = "\
+-----BEGIN PRIVATE KEY-----
+MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQCwLLXTHaYT57yN
+HZT6BTnJIDaJ8GTnu05PnwQQcV7Xgom164T52qaMmvsK/PGlzMzQdo9YjYKsExZE
+EllJe4O1mVA1T/LyKLkPZgKqcp11/9UAkk3pHsPkb0YOb3g1721K6tQ78ufjeIOt
+5WJ+n+HJHOvhvyjmO0aQ51eh0jSyUu6U9fA+qrtPO4D/mUVRDJmCLSyGzIMd4Xan
+zTSWZ8JWLjahIdMPOZYUrGpICOxwt9Jaow37ogAalRVHnTb8PkklOo9pr0a3ZdQQ
+P3yV/A5gmgXXLi2BkQ0b2y8FOuD/JjBXL4Ks9nUVn/nMMaFhDxmL3ZZ9AuvB94AR
+B0MvuZh9AgMBAAECggEABoVaB1dURJhZDBV0OcI5iVWakr63md/F3kdDnlu+koDd
+/V63rG76izDmsQQYP3Zgt0TW1ehDcmP3ziDG2blycF5WKM2tqGcwlfBvypn8WEnH
+5eWEcEul5JFZ09C8b61N8sOALq01PzVOv8dCPu9jKzL19mfPofX4myKt4esKX2gy
+psId9QmgsrRRsCSvQeUxOA3Sqaa0a+atALZByPKZN8XzmZu1Ie5QPQvh/xYDJU1D
+GEiNgwZGy0eXL2Se5OjKAR40f4SzArbs/Jb2gRFHTjpdJ9g33GqoP94jZPcogtm2
+FHgI5vl9jL4uXiSJLkgl4FfFvoIXWuUi1xAC5NDT4QKBgQDnaxGFvt6vW8JKEyEq
+6Nf9K2Y2nQbvEmqnvS/RPwuqKuh66KCNG2rePFzXLHCplbYHt9hhF+Ity9lFzxSK
+ipRC6BD9aqaqF6qhm1nZWnXsPWjWDsFYzQHv8LA4pL8gmxbz+IOs1jbbIQAdq8X5
+uv7C1YSCrPkpm/nTljzwU/d/gwKBgQDC42in2DURf1+cU9Qw+hNDCy0EgkB7STzV
+dCreCAFXhSIzFwq9bjzOeSFtvZlWxKNJKNUiDXgN/grRREG/m1kW7EdHAMiOVVNK
+SbQ/+zHy6SMKNu0ArkokaCAEludVVRjkwh5GsyFvFaBINJBnp/zDYhNkkxStjCRf
+rW0/fmcH/wKBgF/IA9+caWShEOBB3Kd66fKiJNMT2QvYToaQmhr8AiLzUXeVkuX0
+ZB4JU8/HV/YIveeh4xAEp5uW1J29IN5ajxTGIkoQ+1xJIVl0CBMbCtW1cQ+v2byc
+VWHu97DqFyUyq6RcxnshymCV3wtozi8Xg1w2rXq8hv/+y78UXrKFvllrAoGAItrb
+F9GyRAvcxK+1boD7Ou1fwsOs1p/VknNxSz5xRv7Xi/2d/R0fIOpHEUJsjzkh3u6/
+l5SDGTWLJ7wmaidVeqUNZmR8egBGoi2mYB8D4ubRTn1eS9XgCrzYpRl8DCXpCtiw
+44IcA6sBfIhyHyfLLAJ5Z25qr1M2GiqBNG7d7G8CgYBoIYe3OeuqZn2T+eA3rmMv
+djLUQsO3CvmFYBDvNqmiwNx3OOV/YFQVvSAGaEP/5pJGVmAKUDaALgTveToLV6jq
+bS99QZDnrW+xkvJi6N1ZAlQpIOX5Y/Q2qyBa1Hf2Z21mnqZSN3HHC6aQl+83uety
+JJXbL24vf1AajzeJk6CpdQ==
+-----END PRIVATE KEY-----";
+        let signature = "\
+6512b84fec411edf385361a30817caa166c3a6451cc11c603bbb56d263a8\
+e11da34838ee443ac3b6eb75ccc290c66a89726a455395f36e5e11ab42dc\
+fe5d999692d24710f186b765d5f83ed9eb5ae82acecf5839ac6d15135c1a\
+4a3586bd14c71eba913caa3de9065f6e87fffd40729448882e80bb51074f\
+e2f72dbcecea89db62b8a9a241ea7381199786b34829e1fce7a9a61ef8dc\
+a01b6d8fa60453e9b48d1b33218b4bc6a14225f97ec372ae3bc98f360ac1\
+a5d3cf87d453640663e406de19624e2f5f06f5f04fdeb83ac1cca0e66fcf\
+7c95aa9f7b0d6e603b31cde5701a96d94690ce5cec9165f4885c27b50ba8\
+5615d143c89ef76f4ab69430c18cf6d0";
+
+        let key = SecretKey::from_pem(key).unwrap();
+        let signed = key.sign(b"message to authenticate");
+        assert_eq!(hex::encode(signed.to_bytes()), signature);
     }
 }
