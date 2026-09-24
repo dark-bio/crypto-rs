@@ -244,7 +244,7 @@ impl SecretKey {
         }
     }
 
-    /// fingerprint returns a 256bit unique identified for this key. For ML-DSA,
+    /// fingerprint returns a 256-bit unique identifier for this key. For ML-DSA,
     /// that is the SHA256 hash of the raw public key.
     pub fn fingerprint(&self) -> Fingerprint {
         self.public_key().fingerprint()
@@ -357,7 +357,7 @@ impl PublicKey {
         pem::encode("PUBLIC KEY", &self.to_der())
     }
 
-    /// fingerprint returns a 256bit unique identified for this key. For ML-DSA,
+    /// fingerprint returns a 256-bit unique identifier for this key. For ML-DSA,
     /// that is the SHA256 hash of the raw public key.
     pub fn fingerprint(&self) -> Fingerprint {
         let mut hasher = sha2::Sha256::new();

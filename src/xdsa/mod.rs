@@ -231,7 +231,7 @@ impl SecretKey {
         }
     }
 
-    /// fingerprint returns a 256bit unique identifier for this key.
+    /// fingerprint returns a 256-bit unique identifier for this key.
     pub fn fingerprint(&self) -> Fingerprint {
         self.public_key().fingerprint()
     }
@@ -357,7 +357,7 @@ impl PublicKey {
         pem::encode("PUBLIC KEY", &self.to_der())
     }
 
-    /// fingerprint returns a 256bit unique identifier for this key.
+    /// fingerprint returns a 256-bit unique identifier for this key.
     pub fn fingerprint(&self) -> Fingerprint {
         let mut hasher = sha2::Sha256::new();
         hasher.update(self.ml_key.to_bytes());

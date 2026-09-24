@@ -235,7 +235,7 @@ impl SecretKey {
         PublicKey { inner: key }
     }
 
-    /// fingerprint returns a 256bit unique identified for this key. For RSA, that
+    /// fingerprint returns a 256-bit unique identifier for this key. For RSA, that
     /// is the SHA256 hash of the raw (le modulus || le exponent) public key.
     pub fn fingerprint(&self) -> Fingerprint {
         self.public_key().fingerprint()
@@ -346,7 +346,7 @@ impl PublicKey {
         pem::encode("PUBLIC KEY", &self.to_der())
     }
 
-    /// fingerprint returns a 256bit unique identified for this key. For RSA, that
+    /// fingerprint returns a 256-bit unique identifier for this key. For RSA, that
     /// is the SHA256 hash of the raw (le modulus || le exponent) public key.
     pub fn fingerprint(&self) -> Fingerprint {
         let pubkey: RsaPublicKey = self.inner.as_ref().clone();

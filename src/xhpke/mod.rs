@@ -145,7 +145,7 @@ pub enum Error {
     OpenFailed(String),
 }
 
-/// SecretKey contains a private key of the type bound to the configured crypto.
+/// SecretKey contains an X-Wing private key for decrypting HPKE messages.
 #[derive(Clone)]
 pub struct SecretKey {
     inner: <KEM as Kem>::PrivateKey,
@@ -259,7 +259,7 @@ impl SecretKey {
         }
     }
 
-    /// fingerprint returns a 256bit unique identifier for this key. For HPKE,
+    /// fingerprint returns a 256-bit unique identifier for this key. For HPKE,
     /// that is the SHA256 hash of the raw public key.
     pub fn fingerprint(&self) -> Fingerprint {
         self.public_key().fingerprint()
@@ -326,7 +326,7 @@ impl SecretKey {
     }
 }
 
-/// PublicKey contains a public key of the type bound to the configured crypto.
+/// PublicKey contains an X-Wing public key for encrypting HPKE messages.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PublicKey {
     inner: <KEM as Kem>::PublicKey,
@@ -423,7 +423,7 @@ impl PublicKey {
         pem::encode("PUBLIC KEY", &self.to_der())
     }
 
-    /// fingerprint returns a 256bit unique identifier for this key. For HPKE,
+    /// fingerprint returns a 256-bit unique identifier for this key. For HPKE,
     /// that is the SHA256 hash of the raw public key.
     pub fn fingerprint(&self) -> Fingerprint {
         let mut hasher = sha2::Sha256::new();
