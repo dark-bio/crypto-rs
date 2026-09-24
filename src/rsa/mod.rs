@@ -78,9 +78,10 @@ pub enum Error {
     #[error("not an RSA key")]
     UnexpectedAlgorithm,
     /// The key parsed but its contents are unusable, a modulus that is not
-    /// 2048 bits, an exponent other than 65537, a non-canonical encoding or an
-    /// unsupported PKCS#8 version. The message names the problem. Raised by
-    /// every key constructor.
+    /// 2048 bits, an exponent other than 65537, primes that are not both 1024
+    /// bits, a private exponent not below the modulus, primes without a CRT
+    /// coefficient, a non-canonical encoding or an unsupported PKCS#8 version.
+    /// The message names the problem. Raised by every key constructor.
     #[error("malformed key: {0}")]
     MalformedKey(String),
     /// The signature does not verify under the key for this message or hash,
@@ -122,7 +123,7 @@ impl SecretKey {
 
         // Assemble the key before validating it. The rsa crate wipes a dropped
         // key, so the components get zeroized on every exit path.
-        let key = RsaPrivateKey::from_components(n, e, d, vec![p, q])
+        let mut key = RsaPrivateKey::from_components(n, e, d, vec![p, q])
             .map_err(|err| Error::MalformedKey(err.to_string()))?;
 
         // The modulus must be exactly 2048 bits
@@ -135,6 +136,17 @@ impl SecretKey {
         if *key.e() != BigUint::from(65537u32) {
             return Err(Error::MalformedKey("exponent not 65537".into()));
         }
+        // The private exponent must be below the modulus, as RFC 8017 requires
+        if key.d() >= key.n() {
+            return Err(Error::MalformedKey(
+                "private exponent not below modulus".into(),
+            ));
+        }
+        // The rsa crate skips the CRT values if it cannot compute them, as for
+        // a repeated prime, leaving a key that later fails to encode as DER
+        key.precompute()
+            .map_err(|_| Error::MalformedKey("invalid CRT coefficient".into()))?;
+
         let sig = rsa::pkcs1v15::SigningKey::<Sha256>::new(key);
         Ok(Self { inner: sig })
     }
@@ -166,6 +178,17 @@ impl SecretKey {
         // well do the same.
         if *key.e() != BigUint::from(65537u32) {
             return Err(Error::MalformedKey("exponent not 65537".into()));
+        }
+        // Both primes must be exactly 1024 bits, as the raw encoding has no room
+        // for any other split of the modulus
+        if key.primes().iter().any(|prime| prime.bits() != 1024) {
+            return Err(Error::MalformedKey("primes not 1024 bits".into()));
+        }
+        // The private exponent must be below the modulus, as RFC 8017 requires
+        if key.d() >= key.n() {
+            return Err(Error::MalformedKey(
+                "private exponent not below modulus".into(),
+            ));
         }
         // The upstream rsa crate ignores CRT parameters (dP, dQ, qInv) and
         // recomputes them, accepting malformed values. We don't want to allow
@@ -573,6 +596,78 @@ c9ab9ccdd77b098fc6c0c647ed663781";
         assert_eq!(hex::encode(key.to_bytes()), input);
     }
 
+    // Tests that a raw byte encoded RSA private key is rejected if its primes
+    // repeat, as it would fail to encode as DER, or if its private exponent is
+    // not below the modulus.
+    #[test]
+    fn test_secretkey_bytes_malformed() {
+        // A key with p = q = 2^1024 - 1 and d = 65537^-1 mod (p - 1)
+        let repeated_prime = "ff".repeat(128);
+        let repeated_priv_exp = "\
+000000000000000000000000000000000000000000000000000000000000\
+000000000000000000000000000000000000000000000000000000000000\
+000000000000000000000000000000000000000000000000000000000000\
+000000000000000000000000000000000000000000000000000000000000\
+00000000000000000000ffff0000ffff0000ffff0000ffff0000ffff0000\
+ffff0000ffff0000ffff0000ffff0000ffff0000ffff0000ffff0000ffff\
+0000ffff0000ffff0000ffff0000ffff0000ffff0000ffff0000ffff0000\
+ffff0000ffff0000ffff0000ffff0000ffff0000ffff0000ffff0000ffff\
+0000ffff0000ffff0000ffff0000ffff";
+
+        // A valid key with (p - 1)(q - 1) added to its private exponent
+        let oversized_prime1 = "\
+ff2ebde4fed03e0dfdc20c47dded8ddb9f925b6aeb37bc7a50033361a8fa\
+824626db9a72a56a1321c3071f5ca04bc37475296278ef27f719585e25da\
+0d7ed5d55038ba324f2d7111e12369c6021f92fa9d2146c7bed71d5ef1c5\
+6d8b6786538ba61ad8ee1daee3fc8f66d04a72a73ba83c609ab19fa8ff8d\
+64096f1feff8857f";
+        let oversized_prime2 = "\
+df0a39d23e32ef26b12c6acb405940d610dccbe903d69afafcdcd7888ec1\
+e809d8e9f50d8b3c7f636a800f527e3315afb5cfe1ec8457247f9f5e79f0\
+80c99615342a1c2e8a91a63f3a2d6d2ec4e1d8922e9415f60c2f22ed84cb\
+76e95774e26d743965d2ad74b8076569aa04ffde54e51148bf7306220754\
+70b4dcb83e8d0a17";
+        let oversized_priv_exp = "\
+e802c4c436ece5aea5342ca2c33ce0132ef77802ecfff9fa15a6e4d72066\
+b124e18e3524dac3d8d13dc9ae5dda7290b9d6f0ca5dde996b7b8c58ac02\
+267d74264d309859914aefaf869e6ed0171e5870fa7897b5000ee2d812b9\
+2b1b66ca5f73351209511e1e6add56040bf19d05b5ee88aa0b0ff6fd3afb\
+c181486be3d07b95776ce9eaeedb93ed23a0c5f261ca57d6314c9b4b38d3\
+23bb41db152862b84826ae6f63613e464230ae17b24848eac9a411a962e8\
+0f509ecad2b7f0beed2b37edbe5f0b67a76e0954de18a9acc852cea5d03d\
+b1501e0415867834d750dbcc31e4b4a8aae8e68dbe90655c1f44ef0023fa\
+ad60373d51a9cf92aa7ca7640ebf99e9";
+
+        let pub_exp = "0000000000010001";
+        let cases = [
+            (
+                "repeated prime",
+                [
+                    repeated_prime.as_str(),
+                    repeated_prime.as_str(),
+                    repeated_priv_exp,
+                    pub_exp,
+                ]
+                .concat(),
+            ),
+            (
+                "oversized private exponent",
+                [
+                    oversized_prime1,
+                    oversized_prime2,
+                    oversized_priv_exp,
+                    pub_exp,
+                ]
+                .concat(),
+            ),
+        ];
+        for (name, input) in cases {
+            let bytes: [u8; 520] = hex::decode(&input).unwrap().try_into().unwrap();
+            let result = SecretKey::from_bytes(&bytes);
+            assert!(matches!(result, Err(Error::MalformedKey(_))), "{name}");
+        }
+    }
+
     // Tests that a raw byte encoded RSA public key can be decoded and re-encoded
     // to the same bytes. The purpose is not to battle-test the implementation,
     // rather to ensure that the code implements the format other subsystems expect.
@@ -720,6 +815,60 @@ df0b68ce2f17835c36ad7abc86fffecbbf145eb285be596b02818022dadb\
         let der = hex::decode(input).unwrap();
         let key = SecretKey::from_der(&der).unwrap();
         assert_eq!(hex::encode(key.to_der()), input);
+    }
+
+    // Tests that a DER encoded RSA private key is rejected unless both its
+    // primes are 1024 bits and its private exponent is below the modulus, as
+    // the raw encoding could not hold it otherwise.
+    #[test]
+    fn test_privatekey_der_malformed() {
+        // A 1025-bit and a 1023-bit prime spanning a 2048-bit modulus
+        let large_prime = "\
+01cd1fa0a41d00ebcc15f70f4b179f7e01a9dccb1b7163cd7f03c0177e3b\
+20544aa83780cfd09e09891bd7d12371f036b6180f13a6848e6798dcb6b5\
+b21f097930d6a838ebacdd55d8f68b1d15003aaf6a8f00f41f79ef6fdbc7\
+81afd21ec76b71946698335ea1fa01b581a7df57e33b6d908bc31bb485b6\
+be7bd5e2d05d4e350d";
+        let small_prime = "\
+6298392646b5a24ffd64c2db91953dc51f21fa7a7882c183a145fa80d579\
+0972ddd90295048b693b09b76069ec2b3e00d9c92b6b91a716142eb66a56\
+b6d2388296d1f73a51e04d445b545b05cbb6d3eebdcfb47a865211d37e45\
+abdef989e4dee4057fbce75e611142bb5fcf2e82b7dbb46f84a570c280bf\
+e6dab8b74032f857";
+        let large = BigUint::from_bytes_be(&hex::decode(large_prime).unwrap());
+        let small = BigUint::from_bytes_be(&hex::decode(small_prime).unwrap());
+        let exponent = BigUint::from(65537u32);
+
+        // A valid key with (p - 1)(q - 1) shifted past 2048 bits added to its
+        // private exponent
+        let secret = SecretKey::generate();
+        let balanced: &RsaPrivateKey = secret.inner.as_ref();
+        let one = BigUint::from(1u32);
+        let totient = (&balanced.primes()[0] - &one) * (&balanced.primes()[1] - &one);
+        let oversized = RsaPrivateKey::from_components(
+            balanced.n().clone(),
+            balanced.e().clone(),
+            balanced.d() + (totient << 64),
+            balanced.primes().to_vec(),
+        )
+        .unwrap();
+
+        let cases = [
+            (
+                "1025-bit first prime",
+                RsaPrivateKey::from_p_q(large.clone(), small.clone(), exponent.clone()).unwrap(),
+            ),
+            (
+                "1025-bit second prime",
+                RsaPrivateKey::from_p_q(small, large, exponent).unwrap(),
+            ),
+            ("oversized private exponent", oversized),
+        ];
+        for (name, key) in cases {
+            let der = key.to_pkcs8_der().unwrap();
+            let result = SecretKey::from_der(der.as_bytes());
+            assert!(matches!(result, Err(Error::MalformedKey(_))), "{name}");
+        }
     }
 
     // Tests that a DER encoded RSA public key can be decoded and re-encoded to
