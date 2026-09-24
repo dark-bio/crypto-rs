@@ -157,14 +157,14 @@ impl<T: ConfirmKey> Confirm<T> {
     }
 }
 
-/// Internal: `{ 1: COSE_Key }` — the cnf claim value envelope.
+/// Internal: `{ 1: COSE_Key }`, the cnf claim value envelope.
 #[derive(Clone, Debug, PartialEq, Eq, Cbor)]
 struct CnfMap {
     #[cbor(key = 1)]
     cose_key: CoseKey,
 }
 
-/// Internal: `{ 1: kty, -2: x }` — a minimal COSE_Key. Parameter -2 carries
+/// Internal: `{ 1: kty, -2: x }`, a minimal COSE_Key. Parameter -2 carries
 /// the full public key bytes, following the OKP convention (RFC 9053 Section 7.2).
 #[derive(Clone, Debug, PartialEq, Eq, Cbor)]
 struct CoseKey {

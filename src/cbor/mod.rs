@@ -1305,7 +1305,7 @@ impl<'a, 'b, E: MapEntryAccess<'a>> MapEntryAccess<'a> for MapEntriesScoped<'a, 
 
     fn is_empty(&self) -> bool {
         // We are iterating self.keys, so every key is allowed by
-        // definition — skip key_allowed and probe the parent directly.
+        // definition; skip key_allowed and probe the parent directly.
         self.keys.iter().all(|k| !self.entries.contains(*k))
     }
 
@@ -2873,7 +2873,7 @@ mod tests {
             #[cbor(embed)]
             inner: Inner,
         }
-        // Hand-craft CBOR: {1: 99, 2: "hi"} — key 1 collides between direct
+        // Hand-craft CBOR: {1: 99, 2: "hi"}, where key 1 collides between direct
         // field x and embed field inner.a. Decode must reject with DuplicateMapKey.
         let mut enc = Encoder::new();
         enc.encode_map_header(2);
@@ -3229,7 +3229,7 @@ mod tests {
     }
 
     // Tests that a partial optional embed (some required keys present but not
-    // all) is rejected during decode — all-or-none semantics.
+    // all) is rejected during decode, per the all-or-none semantics.
     #[test]
     fn test_map_embed_optional_partial_rejected() {
         #[derive(Debug, PartialEq, Cbor)]
@@ -3239,7 +3239,7 @@ mod tests {
             #[cbor(key = 3)]
             c: u64,
         }
-        // Hand-craft: {1: 42, 3: 7} — key 1 present (from Inner) but key 2 missing
+        // Hand-craft: {1: 42, 3: 7}, key 1 present (from Inner) but key 2 missing
         let mut enc = Encoder::new();
         enc.encode_map_header(2);
         enc.encode_int(1);
@@ -3346,7 +3346,7 @@ mod tests {
         let decoded = decode::<Outer>(&data).unwrap();
         assert_eq!(decoded, nil);
 
-        // Partial: only key 1 (X from Sub) but not key 2 (Y) — rejected
+        // Partial: only key 1 (X from Sub) but not key 2 (Y), rejected
         let mut enc = Encoder::new();
         enc.encode_map_header(2);
         enc.encode_int(1);
@@ -3401,7 +3401,7 @@ mod tests {
         let decoded = decode::<O>(&data).unwrap();
         assert_eq!(decoded, nil_all);
 
-        // Outer active, inner nil: X present, Y absent — valid
+        // Outer active, inner nil: X present, Y absent; valid
         let outer_only = O {
             a: Some(A { x: 1, b: None }),
             z: 3,
@@ -3412,7 +3412,7 @@ mod tests {
         assert!(decoded.a.as_ref().unwrap().b.is_none());
 
         // Bug case: inner key present (Y from B), outer key missing (X from A).
-        // Wire {2: 2, 3: 3} must fail — B's activity propagates to A, making
+        // Wire {2: 2, 3: 3} must fail, since B's activity propagates to A, making
         // X required. This is the Go TestMapEmbedNestedPointerAllOrNone
         // "inner-active-outer-missing" case.
         let mut enc = Encoder::new();
@@ -3438,7 +3438,7 @@ mod tests {
             #[cbor(key = 3)]
             c: u64,
         }
-        // Wire: {2: "x", 1: 42, 3: 7} — keys 2,1 out of order
+        // Wire: {2: "x", 1: 42, 3: 7} (keys 2,1 out of order)
         let mut enc = Encoder::new();
         enc.encode_map_header(3);
         enc.encode_int(2);
@@ -3521,7 +3521,7 @@ mod tests {
             #[cbor(key = 3)]
             c: u64,
         }
-        // Wire: {1: 1, 2: "two", 3: 3, 99: 0} — key 99 unknown
+        // Wire: {1: 1, 2: "two", 3: 3, 99: 0} (key 99 unknown)
         let mut enc = Encoder::new();
         enc.encode_map_header(4);
         enc.encode_int(1);
@@ -3548,7 +3548,7 @@ mod tests {
             #[cbor(key = 3)]
             c: u64,
         }
-        // Hand-craft CBOR: {1: 1, 1: 2, 2: "x", 3: 3} — duplicate key 1
+        // Hand-craft CBOR: {1: 1, 1: 2, 2: "x", 3: 3} (duplicate key 1)
         let mut enc = Encoder::new();
         enc.encode_map_header(4);
         enc.encode_int(1);
