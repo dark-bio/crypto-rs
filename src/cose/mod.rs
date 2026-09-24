@@ -97,6 +97,7 @@ pub use types::{
 // Use an indirect time package that mostly defers to sts::time on most platforms,
 // except on wasm, where it uses the JS engine's time subsystem.
 use web_time::{SystemTime, UNIX_EPOCH};
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::cbor::{self, Decode, Encode, Raw};
 use crate::{xdsa, xhpke};
@@ -271,7 +272,9 @@ pub fn sign_at<E: Encode, A: Encode>(
     domain: &[u8],
     timestamp: i64,
 ) -> Result<Vec<u8>, Error> {
-    let msg_to_embed = cbor::encode(msg_to_embed)?;
+    // The payload may be a plaintext about to be sealed, so every buffer
+    // holding it is wiped on drop
+    let mut msg_to_embed = Zeroizing::new(cbor::encode(msg_to_embed)?);
 
     // Restrict the user's domain to the context of this library
     let info = [DOMAIN_PREFIX, domain].concat();
@@ -286,19 +289,30 @@ pub fn sign_at<E: Encode, A: Encode>(
         timestamp,
     })?;
     // Build and sign Sig_structure
-    let signature = signer.sign(&cbor::encode(SigStructure {
-        context: "Signature1",
-        protected: &protected,
-        external_aad: &aad,
-        payload: &msg_to_embed,
-    })?);
-    // Build and encode COSE_Sign1
-    Ok(cbor::encode(&CoseSign1 {
+    let blob = encode_wiped(
+        SigStructure {
+            context: "Signature1",
+            protected: &protected,
+            external_aad: &aad,
+            payload: &msg_to_embed,
+        },
+        protected.len() + aad.len() + msg_to_embed.len(),
+    )?;
+    let signature = signer.sign(&blob);
+
+    // Build and encode COSE_Sign1, wiping the payload it holds once encoded
+    let len = protected.len() + msg_to_embed.len() + xdsa::SIGNATURE_SIZE;
+    let mut sign1 = CoseSign1 {
         protected,
         unprotected: EmptyHeader {},
-        payload: Some(msg_to_embed),
+        payload: Some(std::mem::take(&mut *msg_to_embed)),
         signature,
-    })?)
+    };
+    let encoded = encode_wiped(&sign1, len);
+    sign1.payload.zeroize();
+
+    // Hand the encoded COSE_Sign1 over to the caller
+    Ok(std::mem::take(&mut *encoded?))
 }
 
 /// verify_detached validates a COSE_Sign1 digital signature with a detached payload.
@@ -443,8 +457,9 @@ pub fn verify_at<E: Decode, A: Encode>(
     // Parse COSE_Sign1
     let sign1: CoseSign1 = cbor::decode(msg_to_check)?;
 
-    // Verify payload is present (embedded)
-    let payload = sign1.payload.ok_or(Error::MissingPayload)?;
+    // Verify payload is present (embedded). It may be a decrypted plaintext, so
+    // every buffer holding it is wiped on drop.
+    let payload = Zeroizing::new(sign1.payload.ok_or(Error::MissingPayload)?);
 
     // Verify the protected header
     let header = verify_sig_protected_header(&sign1.protected, ALGORITHM_ID_XDSA, verifier)?;
@@ -457,12 +472,15 @@ pub fn verify_at<E: Decode, A: Encode>(
         }
     }
     // Reconstruct Sig_structure to verify
-    let blob = cbor::encode(SigStructure {
-        context: "Signature1",
-        protected: &sign1.protected,
-        external_aad: &aad,
-        payload: &payload,
-    })?;
+    let blob = encode_wiped(
+        SigStructure {
+            context: "Signature1",
+            protected: &sign1.protected,
+            external_aad: &aad,
+            payload: &payload,
+        },
+        sign1.protected.len() + aad.len() + payload.len(),
+    )?;
 
     // Verify signature
     verifier
@@ -556,17 +574,17 @@ pub fn seal_at<E: Encode, A: Encode>(
     timestamp: i64,
 ) -> Result<Vec<u8>, Error> {
     // Pre-encode for EncStructure (which needs raw bytes for external_aad)
-    let msg_to_seal = cbor::encode(msg_to_seal)?;
     let msg_to_auth = cbor::encode(msg_to_auth)?;
 
-    // Create a COSE_Sign1 with the payload, binding the AAD (use Raw to avoid re-encoding)
-    let signed = sign_at(
-        Raw(msg_to_seal),
+    // Create a COSE_Sign1 with the payload, binding the AAD (use Raw to avoid
+    // re-encoding). It holds the plaintext, so it is wiped once encrypted.
+    let signed = Zeroizing::new(sign_at(
+        msg_to_seal,
         Raw(msg_to_auth.clone()),
         signer,
         domain,
         timestamp,
-    )?;
+    )?);
     // Encrypt the signed message to the recipient
     encrypt(&signed, Raw(msg_to_auth), recipient, domain)
 }
@@ -683,12 +701,19 @@ pub fn open_at<E: Decode, A: Encode + Clone>(
     max_drift: Option<u64>,
     now: i64,
 ) -> Result<E, Error> {
-    // Decrypt the COSE_Encrypt0 to get the COSE_Sign1
-    let sign1 = decrypt(msg_to_open, msg_to_auth.clone(), recipient, domain)?;
+    // Decrypt the COSE_Encrypt0 to get the COSE_Sign1. It holds the plaintext,
+    // so it is wiped on drop, as is the payload extracted from it.
+    let sign1 = Zeroizing::new(decrypt(
+        msg_to_open,
+        msg_to_auth.clone(),
+        recipient,
+        domain,
+    )?);
 
     // Verify the signature and extract the payload
     let raw: Raw = verify_at::<Raw, _>(&sign1, &msg_to_auth, sender, domain, max_drift, now)?;
-    Ok(cbor::decode(&raw.0)?)
+    let payload = Zeroizing::new(raw.0);
+    Ok(cbor::decode(&payload)?)
 }
 
 /// decrypt decrypts a sealed message without verifying the signature.
@@ -803,6 +828,21 @@ fn verify_enc_protected_header(
         ));
     }
     Ok(header)
+}
+
+/// Upper bound in bytes on the CBOR framing around the variable length fields
+/// of a COSE structure, covering the array and byte string headers, the context
+/// string and the empty header map.
+const FRAMING_OVERHEAD: usize = 64;
+
+/// Encodes a structure holding a payload into a buffer wiped on drop. The
+/// buffer is sized up front for `len` bytes of fields plus their framing, so it
+/// never reallocates and leaves no partial copy of the payload behind.
+fn encode_wiped<T: Encode>(value: T, len: usize) -> Result<Zeroizing<Vec<u8>>, Error> {
+    let mut buf = Zeroizing::new(Vec::with_capacity(len + FRAMING_OVERHEAD));
+    value.encode_cbor_to(&mut buf)?;
+    debug_assert!(buf.len() <= len + FRAMING_OVERHEAD);
+    Ok(buf)
 }
 
 #[cfg(test)]
