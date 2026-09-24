@@ -3,6 +3,7 @@
 [![](https://img.shields.io/crates/v/darkbio-crypto.svg)](https://crates.io/crates/darkbio-crypto)
 [![](https://docs.rs/darkbio-crypto/badge.svg)](https://docs.rs/darkbio-crypto)
 [![](https://github.com/dark-bio/crypto-rs/workflows/tests/badge.svg)](https://github.com/dark-bio/crypto-rs/actions/workflows/ci.yml)
+[![License: BSD-3-Clause](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](https://github.com/dark-bio/crypto-rs/blob/main/LICENSE)
 
 This repository is parameter selection and lightweight wrapper around a number of Rust cryptographic libraries. Its purpose isn't to implement primitives, rather to unify the API surface of existing libraries; limited to the tiny subset needed by the Dark Bio project.
 
