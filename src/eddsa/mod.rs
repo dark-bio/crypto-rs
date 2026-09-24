@@ -197,7 +197,7 @@ impl SecretKey {
         }
     }
 
-    /// fingerprint returns a 256bit unique identified for this key. For HPKE,
+    /// fingerprint returns a 256-bit unique identifier for this key. For Ed25519,
     /// that is the SHA256 hash of the raw public key.
     pub fn fingerprint(&self) -> Fingerprint {
         self.public_key().fingerprint()
@@ -273,7 +273,7 @@ impl PublicKey {
         pem::encode("PUBLIC KEY", &self.to_der())
     }
 
-    /// fingerprint returns a 256bit unique identified for this key. For Ed25519,
+    /// fingerprint returns a 256-bit unique identifier for this key. For Ed25519,
     /// that is the SHA256 hash of the raw public key.
     pub fn fingerprint(&self) -> Fingerprint {
         let mut hasher = sha2::Sha256::new();
