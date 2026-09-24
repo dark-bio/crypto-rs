@@ -35,7 +35,7 @@ const PEM_FOOTER: &[u8] = b"-----END ";
 const PEM_ENDING: &[u8] = b"-----";
 
 /// Error is the failures that can occur while parsing PEM with [`decode`].
-/// Encoding cannot fail.
+/// [`encode`] returns no errors.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
     /// The input does not start with `-----BEGIN `. Leading whitespace counts
@@ -58,8 +58,8 @@ pub enum Error {
     /// Bytes follow the footer other than a single line ending matching the header.
     #[error("trailing data after PEM block")]
     TrailingData,
-    /// The body between header and footer is empty or does not end in a line
-    /// ending. The message says which.
+    /// The body between header and footer is empty, holds only line endings,
+    /// or does not end in a line ending. The message says which.
     #[error("malformed PEM body: {0}")]
     MalformedBody(String),
     /// The body is not strict base64, or a line ends differently from the
@@ -77,6 +77,7 @@ pub enum Error {
 ///   the header's LF or CRLF.
 /// - Every line ends in the header's line ending, LF or CRLF throughout.
 /// - Base64 lines contain only base64 characters, with strict padding validation.
+/// - The payload must not be empty.
 ///
 /// Returns (kind, data) tuple on success, with the data wiped on drop.
 pub fn decode(data: &[u8]) -> Result<(String, Zeroizing<Vec<u8>>), Error> {
@@ -165,6 +166,10 @@ pub fn decode(data: &[u8]) -> Result<(String, Zeroizing<Vec<u8>>), Error> {
         }
         b64.extend_from_slice(line);
     }
+    // A body of blank lines holds no payload, rejected like a missing body.
+    if b64.is_empty() {
+        return Err(Error::MalformedBody("empty body".into()));
+    }
 
     // Guard the destination before decoding so partial output is wiped on error.
     let mut decoded = Zeroizing::new(Vec::new());
@@ -177,7 +182,12 @@ pub fn decode(data: &[u8]) -> Result<(String, Zeroizing<Vec<u8>>), Error> {
 
 /// Encodes data as a PEM block with the given type.
 /// Lines are 64 characters, using \n line endings.
+///
+/// # Panics
+///
+/// Panics if `data` is empty, since [`decode`] rejects an empty payload.
 pub fn encode(kind: &str, data: &[u8]) -> String {
+    assert!(!data.is_empty(), "empty PEM payload");
     let b64 = Zeroizing::new(STANDARD.encode(data));
 
     // Size the output up front so appending never leaves stale copies behind
@@ -203,4 +213,58 @@ pub fn encode(kind: &str, data: &[u8]) -> String {
     buf.push_str("-----\n");
 
     buf
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Tests that a body without any base64 text is rejected, whether it has no
+    // lines or only blank ones.
+    #[test]
+    fn test_decode_empty_payload() {
+        let tests = [
+            (
+                "no body",
+                "-----BEGIN PUBLIC KEY-----\n-----END PUBLIC KEY-----\n",
+            ),
+            (
+                "blank line",
+                "-----BEGIN PUBLIC KEY-----\n\n-----END PUBLIC KEY-----\n",
+            ),
+            (
+                "blank crlf line",
+                "-----BEGIN PUBLIC KEY-----\r\n\r\n-----END PUBLIC KEY-----\r\n",
+            ),
+            (
+                "two blank lines",
+                "-----BEGIN PUBLIC KEY-----\n\n\n-----END PUBLIC KEY-----\n",
+            ),
+        ];
+        for (name, input) in tests {
+            assert!(
+                matches!(decode(input.as_bytes()), Err(Error::MalformedBody(_))),
+                "{name}"
+            );
+        }
+    }
+
+    // Tests that encoding an empty payload panics, since decoding rejects it.
+    #[test]
+    #[should_panic]
+    fn test_encode_empty_payload() {
+        encode("PUBLIC KEY", &[]);
+    }
+
+    // Tests that payloads around the 64-character line length survive encoding
+    // and decoding unchanged.
+    #[test]
+    fn test_round_trip() {
+        for size in [1, 47, 48, 49, 96, 97] {
+            let payload = vec![0xa5; size];
+            let (kind, decoded) = decode(encode("PUBLIC KEY", &payload).as_bytes()).unwrap();
+            assert_eq!(kind, "PUBLIC KEY", "{size}");
+            assert_eq!(decoded.as_slice(), payload.as_slice(), "{size}");
+        }
+    }
 }
