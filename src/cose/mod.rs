@@ -360,7 +360,7 @@ pub fn verify_detached_at<A: Encode>(
 
     // Check signature timestamp drift if max_drift is specified
     if let Some(max) = max_drift {
-        let drift = (now - header.timestamp).unsigned_abs();
+        let drift = now.abs_diff(header.timestamp);
         if drift > max {
             return Err(Error::StaleSignature(drift, max));
         }
@@ -443,7 +443,7 @@ pub fn verify_at<E: Decode, A: Encode>(
 
     // Check signature timestamp drift if max_drift is specified
     if let Some(max) = max_drift {
-        let drift = (now - header.timestamp).unsigned_abs();
+        let drift = now.abs_diff(header.timestamp);
         if drift > max {
             return Err(Error::StaleSignature(drift, max));
         }
@@ -965,6 +965,70 @@ mod tests {
             } else {
                 assert!(result.is_err(), "test {}: expected error", i);
             }
+        }
+    }
+
+    // Tests that the drift check measures the true distance between timestamps
+    // at opposite ends of the i64 range, for embedded and detached signatures.
+    #[test]
+    fn test_drift_range() {
+        let signer = xdsa::SecretKey::generate();
+        let tests: [(&str, i64, i64, u64, bool); 5] = [
+            (
+                "wrapping distance",
+                -9223372036854775740,
+                9223372036854775683,
+                209,
+                false,
+            ),
+            ("full range within max", i64::MIN, i64::MAX, u64::MAX, true),
+            (
+                "full range over max",
+                i64::MIN,
+                i64::MAX,
+                u64::MAX - 1,
+                false,
+            ),
+            ("near the maximum", i64::MAX - 5, i64::MAX, 5, true),
+            ("near the minimum", i64::MIN + 5, i64::MIN, 5, true),
+        ];
+        for (name, timestamp, now, max_drift, want_ok) in tests {
+            let signed = sign_at(
+                b"payload".as_slice(),
+                b"".as_slice(),
+                &signer,
+                b"",
+                timestamp,
+            )
+            .unwrap();
+            let result = verify_at::<Vec<u8>, _>(
+                &signed,
+                b"".as_slice(),
+                &signer.public_key(),
+                b"",
+                Some(max_drift),
+                now,
+            );
+            assert_eq!(result.is_ok(), want_ok, "{name}");
+            assert!(
+                want_ok || matches!(result, Err(Error::StaleSignature(..))),
+                "{name}"
+            );
+
+            let signed = sign_detached_at(b"".as_slice(), &signer, b"", timestamp).unwrap();
+            let result = verify_detached_at(
+                &signed,
+                b"".as_slice(),
+                &signer.public_key(),
+                b"",
+                Some(max_drift),
+                now,
+            );
+            assert_eq!(result.is_ok(), want_ok, "{name}");
+            assert!(
+                want_ok || matches!(result, Err(Error::StaleSignature(..))),
+                "{name}"
+            );
         }
     }
 
