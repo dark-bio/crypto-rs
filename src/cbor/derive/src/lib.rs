@@ -238,7 +238,7 @@ fn derive_encode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
             }
         });
     }
-    // No embed fields — use direct encode (existing path)
+    // No embed fields, so use direct encode (existing path)
 
     // Sort fields by CBOR-encoded key bytes for deterministic encoding
     let mut sorted: Vec<_> = fields.iter().collect();
@@ -487,7 +487,7 @@ fn derive_decode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
         })
         .collect();
 
-    // Schema validation checks — each embed's keys are tested for overlap
+    // In the schema validation checks, each embed's keys are tested for overlap
     // with direct keys and with every earlier embed's keys. These are static
     // properties of the type, so they are evaluated once via OnceLock.
     let schema_checks: Vec<_> = embeds
@@ -530,7 +530,7 @@ fn derive_decode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
         }
     };
 
-    // Per-call decode blocks — overlap was already validated above.
+    // Per-call decode blocks; overlap was already validated above.
     let extract_embeds: Vec<_> = embeds
         .iter()
         .map(|f| {
@@ -785,7 +785,7 @@ struct FieldInfo {
     ident: syn::Ident,
     kind: syn::Type,
     key: Option<i64>, // CBOR map key from #[cbor(key = N)], None for array-mode
-    embed: bool,      // #[cbor(embed)] — flatten this field's map into the parent
+    embed: bool,      // #[cbor(embed)] flattens this field's map into the parent
 }
 
 /// Extracts field metadata from a struct, including names, types, and CBOR keys.
@@ -849,7 +849,7 @@ fn extract_option_inner(ty: &syn::Type) -> Option<&syn::Type> {
             && args.args.len() == 1
             && let syn::GenericArgument::Type(inner) = args.args.first()?
         {
-            // Option<Option<T>> is NOT omittable — it's a non-omittable
+            // Option<Option<T>> is NOT omittable; it's a non-omittable
             // nullable field. See extract_nullable_inner.
             if is_option_type(inner) {
                 return None;

@@ -164,7 +164,7 @@ pub fn verify<T: Decode>(
     domain: &[u8],
     now: Option<u64>,
 ) -> Result<T, Error> {
-    // Verify COSE signature (skip COSE drift check — CWT handles temporal validation)
+    // Verify COSE signature (skip COSE drift check, CWT handles temporal validation)
     let raw: Raw = cose::verify(data, cbor::NULL, verifier, domain, None)?;
 
     // Extract and validate temporal claims if requested
