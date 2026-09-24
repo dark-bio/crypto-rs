@@ -319,10 +319,14 @@ pub fn verify_detached<A: Encode>(
     domain: &[u8],
     max_drift: Option<u64>,
 ) -> Result<(), Error> {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system time before Unix epoch")
-        .as_secs() as i64;
+    // Read the clock only if max_drift is specified
+    let now = match max_drift {
+        Some(_) => SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before Unix epoch")
+            .as_secs() as i64,
+        None => 0,
+    };
     verify_detached_at(msg_to_check, msg_to_auth, verifier, domain, max_drift, now)
 }
 
@@ -401,10 +405,14 @@ pub fn verify<E: Decode, A: Encode>(
     domain: &[u8],
     max_drift: Option<u64>,
 ) -> Result<E, Error> {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system time before Unix epoch")
-        .as_secs() as i64;
+    // Read the clock only if max_drift is specified
+    let now = match max_drift {
+        Some(_) => SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before Unix epoch")
+            .as_secs() as i64,
+        None => 0,
+    };
     verify_at(msg_to_check, msg_to_auth, verifier, domain, max_drift, now)
 }
 
@@ -634,10 +642,14 @@ pub fn open<E: Decode, A: Encode + Clone>(
     domain: &[u8],
     max_drift: Option<u64>,
 ) -> Result<E, Error> {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system time before Unix epoch")
-        .as_secs() as i64;
+    // Read the clock only if max_drift is specified
+    let now = match max_drift {
+        Some(_) => SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before Unix epoch")
+            .as_secs() as i64,
+        None => 0,
+    };
     open_at(
         msg_to_open,
         msg_to_auth,
