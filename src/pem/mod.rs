@@ -6,10 +6,11 @@
 
 //! Strict PEM encoding and decoding.
 //!
-//! One block per input, no leading whitespace, and strict base64. Body lines
-//! may mix LF and CRLF; [`decode`] documents the rules at the block boundaries.
-//! Only an optional final newline may follow the footer. The decoded payload
-//! is wiped when dropped, since it usually is a private key.
+//! One block per input, no leading whitespace, and strict base64. All lines
+//! end in the header's line ending, LF or CRLF throughout; [`decode`] documents
+//! the rules at the block boundaries. Only an optional final newline may follow
+//! the footer. The decoded payload is wiped when dropped, since it usually is a
+//! private key.
 //!
 //! ```
 //! use darkbio_crypto::pem;
@@ -61,7 +62,8 @@ pub enum Error {
     /// ending. The message says which.
     #[error("malformed PEM body: {0}")]
     MalformedBody(String),
-    /// The body is not strict base64. Carries the decoder's reason.
+    /// The body is not strict base64, or a line ends differently from the
+    /// header. The message names the reason.
     #[error("malformed base64 payload: {0}")]
     MalformedPayload(String),
 }
@@ -73,8 +75,7 @@ pub enum Error {
 /// - Header must start at byte 0, with no leading whitespace.
 /// - Footer must end the data, apart from an optional line ending matching
 ///   the header's LF or CRLF.
-/// - Body lines may mix LF and CRLF. If the header uses CRLF, the line ending
-///   immediately before the footer must also be CRLF.
+/// - Every line ends in the header's line ending, LF or CRLF throughout.
 /// - Base64 lines contain only base64 characters, with strict padding validation.
 ///
 /// Returns (kind, data) tuple on success, with the data wiped on drop.
@@ -149,8 +150,20 @@ pub fn decode(data: &[u8]) -> Result<(String, Zeroizing<Vec<u8>>), Error> {
     // Reserve the full body length so stripping line endings cannot reallocate
     // and leave unwiped copies of the encoded secret behind.
     let mut b64 = Zeroizing::new(Vec::with_capacity(body.len()));
-    for line in body.split(|&b| b == b'\n') {
-        b64.extend_from_slice(line.strip_suffix(b"\r").unwrap_or(line));
+
+    // Every line ends in the header's line ending, so in a CRLF block each line
+    // before the last carries a carriage return. No other one may appear.
+    let mut lines = body.split(|&b| b == b'\n').peekable();
+    while let Some(mut line) = lines.next() {
+        if line_ending.len() == 2 && lines.peek().is_some() {
+            line = line
+                .strip_suffix(b"\r")
+                .ok_or_else(|| Error::MalformedPayload("stray line endings".into()))?;
+        }
+        if line.contains(&b'\r') {
+            return Err(Error::MalformedPayload("stray line endings".into()));
+        }
+        b64.extend_from_slice(line);
     }
 
     // Guard the destination before decoding so partial output is wiped on error.
