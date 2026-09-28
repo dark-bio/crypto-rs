@@ -272,8 +272,7 @@ pub fn sign_at<E: Encode, A: Encode>(
     domain: &[u8],
     timestamp: i64,
 ) -> Result<Vec<u8>, Error> {
-    // The payload may be a plaintext about to be sealed, so every buffer
-    // holding it is wiped on drop
+    // The payload can hold secrets, so every buffer holding it is wiped on drop
     let mut msg_to_embed = Zeroizing::new(cbor::encode(msg_to_embed)?);
 
     // Restrict the user's domain to the context of this library
@@ -457,8 +456,8 @@ pub fn verify_at<E: Decode, A: Encode>(
     // Parse COSE_Sign1
     let sign1: CoseSign1 = cbor::decode(msg_to_check)?;
 
-    // Verify payload is present (embedded). It may be a decrypted plaintext, so
-    // every buffer holding it is wiped on drop.
+    // Verify payload is present (embedded). It can hold secrets, so every
+    // buffer holding it is wiped on drop.
     let payload = Zeroizing::new(sign1.payload.ok_or(Error::MissingPayload)?);
 
     // Verify the protected header
@@ -501,6 +500,10 @@ pub fn verify_at<E: Decode, A: Encode>(
 /// Returns the signer's fingerprint from the protected header's `kid` field.
 pub fn signer(signature: &[u8]) -> Result<xdsa::Fingerprint, Error> {
     let sign1: CoseSign1 = cbor::decode(signature)?;
+
+    // The payload can hold secrets and is never read, so it is wiped right away
+    drop(Zeroizing::new(sign1.payload));
+
     let header: SigProtectedHeader = cbor::decode(&sign1.protected)?;
     Ok(header.kid)
 }
@@ -517,7 +520,9 @@ pub fn signer(signature: &[u8]) -> Result<xdsa::Fingerprint, Error> {
 /// Returns the CBOR-decoded payload.
 pub fn peek<E: Decode>(signature: &[u8]) -> Result<E, Error> {
     let sign1: CoseSign1 = cbor::decode(signature)?;
-    let payload = sign1.payload.ok_or(Error::MissingPayload)?;
+
+    // The payload can hold secrets, so it is wiped on drop
+    let payload = Zeroizing::new(sign1.payload.ok_or(Error::MissingPayload)?);
     Ok(cbor::decode(&payload)?)
 }
 
@@ -1294,6 +1299,33 @@ mod tests {
         assert_eq!(recovered, payload);
     }
 
+    // Tests that signer and peek read an envelope without verifying it, and
+    // refuse one that is truncated or followed by trailing bytes.
+    #[test]
+    fn test_signer_peek() {
+        let alice = xdsa::SecretKey::generate();
+
+        // Read the signer and the payload of an embedded signature
+        let signed = sign_at(b"foo".as_slice(), b"bar".as_slice(), &alice, b"baz", 0).unwrap();
+        assert_eq!(signer(&signed).unwrap(), alice.fingerprint());
+        assert_eq!(peek::<Vec<u8>>(&signed).unwrap(), b"foo");
+
+        // Refuse the same envelope truncated or with a trailing byte
+        let truncated = &signed[..signed.len() - 1];
+        let trailing = [signed.as_slice(), &[0]].concat();
+        for input in [truncated, &trailing] {
+            assert!(signer(input).is_err());
+            assert!(peek::<Vec<u8>>(input).is_err());
+        }
+        // A detached signature has a signer but no payload to peek at
+        let signed = sign_detached_at(b"bar".as_slice(), &alice, b"baz", 0).unwrap();
+        assert_eq!(signer(&signed).unwrap(), alice.fingerprint());
+        assert!(matches!(
+            peek::<Vec<u8>>(&signed),
+            Err(Error::MissingPayload)
+        ));
+    }
+
     // Fixture corpus generated with v0.16.0 to pin the COSE wire format.
     const FIXTURES: &str = include_str!("testdata/v0.16.json");
 
@@ -1330,6 +1362,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(got, payload);
+
+        // Read the committed signature's signer and payload without verifying
+        assert_eq!(super::signer(&sign1).unwrap(), signer.fingerprint());
+        assert_eq!(peek::<Vec<u8>>(&sign1).unwrap(), payload);
 
         // Wrong domains and tampered structures must fail
         let bad = verify_at::<Vec<u8>, _>(
