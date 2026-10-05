@@ -63,13 +63,20 @@ cose::verify_detached(&signature, "payload", &signer.public_key(), b"example", S
 
 // Sign and encrypt a payload to the recipient, then open and verify it back.
 // The second argument is authenticated but must be supplied separately.
-let sealed = cose::seal("payload".to_string(), "metadata", &signer, &recipient.public_key(), b"example").unwrap();
+let padding = cose::Padding::Buckets { floor: 8192, step: 20 };
+let sealed = cose::seal("payload".to_string(), "metadata", &signer, &recipient.public_key(), b"example", &padding).unwrap();
 let opened: String = cose::open(&sealed, "metadata", &recipient, &signer.public_key(), b"example", Some(60)).unwrap();
 assert_eq!(opened, "payload");
 # }
 ```
 
 Each module's documentation opens with a runnable example of its own primitives.
+
+Sealing pads the signed envelope with zeros inside the encryption, as many as
+the sender's `cose::Padding` policy picks. `Padding::None` adds none, and
+`Padding::Buckets` pads to the smallest of a series of sizes that starts at
+`floor` and grows by `1/step` of each. Receivers strip any number of zeros
+without knowing the policy, and refuse a nonzero byte.
 
 ## Feature gates
 
