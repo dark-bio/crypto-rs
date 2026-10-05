@@ -11,7 +11,7 @@
 //! assert_eq!(nonce.len(), 32);
 //! ```
 
-/// generate creates an arbitrarily large buffer filled with randomness.
+/// Creates an arbitrarily large buffer filled with randomness.
 pub fn generate(bytes: usize) -> Vec<u8> {
     // Create a random buffer with a WASM friendly source
     let mut buf = vec![0u8; bytes];
@@ -23,9 +23,9 @@ pub fn generate(bytes: usize) -> Vec<u8> {
 mod tests {
     use crate::rand::generate;
 
-    // Tests that generating different sized random buffers work. This test is
-    // more of a smoke-test that the API works; it does not actually test the
-    // quality of the generated random numbers.
+    /// Tests that generating different sized random buffers work. This test is
+    /// more of a smoke-test that the API works; it does not actually test the
+    /// quality of the generated random numbers.
     #[test]
     fn test_generate() {
         generate(0);

@@ -181,7 +181,7 @@ const SIMPLE_NULL: u8 = 22;
 /// this are rejected to prevent stack overflow from recursive parsing.
 const MAX_DEPTH: usize = 32;
 
-/// Error is the failures that can occur while encoding or decoding CBOR data.
+/// Failures of encoding and decoding CBOR data.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
     /// The next item has the first major type where the second was expected.
@@ -237,8 +237,8 @@ pub enum Error {
     DecodeFailed(String),
 }
 
-/// encode attempts to encode a generic Rust value to CBOR using the tiny, strict
-/// subset of types permitted by this package.
+/// Encodes a generic Rust value to CBOR, using the tiny, strict subset of types
+/// permitted by this package.
 ///
 /// Validation depends on the value's [`Encode`] implementation. In particular,
 /// [`Raw`] copies bytes verbatim; use [`verify`] to check the resulting encoding.
@@ -248,8 +248,8 @@ pub fn encode<T: Encode>(value: T) -> Result<Vec<u8>, Error> {
     Ok(buf)
 }
 
-/// decode attempts to decode a CBOR blob into a generic Rust type using the tiny,
-/// strict subset of types permitted by this package.
+/// Decodes a CBOR blob into a generic Rust type, using the tiny, strict subset
+/// of types permitted by this package.
 ///
 /// Validation depends on the target's [`Decode`] implementation. [`Raw`] fields
 /// are only structurally traversed; use [`verify`] first to validate their contents.
@@ -257,7 +257,7 @@ pub fn decode<T: Decode>(data: &[u8]) -> Result<T, Error> {
     T::decode_cbor(data)
 }
 
-/// verify does a dry-run decoding to verify that only the tiny, strict subset of
+/// Does a dry-run decoding to verify that only the tiny, strict subset of
 /// types permitted by this package were used.
 ///
 /// Checks exactly one complete item, including UTF-8 text, deterministic integer
@@ -269,14 +269,14 @@ pub fn verify(data: &[u8]) -> Result<(), Error> {
     decoder.finish()
 }
 
-/// Encoder is the low level implementation of the CBOR encoder with only the
+/// The low level implementation of the CBOR encoder with only the
 /// handful of desired types supported.
 pub struct Encoder {
     buf: Vec<u8>,
 }
 
 impl Encoder {
-    /// new creates a CBOR encoder with an underlying buffer, pre-allocated to
+    /// Creates a CBOR encoder with an underlying buffer, pre-allocated to
     /// 1KB (small enough not to be relevant, large enough to avoid tiny appends).
     pub fn new() -> Self {
         Self {
@@ -284,22 +284,22 @@ impl Encoder {
         }
     }
 
-    /// finish terminates encoding and retrieves the accumulated CBOR data.
+    /// Terminates encoding and retrieves the accumulated CBOR data.
     pub fn finish(self) -> Vec<u8> {
         self.buf
     }
 
-    /// extend appends raw bytes to the encoder buffer (for derive macros).
+    /// Appends raw bytes to the encoder buffer (for derive macros).
     pub fn extend(&mut self, bytes: &[u8]) {
         self.buf.extend_from_slice(bytes);
     }
 
-    /// encode_uint encodes a positive integer into its canonical shortest-form.
+    /// Encodes a positive integer into its canonical shortest-form.
     pub fn encode_uint(&mut self, value: u64) {
         self.encode_length(MAJOR_UINT, value);
     }
 
-    /// encode_int encodes a signed integer into its canonical shortest-form.
+    /// Encodes a signed integer into its canonical shortest-form.
     pub fn encode_int(&mut self, value: i64) {
         if value >= 0 {
             self.encode_length(MAJOR_UINT, value as u64);
@@ -308,50 +308,50 @@ impl Encoder {
         }
     }
 
-    /// encode_bytes encodes an opaque byte string.
+    /// Encodes an opaque byte string.
     pub fn encode_bytes(&mut self, value: &[u8]) {
         self.encode_length(MAJOR_BYTES, value.len() as u64);
         self.buf.extend_from_slice(value);
     }
 
-    /// encode_text encodes a UTF-8 text string.
+    /// Encodes a UTF-8 text string.
     pub fn encode_text(&mut self, value: &str) {
         self.encode_length(MAJOR_TEXT, value.len() as u64);
         self.buf.extend_from_slice(value.as_bytes());
     }
 
-    /// encode_array_header encodes an array size.
+    /// Encodes an array size.
     pub fn encode_array_header(&mut self, len: usize) {
         self.encode_length(MAJOR_ARRAY, len as u64);
     }
 
-    /// encode_empty_tuple special cases the empty tuple to encode as [].
+    /// Special cases the empty tuple to encode as [].
     pub fn encode_empty_tuple(&mut self) {
         self.encode_array_header(0);
     }
 
-    /// encode_map_header encodes a map size.
+    /// Encodes a map size.
     pub fn encode_map_header(&mut self, len: usize) {
         self.encode_length(MAJOR_MAP, len as u64);
     }
 
-    /// encode_bool encodes a CBOR boolean value.
+    /// Encodes a CBOR boolean value.
     pub fn encode_bool(&mut self, value: bool) {
         self.buf
             .push(MAJOR_SIMPLE << 5 | if value { SIMPLE_TRUE } else { SIMPLE_FALSE });
     }
 
-    /// encode_null encodes a CBOR null value.
+    /// Encodes a CBOR null value.
     pub fn encode_null(&mut self) {
         self.buf.push(MAJOR_SIMPLE << 5 | SIMPLE_NULL);
     }
 
-    /// encode_field encodes a value directly into this encoder's buffer.
+    /// Encodes a value directly into this encoder's buffer.
     pub fn encode_field<T: Encode + ?Sized>(&mut self, value: &T) -> Result<(), Error> {
         value.encode_cbor_to(&mut self.buf)
     }
 
-    /// encode_length encodes a major type with an unsigned integer, which defines
+    /// Encodes a major type with an unsigned integer, which defines
     /// the length for most types, or the value itself for integers.
     fn encode_length(&mut self, major_type: u8, len: u64) {
         encode_length_to(&mut self.buf, major_type, len);
@@ -364,7 +364,7 @@ impl Default for Encoder {
     }
 }
 
-/// encode_length_to writes a CBOR major-type + length header directly into a
+/// Writes a CBOR major-type + length header directly into a
 /// buffer, matching the canonical shortest-form encoding.
 fn encode_length_to(buf: &mut Vec<u8>, major_type: u8, len: u64) {
     if len < 24 {
@@ -384,7 +384,7 @@ fn encode_length_to(buf: &mut Vec<u8>, major_type: u8, len: u64) {
     }
 }
 
-/// encode_int_to encodes a signed integer directly into a buffer.
+/// Encodes a signed integer directly into a buffer.
 pub fn encode_int_to(buf: &mut Vec<u8>, value: i64) {
     if value >= 0 {
         encode_length_to(buf, MAJOR_UINT, value as u64);
@@ -393,17 +393,17 @@ pub fn encode_int_to(buf: &mut Vec<u8>, value: i64) {
     }
 }
 
-/// encode_array_header_to writes a CBOR array header directly into a buffer.
+/// Writes a CBOR array header directly into a buffer.
 pub fn encode_array_header_to(buf: &mut Vec<u8>, len: usize) {
     encode_length_to(buf, MAJOR_ARRAY, len as u64);
 }
 
-/// encode_map_header_to writes a CBOR map header directly into a buffer.
+/// Writes a CBOR map header directly into a buffer.
 pub fn encode_map_header_to(buf: &mut Vec<u8>, len: usize) {
     encode_length_to(buf, MAJOR_MAP, len as u64);
 }
 
-/// Decoder is the low level implementation of the CBOR decoder with only the
+/// The low level implementation of the CBOR decoder with only the
 /// handful of desired types supported.
 #[derive(Clone)]
 pub struct Decoder<'a> {
@@ -412,12 +412,12 @@ pub struct Decoder<'a> {
 }
 
 impl<'a> Decoder<'a> {
-    /// new creates a decoder around a data blob.
+    /// Creates a decoder around a data blob.
     pub fn new(data: &'a [u8]) -> Self {
         Self { data, pos: 0 }
     }
 
-    /// finish terminates decoding and returns an error if trailing bytes remain.
+    /// Terminates decoding and returns an error if trailing bytes remain.
     pub fn finish(self) -> Result<(), Error> {
         if self.pos != self.data.len() {
             return Err(Error::TrailingBytes);
@@ -425,7 +425,7 @@ impl<'a> Decoder<'a> {
         Ok(())
     }
 
-    /// decode_uint decodes a positive integer, enforcing minimal canonicalness.
+    /// Decodes a positive integer, enforcing minimal canonicalness.
     pub fn decode_uint(&mut self) -> Result<u64, Error> {
         let (major, value) = self.decode_header()?;
         if major != MAJOR_UINT {
@@ -434,7 +434,7 @@ impl<'a> Decoder<'a> {
         Ok(value)
     }
 
-    /// decode_int decodes a signed integer (major type 0 or 1).
+    /// Decodes a signed integer (major type 0 or 1).
     pub fn decode_int(&mut self) -> Result<i64, Error> {
         let (major, value) = self.decode_header()?;
         match major {
@@ -454,7 +454,7 @@ impl<'a> Decoder<'a> {
         }
     }
 
-    /// decode_bytes decodes a byte string.
+    /// Decodes a byte string.
     pub fn decode_bytes(&mut self) -> Result<Vec<u8>, Error> {
         // Extract the field type and attached length
         let (major, len) = self.decode_header()?;
@@ -466,7 +466,7 @@ impl<'a> Decoder<'a> {
         Ok(bytes.to_vec())
     }
 
-    /// decode_bytes_fixed decodes a byte string into a fixed-size array.
+    /// Decodes a byte string into a fixed-size array.
     pub fn decode_bytes_fixed<const N: usize>(&mut self) -> Result<[u8; N], Error> {
         // Extract the field type and attached length
         let (major, len) = self.decode_header()?;
@@ -484,7 +484,7 @@ impl<'a> Decoder<'a> {
         Ok(array)
     }
 
-    /// decode_text decodes a UTF-8 text string.
+    /// Decodes a UTF-8 text string.
     pub fn decode_text(&mut self) -> Result<String, Error> {
         // Extract the field type and attached length
         let (major, len) = self.decode_header()?;
@@ -496,7 +496,7 @@ impl<'a> Decoder<'a> {
         String::from_utf8(bytes.to_vec()).map_err(|_| Error::InvalidUtf8)
     }
 
-    /// decode_array_header decodes an array header, returning its length.
+    /// Decodes an array header, returning its length.
     pub fn decode_array_header(&mut self) -> Result<u64, Error> {
         // Extract the field type and attached length
         let (major, len) = self.decode_header()?;
@@ -511,7 +511,7 @@ impl<'a> Decoder<'a> {
         Ok(len)
     }
 
-    /// decode_map_header decodes a map header, returning the number of key-value pairs.
+    /// Decodes a map header, returning the number of key-value pairs.
     pub fn decode_map_header(&mut self) -> Result<u64, Error> {
         // Extract the field type and attached length
         let (major, len) = self.decode_header()?;
@@ -526,7 +526,7 @@ impl<'a> Decoder<'a> {
         Ok(len)
     }
 
-    /// decode_bool decodes a CBOR boolean value.
+    /// Decodes a CBOR boolean value.
     pub fn decode_bool(&mut self) -> Result<bool, Error> {
         if self.pos >= self.data.len() {
             return Err(Error::UnexpectedEof);
@@ -545,7 +545,7 @@ impl<'a> Decoder<'a> {
         }
     }
 
-    /// decode_null decodes a CBOR null value.
+    /// Decodes a CBOR null value.
     pub fn decode_null(&mut self) -> Result<(), Error> {
         if self.pos >= self.data.len() {
             return Err(Error::UnexpectedEof);
@@ -558,24 +558,24 @@ impl<'a> Decoder<'a> {
         Ok(())
     }
 
-    /// peek_null checks if the next value is null without consuming it.
+    /// Checks if the next value is null without consuming it.
     pub fn peek_null(&self) -> bool {
         self.pos < self.data.len() && self.data[self.pos] == (MAJOR_SIMPLE << 5 | SIMPLE_NULL)
     }
 
-    /// peek_int returns the next signed integer value without consuming it.
+    /// Returns the next signed integer value without consuming it.
     pub fn peek_int(&self) -> Result<i64, Error> {
         self.clone().decode_int()
     }
 
-    /// peek_uint returns the next unsigned integer value without consuming it.
+    /// Returns the next unsigned integer value without consuming it.
     /// Unlike [`peek_int`](Self::peek_int), this only matches CBOR major type 0
     /// (positive integers).
     pub fn peek_uint(&self) -> Result<u64, Error> {
         self.clone().decode_uint()
     }
 
-    /// decode_header extracts the major type for the next field and the integer
+    /// Extracts the major type for the next field and the integer
     /// value embedded as the additional info.
     fn decode_header(&mut self) -> Result<(u8, u64), Error> {
         // Ensure there's still data left in the buffer
@@ -627,7 +627,7 @@ impl<'a> Decoder<'a> {
         Ok((major, value))
     }
 
-    /// read_bytes retrieves the next handful of bytes from the buffer.
+    /// Retrieves the next handful of bytes from the buffer.
     fn read_bytes(&mut self, len: u64) -> Result<&'a [u8], Error> {
         // Ensure there's still enough data left in the buffer
         if len > usize::MAX as u64 {
@@ -651,18 +651,18 @@ impl<'a> Decoder<'a> {
     }
 }
 
-/// Encode is the interface needed to encode a type to CBOR.
+/// The interface needed to encode a type to CBOR.
 pub trait Encode {
-    /// encode_cbor_to writes the CBOR encoding directly into an existing buffer.
+    /// Writes the CBOR encoding directly into an existing buffer.
     fn encode_cbor_to(&self, buf: &mut Vec<u8>) -> Result<(), Error>;
 }
 
-/// Decode is the interface needed to decode a type from CBOR.
+/// The interface needed to decode a type from CBOR.
 pub trait Decode: Sized {
-    /// decode_cbor converts CBOR to the type.
+    /// Converts CBOR to the type.
     fn decode_cbor(data: &[u8]) -> Result<Self, Error>;
 
-    /// decode_cbor_notrail converts CBOR to the type, ignoring any trailing data.
+    /// Converts CBOR to the type, ignoring any trailing data.
     fn decode_cbor_notrail(decoder: &mut Decoder<'_>) -> Result<Self, Error>;
 }
 
@@ -920,7 +920,7 @@ impl<T: Encode> Encode for &T {
 /// Constant for convenient CBOR null encoding, the [`Null`] unit value.
 pub const NULL: Null = Null;
 
-/// Null is a unit type that encodes/decodes as CBOR null (0xf6).
+/// A unit type that encodes/decodes as CBOR null (0xf6).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Null;
 
@@ -976,7 +976,7 @@ impl<T: Decode> Decode for Option<T> {
     }
 }
 
-/// Array wraps a `Vec<T>` to encode/decode as a CBOR array.
+/// A `Vec<T>` wrapper that encodes and decodes as a CBOR array.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Array<T>(pub Vec<T>);
 
@@ -1036,7 +1036,7 @@ impl<T: Decode> Decode for Array<T> {
     }
 }
 
-/// FixedArray wraps a `[T; N]` to encode/decode as a CBOR array with an exact
+/// A `[T; N]` wrapper that encodes and decodes as a CBOR array with an exact
 /// element count. Decoding rejects any length other than N.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FixedArray<T, const N: usize>(pub [T; N]);
@@ -1095,14 +1095,14 @@ impl<T: Decode, const N: usize> Decode for FixedArray<T, N> {
     }
 }
 
-/// MapEncode exposes direct map-entry encoding for derive-generated map-mode
+/// Direct map-entry encoding for derive-generated map-mode
 /// structs. This avoids map encode/decode roundtrips when flattening embeds.
 pub trait MapEncode {
     /// Appends this value's map entries to the shared buffer, key by key.
     fn encode_map(&self, enc: &mut MapEncodeBuffer) -> Result<(), Error>;
 }
 
-/// MapEncodeBuffer collects CBOR map entries into a single shared buffer,
+/// A collector of CBOR map entries in a single shared buffer,
 /// recording (key, start, end) offsets. This avoids per-field allocation:
 /// all encoded values are written contiguously into `data`.
 pub struct MapEncodeBuffer {
@@ -1167,7 +1167,7 @@ impl MapEncodeBuffer {
     }
 }
 
-/// MapDecode exposes direct map-entry decoding for derive-generated map-mode
+/// Direct map-entry decoding for derive-generated map-mode
 /// structs. Implementations consume claimed keys from `entries`.
 pub trait MapDecode: Sized {
     /// Returns the map keys this type consumes, sorted by [`cbor_key_cmp`].
@@ -1176,7 +1176,7 @@ pub trait MapDecode: Sized {
     fn decode_map<'a, E: MapEntryAccess<'a>>(entries: &mut E) -> Result<Self, Error>;
 }
 
-/// MapEntryAccess provides key-based access to encoded CBOR map values.
+/// Key-based access to encoded CBOR map values.
 pub trait MapEntryAccess<'a> {
     /// Removes and returns the raw value stored under the key, if still present.
     fn take(&mut self, key: i64) -> Option<&'a [u8]>;
@@ -1188,7 +1188,7 @@ pub trait MapEntryAccess<'a> {
     fn remaining_keys(&self) -> Vec<i64>;
 }
 
-/// MapEntries stores a deterministic CBOR map as key/value slots and supports
+/// A deterministic CBOR map stored as key/value slots, supporting
 /// efficient key-based extraction without rebuilding tree maps.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MapEntries<'a> {
@@ -1263,7 +1263,7 @@ impl<'a> MapEntryAccess<'a> for MapEntries<'a> {
     }
 }
 
-/// MapEntriesScoped is a view into `MapEntries` restricted to a fixed key set.
+/// A view into `MapEntries` restricted to a fixed key set.
 pub struct MapEntriesScoped<'a, 'b, E: MapEntryAccess<'a>> {
     entries: &'b mut E,
     keys: &'b [i64],
@@ -1319,7 +1319,7 @@ impl<'a, 'b, E: MapEntryAccess<'a>> MapEntryAccess<'a> for MapEntriesScoped<'a, 
     }
 }
 
-/// Raw is a placeholder type to allow only partially parsing CBOR objects when
+/// A placeholder type to allow only partially parsing CBOR objects when
 /// some part might depend on another (e.g. version tag, method in an RPC, etc).
 ///
 /// Encoding copies the bytes verbatim, without checking that they contain even
@@ -1367,7 +1367,7 @@ impl Decode for Raw {
     }
 }
 
-/// skip_object advances the decoder past one CBOR item without validation. It
+/// Advances the decoder past one CBOR item without validation. It
 /// does do some minimal type checks as walking the CBOR does require walking
 /// all the inner fields too. The depth parameter limits nesting to prevent
 /// stack overflow from malicious inputs.
@@ -1406,7 +1406,7 @@ fn skip_object(decoder: &mut Decoder<'_>, depth: usize) -> Result<(), Error> {
     }
 }
 
-/// cbor_key_cmp compares two i64 keys according to CBOR deterministic encoding
+/// Compares two i64 keys according to CBOR deterministic encoding
 /// order (RFC 8949 Section 4.2.1): bytewise lexicographic order of encoded keys.
 ///
 /// For integers this means: positive integers (0, 1, 2, ...) come before negative
@@ -1434,7 +1434,7 @@ pub fn cbor_key_cmp(a: i64, b: i64) -> Ordering {
     }
 }
 
-/// decode_map_entries_notrail reads a CBOR map from the decoder and returns its
+/// Reads a CBOR map from the decoder and returns its
 /// entries as (key, raw_value) pairs.
 pub fn decode_map_entries_notrail(dec: &mut Decoder<'_>) -> Result<Vec<(i64, Raw)>, Error> {
     let entries = decode_map_entries_slices_notrail(dec)?;
@@ -1444,7 +1444,7 @@ pub fn decode_map_entries_notrail(dec: &mut Decoder<'_>) -> Result<Vec<(i64, Raw
         .collect())
 }
 
-/// decode_map_entries_slices_notrail reads a CBOR map from the decoder and
+/// Reads a CBOR map from the decoder and
 /// returns borrowed slices for each value.
 pub fn decode_map_entries_slices_notrail<'a>(
     dec: &mut Decoder<'a>,
@@ -1483,7 +1483,7 @@ pub fn decode_map_entries_slices_notrail<'a>(
     Ok(entries)
 }
 
-/// decode_map_entries reads a CBOR map from raw bytes and returns its entries
+/// Reads a CBOR map from raw bytes and returns its entries
 /// as (key, raw_value) pairs.
 pub fn decode_map_entries(data: &[u8]) -> Result<Vec<(i64, Raw)>, Error> {
     let mut dec = Decoder::new(data);
@@ -1492,7 +1492,7 @@ pub fn decode_map_entries(data: &[u8]) -> Result<Vec<(i64, Raw)>, Error> {
     Ok(entries)
 }
 
-/// encode_map_entries encodes a list of (key, raw_value) pairs as a CBOR map.
+/// Encodes a list of (key, raw_value) pairs as a CBOR map.
 /// The entries must already be sorted by CBOR key order.
 pub fn encode_map_entries(entries: &[(i64, Raw)]) -> Vec<u8> {
     let mut enc = Encoder::new();
@@ -1504,9 +1504,8 @@ pub fn encode_map_entries(entries: &[(i64, Raw)]) -> Vec<u8> {
     enc.finish()
 }
 
-/// verify_object is an internal function to verify a single CBOR item without
-/// full deserialization. The depth parameter limits nesting to prevent stack
-/// overflow from malicious inputs.
+/// Verifies a single CBOR item without full deserialization. The depth
+/// parameter limits nesting to prevent stack overflow from malicious inputs.
 fn verify_object(decoder: &mut Decoder, depth: usize) -> Result<(), Error> {
     if depth == 0 {
         return Err(Error::MaxDepthExceeded(MAX_DEPTH));
@@ -1582,14 +1581,14 @@ fn verify_object(decoder: &mut Decoder, depth: usize) -> Result<(), Error> {
 mod tests {
     use super::*;
 
-    // Tests that booleans encode correctly.
+    /// Tests that booleans encode correctly.
     #[test]
     fn test_bool_encoding() {
         assert_eq!(encode(false).unwrap(), vec![0xf4]);
         assert_eq!(encode(true).unwrap(), vec![0xf5]);
     }
 
-    // Tests that booleans decode correctly.
+    /// Tests that booleans decode correctly.
     #[test]
     fn test_bool_decoding() {
         assert!(!decode::<bool>(&[0xf4]).unwrap());
@@ -1600,14 +1599,14 @@ mod tests {
         assert!(decode::<bool>(&[0x00]).is_err()); // integer
     }
 
-    // Tests that null encodes correctly.
+    /// Tests that null encodes correctly.
     #[test]
     fn test_null_encoding() {
         assert_eq!(encode(None::<u64>).unwrap(), vec![0xf6]);
         assert_eq!(encode(Some(42u64)).unwrap(), encode(42u64).unwrap());
     }
 
-    // Tests that null decodes correctly.
+    /// Tests that null decodes correctly.
     #[test]
     fn test_null_decoding() {
         assert_eq!(decode::<Option<u64>>(&[0xf6]).unwrap(), None);
@@ -1627,8 +1626,8 @@ mod tests {
         assert!(decode::<Null>(&[0x00]).is_err()); // integer is not null
     }
 
-    // Tests that positive integers encode correctly across the various ranges
-    // that CBOR special cases.
+    /// Tests that positive integers encode correctly across the various ranges
+    /// that CBOR special cases.
     #[test]
     fn test_uint_encoding() {
         let cases = [
@@ -1660,8 +1659,8 @@ mod tests {
         }
     }
 
-    // Tests that positive integers decode correctly across the various ranges
-    // that CBOR special cases.
+    /// Tests that positive integers decode correctly across the various ranges
+    /// that CBOR special cases.
     #[test]
     fn test_uint_decoding() {
         let cases = [
@@ -1693,8 +1692,8 @@ mod tests {
         }
     }
 
-    // Tests that positive integers are rejected for invalid size / encoding
-    // combinations.
+    /// Tests that positive integers are rejected for invalid size / encoding
+    /// combinations.
     #[test]
     fn test_uint_rejection() {
         // Values 0-23 must use direct embedding
@@ -1759,7 +1758,7 @@ mod tests {
         }
     }
 
-    // Tests that signed integers encode correctly across the various ranges.
+    /// Tests that signed integers encode correctly across the various ranges.
     #[test]
     fn test_int_encoding() {
         let cases = [
@@ -1793,7 +1792,7 @@ mod tests {
         }
     }
 
-    // Tests that signed integers decode correctly across the various ranges.
+    /// Tests that signed integers decode correctly across the various ranges.
     #[test]
     fn test_int_decoding() {
         let cases = [
@@ -1827,7 +1826,7 @@ mod tests {
         }
     }
 
-    // Tests that signed integers are rejected for overflow conditions.
+    /// Tests that signed integers are rejected for overflow conditions.
     #[test]
     fn test_int_rejection() {
         // Positive value > i64::MAX (major type 0 with value i64::MAX + 1)
@@ -1868,7 +1867,7 @@ mod tests {
         }
     }
 
-    // Tests that byte strings encode correctly on a bunch of samples.
+    /// Tests that byte strings encode correctly on a bunch of samples.
     #[test]
     fn test_bytes_encoding() {
         // Empty bytes
@@ -1908,7 +1907,7 @@ mod tests {
         assert_eq!(encoded, vec![0x43, 10, 11, 12]);
     }
 
-    // Tests that byte strings decode correctly on a bunch of samples.
+    /// Tests that byte strings decode correctly on a bunch of samples.
     #[test]
     fn test_bytes_decoding() {
         // Empty bytes
@@ -1939,7 +1938,7 @@ mod tests {
         assert_eq!(decoded, [0u8; 0]);
     }
 
-    // Tests that bytes decoding fails when fixed size lengths don't match.
+    /// Tests that bytes decoding fails when fixed size lengths don't match.
     #[test]
     fn test_bytes_rejection() {
         // Try to decode 3 bytes into a 4-byte array
@@ -1961,8 +1960,8 @@ mod tests {
         }
     }
 
-    // Tests that a byte-string length cannot wrap to the expected fixed size
-    // on 32-bit targets, including when the bytes are nested in an array.
+    /// Tests that a byte-string length cannot wrap to the expected fixed size
+    /// on 32-bit targets, including when the bytes are nested in an array.
     #[test]
     fn test_fixed_bytes_wide_length() {
         fn check<const N: usize>() {
@@ -1991,7 +1990,7 @@ mod tests {
         check::<32>();
     }
 
-    // Tests that UTF-8 strings encode correctly on a bunch of samples.
+    /// Tests that UTF-8 strings encode correctly on a bunch of samples.
     #[test]
     fn test_string_encoding() {
         // Empty string
@@ -2023,7 +2022,7 @@ mod tests {
         assert_eq!(&encoded[1..], string_ref.as_bytes());
     }
 
-    // Tests that UTF-8 strings decode correctly on a bunch of samples.
+    /// Tests that UTF-8 strings decode correctly on a bunch of samples.
     #[test]
     fn test_string_decoding() {
         // Empty string
@@ -2044,7 +2043,7 @@ mod tests {
         assert_eq!(decoded, test_str);
     }
 
-    // Tests that UTF-8 strings are rejected if containing invalid data.
+    /// Tests that UTF-8 strings are rejected if containing invalid data.
     #[test]
     fn test_string_rejection() {
         // 0xff is not valid UTF-8
@@ -2068,7 +2067,7 @@ mod tests {
         }
     }
 
-    // Tests that tuples encode correctly on a bunch of samples.
+    /// Tests that tuples encode correctly on a bunch of samples.
     #[test]
     fn test_tuple_encoding() {
         // 0-tuple
@@ -2095,7 +2094,7 @@ mod tests {
         assert_eq!(encoded[8], 42);
     }
 
-    // Tests that tuples decode correctly on a bunch of samples.
+    /// Tests that tuples decode correctly on a bunch of samples.
     #[test]
     fn test_tuple_decoding() {
         // 0-tuple
@@ -2116,8 +2115,8 @@ mod tests {
         assert_eq!(decoded, ("hello".to_string(), 42u64));
     }
 
-    // Tests that tuples are rejected if the size of the array does not match the
-    // expected size.
+    /// Tests that tuples are rejected if the size of the array does not match the
+    /// expected size.
     #[test]
     fn test_tuple_rejection() {
         // Try to decode array with 1 element as 2-tuple
@@ -2153,7 +2152,7 @@ mod tests {
         }
     }
 
-    // Test struct for array encoding/decoding with derive macros.
+    /// Test struct for array encoding/decoding with derive macros.
     #[derive(Debug, PartialEq, Cbor)]
     #[cbor(array)]
     struct TestArray {
@@ -2162,7 +2161,7 @@ mod tests {
         third: Vec<u8>,
     }
 
-    // Tests that array structs encode correctly in field declaration order.
+    /// Tests that array structs encode correctly in field declaration order.
     #[test]
     fn test_array_encoding() {
         let arr = TestArray {
@@ -2181,7 +2180,7 @@ mod tests {
         assert_eq!(encoded, expected);
     }
 
-    // Tests that array structs decode correctly.
+    /// Tests that array structs decode correctly.
     #[test]
     fn test_array_decoding() {
         let mut data = vec![0x83]; // array with 3 elements
@@ -2195,7 +2194,7 @@ mod tests {
         assert_eq!(decoded.third, vec![4, 5, 6]);
     }
 
-    // Tests that array structs are rejected if the size does not match.
+    /// Tests that array structs are rejected if the size does not match.
     #[test]
     fn test_array_rejection() {
         // Too few elements (2 instead of 3)
@@ -2222,7 +2221,7 @@ mod tests {
         }
     }
 
-    // Test struct for map encoding/decoding with derive macros.
+    /// Test struct for map encoding/decoding with derive macros.
     #[derive(Debug, PartialEq, Cbor)]
     struct TestMap {
         #[cbor(key = 1)]
@@ -2233,7 +2232,7 @@ mod tests {
         key_neg1: u64,
     }
 
-    // Tests that maps encode correctly with deterministic key ordering.
+    /// Tests that maps encode correctly with deterministic key ordering.
     #[test]
     fn test_map_encoding() {
         // Map with positive and negative keys (should be sorted by bytewise order)
@@ -2257,7 +2256,7 @@ mod tests {
         assert_eq!(encoded[9], 100);
     }
 
-    // Tests that maps decode correctly.
+    /// Tests that maps decode correctly.
     #[test]
     fn test_map_decoding() {
         // Multiple entries (in correct deterministic order)
@@ -2273,7 +2272,7 @@ mod tests {
         assert_eq!(decoded.key_neg1, 100);
     }
 
-    // Tests that maps with invalid key ordering are rejected.
+    /// Tests that maps with invalid key ordering are rejected.
     #[test]
     fn test_map_rejection() {
         // Keys out of order: 2 before 1
@@ -2295,7 +2294,7 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // Test struct for map encoding/decoding with optional fields.
+    /// Test struct for map encoding/decoding with optional fields.
     #[derive(Debug, PartialEq, Cbor)]
     struct TestMapOptional {
         #[cbor(key = 1)]
@@ -2308,8 +2307,8 @@ mod tests {
         optional2: Option<Vec<u8>>,
     }
 
-    // Tests that optional map fields are omitted when None during encoding,
-    // and that Option<Option<T>> (nullable) fields are always present.
+    /// Tests that optional map fields are omitted when None during encoding,
+    /// and that Option<Option<T>> (nullable) fields are always present.
     #[test]
     fn test_map_optional_encoding() {
         // All fields present (nullable with value)
@@ -2381,8 +2380,8 @@ mod tests {
         assert_eq!(decoded, map);
     }
 
-    // Tests that optional map fields decode as None when keys are missing,
-    // and that nullable (Option<Option<T>>) fields must always be present.
+    /// Tests that optional map fields decode as None when keys are missing,
+    /// and that nullable (Option<Option<T>>) fields must always be present.
     #[test]
     fn test_map_optional_decoding() {
         // Decode a map with required + nullable (null value), optionals absent
@@ -2431,7 +2430,7 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // Tests that maps with optional fields still reject invalid data.
+    /// Tests that maps with optional fields still reject invalid data.
     #[test]
     fn test_map_optional_rejection() {
         // Too many entries
@@ -2460,7 +2459,7 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // Tests that Raw encodes correctly (passthrough of inner bytes).
+    /// Tests that Raw encodes correctly (passthrough of inner bytes).
     #[test]
     fn test_raw_encoding() {
         // Unsigned integer (42)
@@ -2487,7 +2486,7 @@ mod tests {
         );
     }
 
-    // Tests that Raw decodes correctly (captures raw CBOR bytes).
+    /// Tests that Raw decodes correctly (captures raw CBOR bytes).
     #[test]
     fn test_raw_decoding() {
         // Unsigned integer (42)
@@ -2511,7 +2510,7 @@ mod tests {
         assert_eq!(params.0, vec![0x82, 0x01, 0x63, 0x61, 0x72, 0x67]);
     }
 
-    // Tests that Raw rejects unsupported major types.
+    /// Tests that Raw rejects unsupported major types.
     #[test]
     fn test_raw_rejection() {
         // Major type 6 (tags) - unsupported
@@ -2537,7 +2536,7 @@ mod tests {
         assert!(matches!(decode::<Raw>(&data), Err(Error::TrailingBytes)));
     }
 
-    // Tests that the dry-decoding verifier properly restricts the allowed types.
+    /// Tests that the dry-decoding verifier properly restricts the allowed types.
     #[test]
     fn test_verify() {
         // Valid types should pass
@@ -2682,8 +2681,8 @@ mod tests {
         }
     }
 
-    // Tests that verification preserves the full array/map count on 32-bit
-    // targets instead of accepting only the low 32 bits' worth of items.
+    /// Tests that verification preserves the full array/map count on 32-bit
+    /// targets instead of accepting only the low 32 bits' worth of items.
     #[test]
     fn test_verify_wide_container_length() {
         for major in [MAJOR_ARRAY, MAJOR_MAP] {
@@ -2709,8 +2708,8 @@ mod tests {
         }
     }
 
-    // Tests a length overflow issue caught by the fuzzer:
-    //  - https://github.com/dark-bio/crypto-rs/pull/3
+    /// Tests a length overflow caught by the fuzzer, fixed in
+    /// <https://github.com/dark-bio/crypto-rs/pull/3>.
     #[test]
     fn test_issue_3() {
         let encoded = vec![123, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255];
@@ -2718,7 +2717,7 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // Inner struct used for embed tests.
+    /// Struct used for embed tests.
     #[derive(Debug, Clone, PartialEq, Cbor)]
     struct Inner {
         #[cbor(key = 1)]
@@ -2727,7 +2726,7 @@ mod tests {
         b: String,
     }
 
-    // Flat equivalent of embedded struct for byte-identity comparison.
+    /// Equivalent of embedded struct for byte-identity comparison.
     #[derive(Debug, PartialEq, Cbor)]
     struct Flat {
         #[cbor(key = 1)]
@@ -2738,8 +2737,8 @@ mod tests {
         c: u64,
     }
 
-    // Tests that an embedded struct produces identical CBOR to a flat struct
-    // with the same fields and keys.
+    /// Tests that an embedded struct produces identical CBOR to a flat struct
+    /// with the same fields and keys.
     #[test]
     fn test_map_embed_flat() {
         #[derive(Debug, PartialEq, Cbor)]
@@ -2768,7 +2767,7 @@ mod tests {
         assert_eq!(decoded, embedded);
     }
 
-    // Tests that embedded fields are correctly sorted with direct fields.
+    /// Tests that embedded fields are correctly sorted with direct fields.
     #[test]
     fn test_map_embed_key_order() {
         // Embed field has keys 1,2 and direct field has key -1 (sorts after positives)
@@ -2793,7 +2792,7 @@ mod tests {
         assert_eq!(decoded, val);
     }
 
-    // Tests that an embedded struct with optional fields works correctly.
+    /// Tests that an embedded struct with optional fields works correctly.
     #[test]
     fn test_map_embed_optional() {
         #[derive(Debug, Clone, PartialEq, Cbor)]
@@ -2837,8 +2836,8 @@ mod tests {
         assert_eq!(decoded, val);
     }
 
-    // Tests that duplicate keys between direct and embed fields are detected
-    // during encoding (the embed merge returns an error on collision).
+    /// Tests that duplicate keys between direct and embed fields are detected
+    /// during encoding (the embed merge returns an error on collision).
     #[test]
     fn test_map_embed_duplicate_key_encode() {
         #[derive(Debug, PartialEq, Cbor)]
@@ -2862,8 +2861,8 @@ mod tests {
         }
     }
 
-    // Tests that duplicate keys between direct and embed fields are detected
-    // during decoding when receiving hand-crafted CBOR with a collision.
+    /// Tests that duplicate keys between direct and embed fields are detected
+    /// during decoding when receiving hand-crafted CBOR with a collision.
     #[test]
     fn test_map_embed_duplicate_key_decode() {
         #[derive(Debug, PartialEq, Cbor)]
@@ -2888,8 +2887,8 @@ mod tests {
         }
     }
 
-    // Tests that multiple embedded structs round-trip correctly: two embeds
-    // with non-overlapping key ranges plus a direct field.
+    /// Tests that multiple embedded structs round-trip correctly: two embeds
+    /// with non-overlapping key ranges plus a direct field.
     #[test]
     fn test_map_embed_multiple() {
         #[derive(Debug, Clone, PartialEq, Cbor)]
@@ -2933,7 +2932,7 @@ mod tests {
         assert_eq!(decoded, val);
     }
 
-    // Tests that nested embeds (an embed containing another embed) work.
+    /// Tests that nested embeds (an embed containing another embed) work.
     #[test]
     fn test_map_embed_nested() {
         #[derive(Debug, Clone, PartialEq, Cbor)]
@@ -2968,7 +2967,7 @@ mod tests {
         assert_eq!(decoded, val);
     }
 
-    // Tests mixed positive/negative embed keys decode correctly.
+    /// Tests mixed positive/negative embed keys decode correctly.
     #[test]
     fn test_map_embed_mixed_sign_keys_decode() {
         #[derive(Debug, Clone, PartialEq, Cbor)]
@@ -2994,7 +2993,7 @@ mod tests {
         assert_eq!(decoded, val);
     }
 
-    // Tests that overlapping keys between two embeds are detected on decode.
+    /// Tests that overlapping keys between two embeds are detected on decode.
     #[test]
     fn test_map_embed_embed_collision() {
         #[derive(Debug, Clone, PartialEq, Cbor)]
@@ -3035,7 +3034,7 @@ mod tests {
         }
     }
 
-    // Tests that unknown keys in the wire data are rejected during decode.
+    /// Tests that unknown keys in the wire data are rejected during decode.
     #[test]
     fn test_map_embed_unknown_key() {
         // Hand-craft CBOR: {1: 1, 2: "two", 3: 3, 99: 0} where key 99 is
@@ -3064,7 +3063,7 @@ mod tests {
         }
     }
 
-    // Tests that out-of-order keys in wire data are rejected during embed decode.
+    /// Tests that out-of-order keys in wire data are rejected during embed decode.
     #[test]
     fn test_map_embed_key_order_rejected() {
         #[derive(Debug, PartialEq, Cbor)]
@@ -3090,7 +3089,7 @@ mod tests {
         }
     }
 
-    // Tests that wire-level duplicate keys are rejected during embed decode.
+    /// Tests that wire-level duplicate keys are rejected during embed decode.
     #[test]
     fn test_map_embed_wire_duplicate_key() {
         #[derive(Debug, PartialEq, Cbor)]
@@ -3118,8 +3117,8 @@ mod tests {
         }
     }
 
-    // Tests that schema-level collision between an optional direct field and
-    // an embed field is caught on encode even when the optional is None.
+    /// Tests that schema-level collision between an optional direct field and
+    /// an embed field is caught on encode even when the optional is None.
     #[test]
     fn test_map_embed_optional_overlap_encode() {
         #[derive(Debug, Clone, PartialEq, Cbor)]
@@ -3143,8 +3142,8 @@ mod tests {
         }
     }
 
-    // Tests that embed encoding validates actual merged keys too, not only
-    // keys reported by the embed's schema declaration.
+    /// Tests that embed encoding validates actual merged keys too, not only
+    /// keys reported by the embed's schema declaration.
     #[test]
     fn test_map_embed_runtime_key_mismatch_rejected() {
         #[derive(Debug, Clone, PartialEq)]
@@ -3186,8 +3185,8 @@ mod tests {
         }
     }
 
-    // Tests that an optional embed (Option<T> with #[cbor(embed)]) produces
-    // the correct CBOR: Some → all fields present, None → all fields absent.
+    /// Tests that an optional embed (Option<T> with #[cbor(embed)]) produces
+    /// the correct CBOR: Some → all fields present, None → all fields absent.
     #[test]
     fn test_map_embed_optional_roundtrip() {
         #[derive(Debug, PartialEq, Cbor)]
@@ -3228,8 +3227,8 @@ mod tests {
         assert_eq!(decoded.c, 3);
     }
 
-    // Tests that a partial optional embed (some required keys present but not
-    // all) is rejected during decode, per the all-or-none semantics.
+    /// Tests that a partial optional embed (some required keys present but not
+    /// all) is rejected during decode, per the all-or-none semantics.
     #[test]
     fn test_map_embed_optional_partial_rejected() {
         #[derive(Debug, PartialEq, Cbor)]
@@ -3253,8 +3252,8 @@ mod tests {
         }
     }
 
-    // Tests that an optional embed with optional inner fields works correctly.
-    // All combinations: full Some, Some with inner optional absent, None.
+    /// Tests that an optional embed with optional inner fields works correctly.
+    /// All combinations: full Some, Some with inner optional absent, None.
     #[test]
     fn test_map_embed_optional_with_optional_fields() {
         #[derive(Debug, Clone, PartialEq, Cbor)]
@@ -3302,9 +3301,9 @@ mod tests {
         assert_eq!(decoded, nil);
     }
 
-    // Tests that a mandatory value embed nested inside an optional embed
-    // enforces all-or-none: either all keys from the optional embed
-    // (including its sub-embed) are present, or none.
+    /// Tests that a mandatory value embed nested inside an optional embed
+    /// enforces all-or-none: either all keys from the optional embed
+    /// (including its sub-embed) are present, or none.
     #[test]
     fn test_map_embed_optional_nested_all_or_none() {
         #[derive(Debug, Clone, PartialEq, Cbor)]
@@ -3359,9 +3358,9 @@ mod tests {
         }
     }
 
-    // Tests nested optional embeds: Option<A> where A optionally embeds
-    // Option<B>. Activity in B propagates to A, so missing required keys
-    // in A are rejected when B's keys are present.
+    /// Tests nested optional embeds: Option<A> where A optionally embeds
+    /// Option<B>. Activity in B propagates to A, so missing required keys
+    /// in A are rejected when B's keys are present.
     #[test]
     fn test_map_embed_nested_optional_propagation() {
         #[derive(Debug, Clone, PartialEq, Cbor)]
@@ -3427,8 +3426,8 @@ mod tests {
         }
     }
 
-    // Tests that out-of-order keys in an optional embed produce
-    // InvalidMapKeyOrder (consistent with mandatory embed error semantics).
+    /// Tests that out-of-order keys in an optional embed produce
+    /// InvalidMapKeyOrder (consistent with mandatory embed error semantics).
     #[test]
     fn test_map_embed_optional_key_order_rejected() {
         #[derive(Debug, PartialEq, Cbor)]
@@ -3453,8 +3452,8 @@ mod tests {
         }
     }
 
-    // Tests that schema-level collision between a direct field and an optional
-    // embed field is caught on encode even when the embed is None.
+    /// Tests that schema-level collision between a direct field and an optional
+    /// embed field is caught on encode even when the embed is None.
     #[test]
     fn test_map_embed_optional_direct_collision() {
         #[derive(Debug, PartialEq, Cbor)]
@@ -3471,7 +3470,7 @@ mod tests {
         }
     }
 
-    // Tests that duplicate keys between two embeds (one optional) are detected.
+    /// Tests that duplicate keys between two embeds (one optional) are detected.
     #[test]
     fn test_map_embed_optional_embed_collision() {
         #[derive(Debug, Clone, PartialEq, Cbor)]
@@ -3510,8 +3509,8 @@ mod tests {
         }
     }
 
-    // Tests that unknown keys in wire data are rejected even when the struct
-    // has optional embeds.
+    /// Tests that unknown keys in wire data are rejected even when the struct
+    /// has optional embeds.
     #[test]
     fn test_map_embed_optional_unknown_key() {
         #[derive(Debug, PartialEq, Cbor)]
@@ -3538,7 +3537,7 @@ mod tests {
         }
     }
 
-    // Tests wire-level duplicate keys are rejected when decoding optional embeds.
+    /// Tests wire-level duplicate keys are rejected when decoding optional embeds.
     #[test]
     fn test_map_embed_optional_wire_duplicate_key() {
         #[derive(Debug, PartialEq, Cbor)]
@@ -3565,7 +3564,7 @@ mod tests {
         }
     }
 
-    // Tests multiple optional embeds with non-overlapping keys.
+    /// Tests multiple optional embeds with non-overlapping keys.
     #[test]
     fn test_map_embed_optional_multiple() {
         #[derive(Debug, Clone, PartialEq, Cbor)]
@@ -3636,7 +3635,7 @@ mod tests {
         assert_eq!(decoded, val);
     }
 
-    // Tests that mixing mandatory and optional embeds works correctly.
+    /// Tests that mixing mandatory and optional embeds works correctly.
     #[test]
     fn test_map_embed_mixed_mandatory_optional() {
         #[derive(Debug, Clone, PartialEq, Cbor)]
@@ -3695,10 +3694,10 @@ mod tests {
         }
     }
 
-    // Tests that an optional embed where all inner fields are themselves
-    // optional correctly round-trips as None when all inner fields are absent.
-    // When none of the embed's keys appear on the wire, the embed is None,
-    // NOT Some(AllOptional { ... all None ... }).
+    /// Tests that an optional embed where all inner fields are themselves
+    /// optional correctly round-trips as None when all inner fields are absent.
+    /// When none of the embed's keys appear on the wire, the embed is None,
+    /// NOT Some(AllOptional { ... all None ... }).
     #[test]
     fn test_map_embed_optional_all_inner_optional() {
         #[derive(Debug, Clone, PartialEq, Cbor)]
@@ -3741,7 +3740,7 @@ mod tests {
         assert_eq!(decoded, val);
     }
 
-    // Tests the entry helper functions round-trip correctly.
+    /// Tests the entry helper functions round-trip correctly.
     #[test]
     fn test_map_entries_roundtrip() {
         let original = TestMap {
@@ -3760,7 +3759,7 @@ mod tests {
         assert_eq!(data, re_encoded);
     }
 
-    // Tests that decode_map_entries rejects out-of-order and duplicate keys.
+    /// Tests that decode_map_entries rejects out-of-order and duplicate keys.
     #[test]
     fn test_map_entries_rejection() {
         // Out-of-order keys: 2 before 1.
@@ -3788,9 +3787,9 @@ mod tests {
         }
     }
 
-    // Tests that deeply nested CBOR structures are rejected with an error
-    // instead of causing a stack overflow, but nesting up to the maximum
-    // depth is still accepted.
+    /// Tests that deeply nested CBOR structures are rejected with an error
+    /// instead of causing a stack overflow, but nesting up to the maximum
+    /// depth is still accepted.
     #[test]
     fn test_max_nesting_depth() {
         let mut at_limit = vec![0x81u8; MAX_DEPTH - 1];
@@ -3802,8 +3801,8 @@ mod tests {
         assert_eq!(verify(&over_limit), Err(Error::MaxDepthExceeded(MAX_DEPTH)));
     }
 
-    // Tests that Array<T> encodes correctly as a CBOR array of individually
-    // encoded items.
+    /// Tests that Array<T> encodes correctly as a CBOR array of individually
+    /// encoded items.
     #[test]
     fn test_generic_array_encoding() {
         // Empty array
@@ -3822,7 +3821,7 @@ mod tests {
         assert_eq!(decoded.0, vec!["hello", "world"]);
     }
 
-    // Tests that Array<T> decodes correctly from CBOR arrays.
+    /// Tests that Array<T> decodes correctly from CBOR arrays.
     #[test]
     fn test_generic_array_decoding() {
         // Empty array
@@ -3859,8 +3858,8 @@ mod tests {
         assert_eq!(original, decoded);
     }
 
-    // Tests that FixedArray<T, N> encodes correctly as a CBOR array of exactly
-    // N individually encoded items.
+    /// Tests that FixedArray<T, N> encodes correctly as a CBOR array of exactly
+    /// N individually encoded items.
     #[test]
     fn test_fixed_array_encoding() {
         // Empty fixed array
@@ -3879,8 +3878,8 @@ mod tests {
         assert_eq!(decoded.0, ["hello", "world"]);
     }
 
-    // Tests that FixedArray<T, N> decodes correctly from CBOR arrays and rejects
-    // length mismatches.
+    /// Tests that FixedArray<T, N> decodes correctly from CBOR arrays and rejects
+    /// length mismatches.
     #[test]
     fn test_fixed_array_decoding() {
         // Empty fixed array

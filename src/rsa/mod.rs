@@ -43,7 +43,7 @@ use rsa::{BigUint, RsaPrivateKey, RsaPublicKey};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use zeroize::Zeroizing;
 
-/// OID is the ASN.1 object identifier for RSA encryption.
+/// The ASN.1 object identifier for RSA encryption.
 pub const OID: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.1");
 
 /// Size of the raw secret key in bytes.
@@ -60,7 +60,7 @@ pub const SIGNATURE_SIZE: usize = 256;
 /// Size of an RSA key fingerprint (SHA256 hash).
 pub const FINGERPRINT_SIZE: usize = 32;
 
-/// Error is the failures that can occur during RSA operations.
+/// Failures of the RSA operations.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
     /// The PEM wrapper is malformed. The inner error names the rule it broke.
@@ -91,7 +91,7 @@ pub enum Error {
     InvalidSignature,
 }
 
-/// SecretKey contains a 2048-bit RSA private key usable for signing, with SHA256
+/// A 2048-bit RSA private key usable for signing, with SHA256
 /// as the underlying hash algorithm. Whilst RSA could also be used for encryption,
 /// that is not exposed on the API as it's not required by the project.
 #[derive(Clone)]
@@ -100,7 +100,7 @@ pub struct SecretKey {
 }
 
 impl SecretKey {
-    /// generate creates a new, random private key.
+    /// Creates a new, random private key.
     pub fn generate() -> SecretKey {
         let mut rng = OsRng;
 
@@ -109,7 +109,7 @@ impl SecretKey {
         Self { inner: sig }
     }
 
-    /// from_bytes parses a 520-byte array into a private key.
+    /// Parses a 520-byte array into a private key.
     ///
     /// Format: p (128 bytes) || q (128 bytes) || d (256 bytes) || e (8 bytes),
     /// all in big-endian.
@@ -151,7 +151,7 @@ impl SecretKey {
         Ok(Self { inner: sig })
     }
 
-    /// from_der parses a DER buffer into a private key.
+    /// Parses a DER buffer into a private key.
     pub fn from_der(der: &[u8]) -> Result<Self, Error> {
         // Ensure the algorithm OID matches RSA
         let info =
@@ -201,7 +201,7 @@ impl SecretKey {
         Ok(Self { inner })
     }
 
-    /// from_pem parses a PEM string into a private key.
+    /// Parses a PEM string into a private key.
     pub fn from_pem(pem_str: &str) -> Result<Self, Error> {
         // Crack open the PEM to get to the private key info
         let (kind, data) = pem::decode(pem_str.as_bytes())?;
@@ -212,7 +212,7 @@ impl SecretKey {
         Self::from_der(&data)
     }
 
-    /// to_bytes serializes a private key into a 520-byte array.
+    /// Serializes a private key into a 520-byte array.
     ///
     /// Format: p (128 bytes) || q (128 bytes) || d (256 bytes) || e (8 bytes),
     /// all in big-endian.
@@ -237,7 +237,7 @@ impl SecretKey {
         out
     }
 
-    /// to_der serializes a private key into a DER buffer.
+    /// Serializes a private key into a DER buffer.
     pub fn to_der(&self) -> Zeroizing<Vec<u8>> {
         Zeroizing::new(
             rsa::pkcs1v15::SigningKey::<Sha256>::to_pkcs8_der(&self.inner)
@@ -247,24 +247,24 @@ impl SecretKey {
         )
     }
 
-    /// to_pem serializes a private key into a PEM string.
+    /// Serializes a private key into a PEM string.
     pub fn to_pem(&self) -> Zeroizing<String> {
         Zeroizing::new(pem::encode("PRIVATE KEY", &self.to_der()))
     }
 
-    /// public_key retrieves the public counterpart of the secret key.
+    /// Retrieves the public counterpart of the secret key.
     pub fn public_key(&self) -> PublicKey {
         let key = self.inner.verifying_key();
         PublicKey { inner: key }
     }
 
-    /// fingerprint returns a 256-bit unique identifier for this key. For RSA, that
+    /// Returns a 256-bit unique identifier for this key. For RSA, that
     /// is the SHA256 hash of the raw (le modulus || le exponent) public key.
     pub fn fingerprint(&self) -> Fingerprint {
         self.public_key().fingerprint()
     }
 
-    /// sign creates a digital signature of the message.
+    /// Creates a digital signature of the message.
     pub fn sign(&self, message: &[u8]) -> Signature {
         // Blind the private key operation with fresh randomness, so its timing
         // does not correlate with the message. The signature is identical to an
@@ -274,7 +274,7 @@ impl SecretKey {
     }
 }
 
-/// PublicKey contains a 2048-bit RSA public key usable for verification, with
+/// A 2048-bit RSA public key usable for verification, with
 /// SHA256 as the underlying hash algorithm. Whilst RSA could also be used for
 /// decryption, that is not exposed on the API as it's not required by the
 /// project.
@@ -284,7 +284,7 @@ pub struct PublicKey {
 }
 
 impl PublicKey {
-    /// from_bytes parses a 264-byte array into a public key.
+    /// Parses a 264-byte array into a public key.
     ///
     /// Format: n (256 bytes) || e (8 bytes), all in big-endian.
     pub fn from_bytes(bytes: &[u8; PUBLIC_KEY_SIZE]) -> Result<Self, Error> {
@@ -306,7 +306,7 @@ impl PublicKey {
         Ok(Self { inner })
     }
 
-    /// from_der parses a DER buffer into a public key.
+    /// Parses a DER buffer into a public key.
     pub fn from_der(der: &[u8]) -> Result<Self, Error> {
         // Ensure the algorithm OID matches RSA
         let info: SubjectPublicKeyInfo<AnyRef, BitStringRef> = SubjectPublicKeyInfo::from_der(der)
@@ -331,7 +331,7 @@ impl PublicKey {
         Ok(Self { inner })
     }
 
-    /// from_pem parses a PEM string into a public key.
+    /// Parses a PEM string into a public key.
     pub fn from_pem(pem_str: &str) -> Result<Self, Error> {
         // Crack open the PEM to get to the public key info
         let (kind, data) = pem::decode(pem_str.as_bytes())?;
@@ -342,7 +342,7 @@ impl PublicKey {
         Self::from_der(&data)
     }
 
-    /// to_bytes serializes a public key into a 264-byte array.
+    /// Serializes a public key into a 264-byte array.
     ///
     /// Format: n (256 bytes) || e (8 bytes), all in big-endian.
     pub fn to_bytes(&self) -> [u8; PUBLIC_KEY_SIZE] {
@@ -359,7 +359,7 @@ impl PublicKey {
         out
     }
 
-    /// to_der serializes a public key into a DER buffer.
+    /// Serializes a public key into a DER buffer.
     pub fn to_der(&self) -> Vec<u8> {
         rsa::pkcs1v15::VerifyingKey::<Sha256>::to_public_key_der(&self.inner)
             .unwrap()
@@ -367,12 +367,12 @@ impl PublicKey {
             .to_vec()
     }
 
-    /// to_pem serializes a public key into a PEM string.
+    /// Serializes a public key into a PEM string.
     pub fn to_pem(&self) -> String {
         pem::encode("PUBLIC KEY", &self.to_der())
     }
 
-    /// fingerprint returns a 256-bit unique identifier for this key. For RSA, that
+    /// Returns a 256-bit unique identifier for this key. For RSA, that
     /// is the SHA256 hash of the raw (le modulus || le exponent) public key.
     pub fn fingerprint(&self) -> Fingerprint {
         let pubkey: RsaPublicKey = self.inner.as_ref().clone();
@@ -388,7 +388,7 @@ impl PublicKey {
         Fingerprint(hasher.finalize().into())
     }
 
-    /// verify verifies a digital signature.
+    /// Verifies a digital signature.
     pub fn verify(&self, message: &[u8], signature: &Signature) -> Result<(), Error> {
         let sig = rsa::pkcs1v15::Signature::try_from(signature.to_bytes().as_slice())
             .map_err(|_| Error::InvalidSignature)?;
@@ -397,7 +397,7 @@ impl PublicKey {
             .map_err(|_| Error::InvalidSignature)
     }
 
-    /// verify_hash verifies a digital signature on an already hashed message.
+    /// Verifies a digital signature on an already hashed message.
     pub fn verify_hash(&self, hash: &[u8], signature: &Signature) -> Result<(), Error> {
         let sig = rsa::pkcs1v15::Signature::try_from(signature.to_bytes().as_slice())
             .map_err(|_| Error::InvalidSignature)?;
@@ -446,17 +446,17 @@ impl crate::cbor::Decode for PublicKey {
     }
 }
 
-/// Signature contains an RSA-2048 signature.
+/// An RSA-2048 signature.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Signature([u8; SIGNATURE_SIZE]);
 
 impl Signature {
-    /// from_bytes converts a 256-byte array into a signature.
+    /// Converts a 256-byte array into a signature.
     pub fn from_bytes(bytes: &[u8; SIGNATURE_SIZE]) -> Self {
         Self(*bytes)
     }
 
-    /// to_bytes converts a signature into a 256-byte array.
+    /// Converts a signature into a 256-byte array.
     pub fn to_bytes(&self) -> [u8; SIGNATURE_SIZE] {
         self.0
     }
@@ -501,17 +501,17 @@ impl crate::cbor::Decode for Signature {
     }
 }
 
-/// Fingerprint contains an RSA key fingerprint (SHA256 hash).
+/// An RSA key fingerprint (SHA256 hash).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Fingerprint([u8; FINGERPRINT_SIZE]);
 
 impl Fingerprint {
-    /// from_bytes converts a 32-byte array into a fingerprint.
+    /// Converts a 32-byte array into a fingerprint.
     pub fn from_bytes(bytes: &[u8; FINGERPRINT_SIZE]) -> Self {
         Self(*bytes)
     }
 
-    /// to_bytes converts a fingerprint into a 32-byte array.
+    /// Converts a fingerprint into a 32-byte array.
     pub fn to_bytes(&self) -> [u8; FINGERPRINT_SIZE] {
         self.0
     }
@@ -560,9 +560,9 @@ impl crate::cbor::Decode for Fingerprint {
 mod tests {
     use super::*;
 
-    // Tests that a raw byte encoded RSA private key can be decoded and re-encoded
-    // to the same bytes. The purpose is not to battle-test the implementation,
-    // rather to ensure that the code implements the format other subsystems expect.
+    /// Tests that a raw byte encoded RSA private key can be decoded and re-encoded
+    /// to the same bytes. The purpose is not to battle-test the implementation,
+    /// rather to ensure that the code implements the format other subsystems expect.
     #[test]
     fn test_secretkey_bytes_codec() {
         // Generated with:
@@ -599,9 +599,9 @@ c9ab9ccdd77b098fc6c0c647ed663781";
         assert_eq!(hex::encode(key.to_bytes()), input);
     }
 
-    // Tests that a raw byte encoded RSA private key is rejected if its primes
-    // repeat, as it would fail to encode as DER, or if its private exponent is
-    // not below the modulus.
+    /// Tests that a raw byte encoded RSA private key is rejected if its primes
+    /// repeat, as it would fail to encode as DER, or if its private exponent is
+    /// not below the modulus.
     #[test]
     fn test_secretkey_bytes_malformed() {
         // A key with p = q = 2^1024 - 1 and d = 65537^-1 mod (p - 1)
@@ -671,9 +671,9 @@ ad60373d51a9cf92aa7ca7640ebf99e9";
         }
     }
 
-    // Tests that a raw byte encoded RSA public key can be decoded and re-encoded
-    // to the same bytes. The purpose is not to battle-test the implementation,
-    // rather to ensure that the code implements the format other subsystems expect.
+    /// Tests that a raw byte encoded RSA public key can be decoded and re-encoded
+    /// to the same bytes. The purpose is not to battle-test the implementation,
+    /// rather to ensure that the code implements the format other subsystems expect.
     #[test]
     fn test_publickey_bytes_codec() {
         // Generated with:
@@ -698,10 +698,10 @@ f78fcdf089bc2cb4086af8a7980637fb9cf0b4ed86d6a21208ae5a4e49d1\
         assert_eq!(hex::encode(key.to_bytes()), input);
     }
 
-    // Tests that a PEM encoded RSA private key can be decoded and re-encoded to
-    // the same string. The purpose is not to battle-test the PEM implementation,
-    // rather to ensure that the code implements the PEM format other subsystems
-    // expect.
+    /// Tests that a PEM encoded RSA private key can be decoded and re-encoded to
+    /// the same string. The purpose is not to battle-test the PEM implementation,
+    /// rather to ensure that the code implements the PEM format other subsystems
+    /// expect.
     #[test]
     fn test_secretkey_pem_codec() {
         // Generated with:
@@ -740,10 +740,10 @@ JJXbL24vf1AajzeJk6CpdQ==
         assert_eq!(key.to_pem().trim(), input.trim());
     }
 
-    // Tests that a PEM encoded RSA public key can be decoded and re-encoded to
-    // the same string. The purpose is not to battle-test the PEM implementation,
-    // rather to ensure that the code implements the PEM format other subsystems
-    // expect.
+    /// Tests that a PEM encoded RSA public key can be decoded and re-encoded to
+    /// the same string. The purpose is not to battle-test the PEM implementation,
+    /// rather to ensure that the code implements the PEM format other subsystems
+    /// expect.
     #[test]
     fn test_publickey_pem_codec() {
         // Generated with:
@@ -763,10 +763,10 @@ fQIDAQAB
         assert_eq!(key.to_pem().trim(), input.trim());
     }
 
-    // Tests that a DER encoded RSA private key can be decoded and re-encoded to
-    // the same string. The purpose is not to battle-test the DER implementation,
-    // rather to ensure that the code implements the DER format other subsystems
-    // expect.
+    /// Tests that a DER encoded RSA private key can be decoded and re-encoded to
+    /// the same string. The purpose is not to battle-test the DER implementation,
+    /// rather to ensure that the code implements the DER format other subsystems
+    /// expect.
     #[test]
     fn test_privatekey_der_codec() {
         // Generated with:
@@ -820,9 +820,9 @@ df0b68ce2f17835c36ad7abc86fffecbbf145eb285be596b02818022dadb\
         assert_eq!(hex::encode(key.to_der()), input);
     }
 
-    // Tests that a DER encoded RSA private key is rejected unless both its
-    // primes are 1024 bits and its private exponent is below the modulus, as
-    // the raw encoding could not hold it otherwise.
+    /// Tests that a DER encoded RSA private key is rejected unless both its
+    /// primes are 1024 bits and its private exponent is below the modulus, as
+    /// the raw encoding could not hold it otherwise.
     #[test]
     fn test_privatekey_der_malformed() {
         // A 1025-bit and a 1023-bit prime spanning a 2048-bit modulus
@@ -874,10 +874,10 @@ e6dab8b74032f857";
         }
     }
 
-    // Tests that a DER encoded RSA public key can be decoded and re-encoded to
-    // the same string. The purpose is not to battle-test the DER implementation,
-    // rather to ensure that the code implements the DER format other subsystems
-    // expect.
+    /// Tests that a DER encoded RSA public key can be decoded and re-encoded to
+    /// the same string. The purpose is not to battle-test the DER implementation,
+    /// rather to ensure that the code implements the DER format other subsystems
+    /// expect.
     #[test]
     fn test_publickey_der_codec() {
         // Generated with:
@@ -900,9 +900,9 @@ e63b4690e757a1d234b252ee94f5f03eaabb4f3b80ff9945510c99822d2c\
         assert_eq!(hex::encode(key.to_der()), input);
     }
 
-    // Tests that the implemented fingerprint algorithm produces the expected
-    // checksum. The purpose is not to battle-test the implementation, rather
-    // to ensure that the code implements the format other subsystems expect.
+    /// Tests that the implemented fingerprint algorithm produces the expected
+    /// checksum. The purpose is not to battle-test the implementation, rather
+    /// to ensure that the code implements the format other subsystems expect.
     #[test]
     fn test_fingerprint() {
         // Generated with:
@@ -932,11 +932,11 @@ fQIDAQAB
         assert_eq!(hex::encode(key.fingerprint().to_bytes()), input);
     }
 
-    // Tests signing and verifying messages. Note, this test is not meant to test
-    // cryptography, it is mostly an API sanity check to verify that everything
-    // seems to work.
-    //
-    // TODO(karalabe): Get some live test vectors for a bit more sanity
+    /// Tests signing and verifying messages. Note, this test is not meant to test
+    /// cryptography, it is mostly an API sanity check to verify that everything
+    /// seems to work.
+    ///
+    /// TODO(karalabe): Get some live test vectors for a bit more sanity
     #[test]
     fn test_sign_verify() {
         // Create the keys for Alice
@@ -962,8 +962,8 @@ fQIDAQAB
         }
     }
 
-    // Tests that signing yields the signature OpenSSL computes for the same key
-    // and message, as blinding the private key operation must not change it.
+    /// Tests that signing yields the signature OpenSSL computes for the same key
+    /// and message, as blinding the private key operation must not change it.
     #[test]
     fn test_sign_vector() {
         // Generated with:

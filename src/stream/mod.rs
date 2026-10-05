@@ -49,19 +49,19 @@ use zeroize::{Zeroize, Zeroizing};
 /// Size of the payload key in bytes.
 pub const PAYLOAD_KEY_SIZE: usize = 32;
 
-/// PayloadKey is the symmetric key encrypting or decrypting a stream.
+/// The symmetric key encrypting or decrypting a stream.
 ///
 /// The key must **never** be repeated across multiple streams. Derive it with
 /// HKDF from both a random file key and a random nonce.
 pub struct PayloadKey([u8; PAYLOAD_KEY_SIZE]);
 
 impl PayloadKey {
-    /// from_bytes converts a 32-byte array into a payload key.
+    /// Converts a 32-byte array into a payload key.
     pub fn from_bytes(bin: &[u8; PAYLOAD_KEY_SIZE]) -> Self {
         Self(*bin)
     }
 
-    /// to_bytes converts a payload key into a 32-byte array.
+    /// Converts a payload key into a 32-byte array.
     pub fn to_bytes(&self) -> Zeroizing<[u8; PAYLOAD_KEY_SIZE]> {
         Zeroizing::new(self.0)
     }
@@ -79,7 +79,7 @@ impl Drop for PayloadKey {
     }
 }
 
-/// Source is the caller's ciphertext reader, with the bookkeeping needed to
+/// The caller's ciphertext reader, with the bookkeeping needed to
 /// find where the ciphertext starts in it.
 struct Source<R> {
     /// The caller's reader, positioned at the first ciphertext byte when the
@@ -111,7 +111,7 @@ impl<R: Seek> Source<R> {
     }
 }
 
-/// SharedSource hands one [`Source`] to both the stream reader and its
+/// One [`Source`] shared by the stream reader and its
 /// decoder, so a replacement decoder can reuse it.
 struct SharedSource<R>(Arc<Mutex<Source<R>>>);
 
@@ -147,7 +147,7 @@ impl<R: Seek> Seek for SharedSource<R> {
     }
 }
 
-/// StreamReader decrypts a STREAM ciphertext from an underlying reader,
+/// A reader decrypting a STREAM ciphertext from an underlying reader,
 /// authenticating each chunk before returning any of its plaintext.
 ///
 /// With a seekable reader it also supports random access. A failed read can be
@@ -267,17 +267,17 @@ impl<R: Read + Seek> Seek for StreamReader<R> {
     }
 }
 
-/// Stream is the STREAM construction for online authenticated encryption,
+/// The STREAM construction for online authenticated encryption,
 /// instantiated with ChaCha20-Poly1305 in 64KiB chunks.
 pub struct Stream;
 
 impl Stream {
-    /// encrypt wraps STREAM encryption under the given key around a writer.
+    /// Wraps STREAM encryption under the given key around a writer.
     pub fn encrypt<W: Write>(key: PayloadKey, writer: W) -> StreamWriter<W> {
         inner::Stream::encrypt(inner::PayloadKey(key.0.into()), writer)
     }
 
-    /// decrypt wraps STREAM decryption under the given key around a reader.
+    /// Wraps STREAM decryption under the given key around a reader.
     pub fn decrypt<R: Read>(key: PayloadKey, reader: R) -> StreamReader<R> {
         StreamReader::new(key, reader)
     }
@@ -361,8 +361,8 @@ mod tests {
         }
     }
 
-    // Tests that a chunk failing authentication keeps failing, while seeking
-    // away still reaches intact chunks, with or without the length cached.
+    /// Tests that a chunk failing authentication keeps failing, while seeking
+    /// away still reaches intact chunks, with or without the length cached.
     #[test]
     fn test_seek_after_authentication_failure() {
         let mut damaged = ciphertext();
@@ -394,8 +394,8 @@ mod tests {
         }
     }
 
-    // Tests that after a transient source failure, a seek from any origin
-    // resumes reading at the right place, with or without the length cached.
+    /// Tests that after a transient source failure, a seek from any origin
+    /// resumes reading at the right place, with or without the length cached.
     #[test]
     fn test_seek_after_io_failure() {
         let last = PLAINTEXT_SIZE - 1;
@@ -424,8 +424,8 @@ mod tests {
         }
     }
 
-    // Tests that a read failing on the source can be retried directly, and
-    // that seeking still works afterwards.
+    /// Tests that a read failing on the source can be retried directly, and
+    /// that seeking still works afterwards.
     #[test]
     fn test_retry_after_io_failure() {
         let mut reader = open_flaky();
@@ -438,8 +438,8 @@ mod tests {
         assert_eq!(read_byte(&mut reader).unwrap(), byte_at(last));
     }
 
-    // Tests that reads fail after a failed seek until a later seek succeeds,
-    // instead of continuing wherever the failed seek left the source.
+    /// Tests that reads fail after a failed seek until a later seek succeeds,
+    /// instead of continuing wherever the failed seek left the source.
     #[test]
     fn test_read_after_failed_seek() {
         // Drop the one-byte last chunk and its 16-byte tag, truncating the stream
@@ -455,7 +455,7 @@ mod tests {
         assert!(reader.read_to_end(&mut plaintext).is_err());
     }
 
-    // Tests that a relative seek out of range fails without moving the reader.
+    /// Tests that a relative seek out of range fails without moving the reader.
     #[test]
     fn test_invalid_relative_seek() {
         let mut reader = open(Cursor::new(ciphertext()));

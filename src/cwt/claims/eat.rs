@@ -19,7 +19,7 @@ use crate::cbor::{
     self, Cbor, Decode, Encode, MapDecode, MapEncode, MapEncodeBuffer, MapEntryAccess,
 };
 
-/// UEID is a globally unique device identifier such as a serial number
+/// A globally unique device identifier such as a serial number
 /// or IMEI (key 256). The value is an opaque byte string including a
 /// type prefix byte per RFC 9711 Section 4.2.1.
 ///
@@ -33,7 +33,7 @@ pub struct Ueid {
     pub ueid: Vec<u8>,
 }
 
-/// OEMID identifies the hardware manufacturer (key 258, RFC 9711 Section 4.2.3).
+/// The hardware manufacturer's identifier (key 258, RFC 9711 Section 4.2.3).
 /// The OEM can be identified by a random ID, an IEEE OUI, or an IANA PEN.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Oemid {
@@ -189,7 +189,7 @@ impl MapDecode for Oemid {
     }
 }
 
-/// HwModel is the product or board model identifier (key 259).
+/// The product or board model identifier (key 259).
 #[derive(Clone, Debug, PartialEq, Eq, Cbor)]
 pub struct HwModel {
     /// Opaque model identifier, as the manufacturer defines it.
@@ -197,7 +197,7 @@ pub struct HwModel {
     pub hw_model: Vec<u8>,
 }
 
-/// HwVersion is the hardware revision identifier (key 260).
+/// The hardware revision identifier (key 260).
 /// CBOR-encodes as a 1-element array per RFC 9711 Section 4.2.5:
 /// `[version: tstr]`. The optional scheme is not supported.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -279,7 +279,7 @@ impl MapDecode for HwVersion {
     }
 }
 
-/// Uptime is the number of seconds since the last boot (key 261).
+/// The number of seconds since the last boot (key 261).
 #[derive(Clone, Debug, PartialEq, Eq, Cbor)]
 pub struct Uptime {
     /// Seconds elapsed since the device last booted.
@@ -287,7 +287,7 @@ pub struct Uptime {
     pub uptime: u64,
 }
 
-/// OemBoot indicates whether the boot chain is OEM-authorized,
+/// Whether the boot chain is OEM-authorized,
 /// i.e. secure boot passed (key 262).
 #[derive(Clone, Debug, PartialEq, Eq, Cbor)]
 pub struct OemBoot {
@@ -296,7 +296,7 @@ pub struct OemBoot {
     pub oem_boot: bool,
 }
 
-/// DebugState represents the debug port state per RFC 9711 Section 4.2.9.
+/// The debug port state per RFC 9711 Section 4.2.9.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u64)]
 pub enum DebugState {
@@ -344,7 +344,7 @@ impl Decode for DebugState {
     }
 }
 
-/// DebugStatus is the debug port state (key 263).
+/// The debug port state (key 263).
 #[derive(Clone, Debug, PartialEq, Eq, Cbor)]
 pub struct DebugStatus {
     /// State of the device's debug facilities at attestation time.
@@ -352,7 +352,7 @@ pub struct DebugStatus {
     pub debug_status: DebugState,
 }
 
-/// BootCount is the number of times the device has booted,
+/// The number of times the device has booted,
 /// as a monotonic counter (key 267).
 #[derive(Clone, Debug, PartialEq, Eq, Cbor)]
 pub struct BootCount {
@@ -361,7 +361,7 @@ pub struct BootCount {
     pub boot_count: u64,
 }
 
-/// BootSeed is a random value unique to the current boot cycle (key 268).
+/// A random value unique to the current boot cycle (key 268).
 #[derive(Clone, Debug, PartialEq, Eq, Cbor)]
 pub struct BootSeed {
     /// Random bytes drawn at boot, the same in every token of one boot cycle.
@@ -369,7 +369,7 @@ pub struct BootSeed {
     pub boot_seed: Vec<u8>,
 }
 
-/// SwName is the name of the firmware or software running on the
+/// The name of the firmware or software running on the
 /// device (key 270).
 #[derive(Clone, Debug, PartialEq, Eq, Cbor)]
 pub struct SwName {
@@ -378,7 +378,7 @@ pub struct SwName {
     pub sw_name: String,
 }
 
-/// SwVersion is the software version identifier (key 271).
+/// The software version identifier (key 271).
 /// CBOR-encodes as a 1-element array per RFC 9711 Section 4.2.7:
 /// `[version: tstr]`. The optional scheme is not supported.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -453,7 +453,7 @@ impl MapDecode for SwVersion {
     }
 }
 
-/// Use represents the token's intended purpose per RFC 9711 Section 4.3.3.
+/// The token's intended purpose per RFC 9711 Section 4.3.3.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u64)]
 pub enum Use {
@@ -498,7 +498,7 @@ impl Decode for Use {
     }
 }
 
-/// IntendedUse is the token's purpose (key 275).
+/// The token's purpose (key 275).
 #[derive(Clone, Debug, PartialEq, Eq, Cbor)]
 pub struct IntendedUse {
     /// Purpose the token was issued for.

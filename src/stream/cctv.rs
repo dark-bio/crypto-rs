@@ -13,8 +13,8 @@ use crate::hkdf;
 use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
 
-// Test vectors from the C2SP CCTV age testkit, stream family, vendored at
-// commit 1e3d2860d46e94e777e1b17c7a6f2436387e3ecc.
+/// Test vectors from the C2SP CCTV age testkit, stream family, vendored at
+/// commit 1e3d2860d46e94e777e1b17c7a6f2436387e3ecc.
 const VECTORS: &[(&str, &[u8])] = &[
     (
         "stream_257_chunks",
@@ -130,10 +130,10 @@ const VECTORS: &[(&str, &[u8])] = &[
     ),
 ];
 
-// Tests the STREAM implementation against the CCTV age testkit vectors:
-// success vectors must decrypt fully to the expected payload hash and
-// re-encrypt byte for byte; failure vectors must error with only the
-// expected prefix released.
+/// Tests the STREAM implementation against the CCTV age testkit vectors:
+/// success vectors must decrypt fully to the expected payload hash and
+/// re-encrypt byte for byte; failure vectors must error with only the
+/// expected prefix released.
 #[test]
 fn test_cctv_vectors() {
     for (name, data) in VECTORS {
@@ -202,7 +202,7 @@ fn test_cctv_vectors() {
     }
 }
 
-// find locates the first occurrence of a pattern in a byte slice.
+/// Locates the first occurrence of a pattern in a byte slice.
 fn find(data: &[u8], pattern: &[u8]) -> Option<usize> {
     data.windows(pattern.len()).position(|w| w == pattern)
 }

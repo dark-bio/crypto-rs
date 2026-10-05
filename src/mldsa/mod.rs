@@ -39,7 +39,7 @@ use zeroize::{Zeroize, Zeroizing};
 
 use crate::pem;
 
-/// OID is the ASN.1 object identifier for ML-DSA-65.
+/// The ASN.1 object identifier for ML-DSA-65.
 pub const OID: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.3.18");
 
 /// Size of the secret key seed in bytes.
@@ -61,7 +61,7 @@ struct MlDsa65PrivateKeyInner<'a> {
     expanded: &'a OctetStringRef,
 }
 
-/// Error is the failures that can occur during ML-DSA operations.
+/// Failures of the ML-DSA operations.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
     /// The PEM wrapper is malformed. The inner error names the rule it broke.
@@ -98,7 +98,7 @@ pub enum Error {
     InvalidSignature,
 }
 
-/// SecretKey contains an ML-DSA-65 private key usable for signing.
+/// An ML-DSA-65 private key usable for signing.
 #[derive(Clone)]
 pub struct SecretKey {
     inner: ml_dsa::SigningKey<MlDsa65>,
@@ -112,7 +112,7 @@ impl Drop for SecretKey {
 }
 
 impl SecretKey {
-    /// generate creates a new, random private key.
+    /// Creates a new, random private key.
     pub fn generate() -> SecretKey {
         let mut seed = ml_dsa::Seed::default();
         getrandom::fill(&mut seed).unwrap();
@@ -121,14 +121,14 @@ impl SecretKey {
         Self { inner, seed }
     }
 
-    /// from_bytes creates a private key from a 32-byte seed.
+    /// Creates a private key from a 32-byte seed.
     pub fn from_bytes(seed: &[u8; SECRET_KEY_SIZE]) -> Self {
         let array = ml_dsa::Seed::try_from(seed.as_slice()).unwrap();
         let inner = ml_dsa::SigningKey::<MlDsa65>::from_seed(&array);
         Self { inner, seed: array }
     }
 
-    /// from_der parses a DER buffer into a private key.
+    /// Parses a DER buffer into a private key.
     pub fn from_der(der: &[u8]) -> Result<Self, Error> {
         // Parse the DER encoded container
         let info =
@@ -191,7 +191,7 @@ impl SecretKey {
         Ok(key)
     }
 
-    /// from_pem parses a PEM string into a private key.
+    /// Parses a PEM string into a private key.
     pub fn from_pem(pem_str: &str) -> Result<Self, Error> {
         // Crack open the PEM to get to the private key info
         let (kind, data) = pem::decode(pem_str.as_bytes())?;
@@ -202,14 +202,14 @@ impl SecretKey {
         Self::from_der(&data)
     }
 
-    /// to_bytes returns the 32-byte seed of the private key.
+    /// Returns the 32-byte seed of the private key.
     pub fn to_bytes(&self) -> Zeroizing<[u8; SECRET_KEY_SIZE]> {
         let mut out = Zeroizing::new([0u8; 32]);
         out.copy_from_slice(self.seed.as_slice());
         out
     }
 
-    /// to_der serializes a private key into a DER buffer.
+    /// Serializes a private key into a DER buffer.
     pub fn to_der(&self) -> Zeroizing<Vec<u8>> {
         #[allow(deprecated)] // to_expanded is wasteful, but that's the DER spec
         let enc = Zeroizing::new(self.inner.expanded_key().to_expanded());
@@ -232,25 +232,25 @@ impl SecretKey {
         Zeroizing::new(info.to_der().unwrap())
     }
 
-    /// to_pem serializes a private key into a PEM string.
+    /// Serializes a private key into a PEM string.
     pub fn to_pem(&self) -> Zeroizing<String> {
         Zeroizing::new(pem::encode("PRIVATE KEY", &self.to_der()))
     }
 
-    /// public_key retrieves the public counterpart of the secret key.
+    /// Retrieves the public counterpart of the secret key.
     pub fn public_key(&self) -> PublicKey {
         PublicKey {
             inner: self.inner.as_ref().clone(),
         }
     }
 
-    /// fingerprint returns a 256-bit unique identifier for this key. For ML-DSA,
+    /// Returns a 256-bit unique identifier for this key. For ML-DSA,
     /// that is the SHA256 hash of the raw public key.
     pub fn fingerprint(&self) -> Fingerprint {
         self.public_key().fingerprint()
     }
 
-    /// sign creates a digital signature of the message with an optional context string.
+    /// Creates a digital signature of the message with an optional context string.
     ///
     /// Pass an empty slice for no context. Verification must use the same bytes.
     ///
@@ -269,21 +269,21 @@ impl SecretKey {
     }
 }
 
-/// PublicKey contains an ML-DSA-65 public key usable for verification.
+/// An ML-DSA-65 public key usable for verification.
 #[derive(Debug, Clone)]
 pub struct PublicKey {
     inner: ml_dsa::VerifyingKey<MlDsa65>,
 }
 
 impl PublicKey {
-    /// from_bytes converts a 1952-byte array into a public key.
+    /// Converts a 1952-byte array into a public key.
     pub fn from_bytes(bytes: &[u8; PUBLIC_KEY_SIZE]) -> Self {
         let enc = EncodedVerifyingKey::<MlDsa65>::try_from(bytes.as_slice()).unwrap();
         let inner = ml_dsa::VerifyingKey::<MlDsa65>::decode(&enc);
         Self { inner }
     }
 
-    /// from_der parses a DER buffer into a public key.
+    /// Parses a DER buffer into a public key.
     pub fn from_der(der: &[u8]) -> Result<Self, Error> {
         let info: SubjectPublicKeyInfo<AnyRef, BitStringRef> = SubjectPublicKeyInfo::from_der(der)
             .map_err(|err| Error::MalformedKey(err.to_string()))?;
@@ -319,7 +319,7 @@ impl PublicKey {
         Ok(Self { inner })
     }
 
-    /// from_pem parses a PEM string into a public key.
+    /// Parses a PEM string into a public key.
     pub fn from_pem(pem_str: &str) -> Result<Self, Error> {
         let (kind, data) = pem::decode(pem_str.as_bytes())?;
         if kind != "PUBLIC KEY" {
@@ -328,7 +328,7 @@ impl PublicKey {
         Self::from_der(&data)
     }
 
-    /// to_bytes converts a public key into a 1952-byte array.
+    /// Converts a public key into a 1952-byte array.
     pub fn to_bytes(&self) -> [u8; PUBLIC_KEY_SIZE] {
         let enc = self.inner.encode();
         let mut out = [0u8; 1952];
@@ -336,7 +336,7 @@ impl PublicKey {
         out
     }
 
-    /// to_der serializes a public key into a DER buffer.
+    /// Serializes a public key into a DER buffer.
     pub fn to_der(&self) -> Vec<u8> {
         let enc = self.inner.encode();
         let bytes = enc.as_slice();
@@ -352,12 +352,12 @@ impl PublicKey {
         info.to_der().unwrap()
     }
 
-    /// to_pem serializes a public key into a PEM string.
+    /// Serializes a public key into a PEM string.
     pub fn to_pem(&self) -> String {
         pem::encode("PUBLIC KEY", &self.to_der())
     }
 
-    /// fingerprint returns a 256-bit unique identifier for this key. For ML-DSA,
+    /// Returns a 256-bit unique identifier for this key. For ML-DSA,
     /// that is the SHA256 hash of the raw public key.
     pub fn fingerprint(&self) -> Fingerprint {
         let mut hasher = sha2::Sha256::new();
@@ -365,7 +365,7 @@ impl PublicKey {
         Fingerprint(hasher.finalize().into())
     }
 
-    /// verify verifies a digital signature with an optional context string.
+    /// Verifies a digital signature with an optional context string.
     ///
     /// The context must match the one used for signing. A context longer than
     /// 255 bytes is rejected with [`Error::InvalidSignature`].
@@ -419,17 +419,17 @@ impl crate::cbor::Decode for PublicKey {
     }
 }
 
-/// Signature contains an ML-DSA-65 signature.
+/// An ML-DSA-65 signature.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Signature([u8; SIGNATURE_SIZE]);
 
 impl Signature {
-    /// from_bytes converts a 3309-byte array into a signature.
+    /// Converts a 3309-byte array into a signature.
     pub fn from_bytes(bytes: &[u8; SIGNATURE_SIZE]) -> Self {
         Self(*bytes)
     }
 
-    /// to_bytes converts a signature into a 3309-byte array.
+    /// Converts a signature into a 3309-byte array.
     pub fn to_bytes(&self) -> [u8; SIGNATURE_SIZE] {
         self.0
     }
@@ -474,17 +474,17 @@ impl crate::cbor::Decode for Signature {
     }
 }
 
-/// Fingerprint contains a 32-byte unique identifier for an ML-DSA-65 key.
+/// A 32-byte unique identifier for an ML-DSA-65 key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Fingerprint([u8; FINGERPRINT_SIZE]);
 
 impl Fingerprint {
-    /// from_bytes converts a 32-byte array into a fingerprint.
+    /// Converts a 32-byte array into a fingerprint.
     pub fn from_bytes(bytes: &[u8; FINGERPRINT_SIZE]) -> Self {
         Self(*bytes)
     }
 
-    /// to_bytes converts a fingerprint into a 32-byte array.
+    /// Converts a fingerprint into a 32-byte array.
     pub fn to_bytes(&self) -> [u8; FINGERPRINT_SIZE] {
         self.0
     }
@@ -533,10 +533,10 @@ impl crate::cbor::Decode for Fingerprint {
 mod tests {
     use super::*;
 
-    // Tests that a PEM encoded ML-DSA-65 private key can be decoded and re-encoded
-    // to the same string. The purpose is not to battle-test the PEM implementation,
-    // rather to ensure that the code implements the PEM format other subsystems
-    // expect.
+    /// Tests that a PEM encoded ML-DSA-65 private key can be decoded and re-encoded
+    /// to the same string. The purpose is not to battle-test the PEM implementation,
+    /// rather to ensure that the code implements the PEM format other subsystems
+    /// expect.
     #[test]
     fn test_secretkey_pem_codec() {
         // Generated with:
@@ -635,10 +635,10 @@ sufdPOOp/GHJAqEQz7n/Owe/
         assert_eq!(key.to_pem().trim(), input.trim());
     }
 
-    // Tests that a PEM encoded ML-DSA-65 public key can be decoded and re-encoded
-    // to the same string. The purpose is not to battle-test the PEM implementation,
-    // rather to ensure that the code implements the PEM format other subsystems
-    // expect.
+    /// Tests that a PEM encoded ML-DSA-65 public key can be decoded and re-encoded
+    /// to the same string. The purpose is not to battle-test the PEM implementation,
+    /// rather to ensure that the code implements the PEM format other subsystems
+    /// expect.
     #[test]
     fn test_publickey_pem_codec() {
         // Generated with:
@@ -693,10 +693,10 @@ iRzoxabi41zZsCWuQbGQnb55uzuy2nZ1zTuWtinlmABfRHnAqb4ASkM1U/aaCBwV
         assert_eq!(key.to_pem().trim(), input.trim());
     }
 
-    // Tests that a DER encoded ML-DSA-65 private key can be decoded and re-encoded
-    // to the same string. The purpose is not to battle-test the DER implementation,
-    // rather to ensure that the code implements the DER format other subsystems
-    // expect.
+    /// Tests that a DER encoded ML-DSA-65 private key can be decoded and re-encoded
+    /// to the same string. The purpose is not to battle-test the DER implementation,
+    /// rather to ensure that the code implements the DER format other subsystems
+    /// expect.
     #[test]
     fn test_secretkey_der_codec() {
         // Generated with:
@@ -848,8 +848,8 @@ b2e7dd3ce3a9fc61c902a110cfb9ff3b07bf"
         assert_eq!(hex::encode(key.to_der()), input);
     }
 
-    // Tests that a v2 PKCS#8 private key carrying an embedded public key is
-    // rejected: only v1 keys are supported.
+    /// Tests that a v2 PKCS#8 private key carrying an embedded public key is
+    /// rejected: only v1 keys are supported.
     #[test]
     fn test_secretkey_der_rejects_v2() {
         // Rebuild a valid v1 key as a v2 envelope with an embedded public key
@@ -865,10 +865,10 @@ b2e7dd3ce3a9fc61c902a110cfb9ff3b07bf"
         assert!(matches!(err, Err(Error::MalformedKey(_))));
     }
 
-    // Tests that a DER encoded ML-DSA-65 public key can be decoded and re-encoded
-    // to the same string. The purpose is not to battle-test the DER implementation,
-    // rather to ensure that the code implements the DER format other subsystems
-    // expect.
+    /// Tests that a DER encoded ML-DSA-65 public key can be decoded and re-encoded
+    /// to the same string. The purpose is not to battle-test the DER implementation,
+    /// rather to ensure that the code implements the DER format other subsystems
+    /// expect.
     #[test]
     fn test_publickey_der_codec() {
         // Generated with:
@@ -949,11 +949,11 @@ dbdfd1dd95f38d72218ceeae2461974019c705ef7d2d16a56e7b50a0cd51
         assert_eq!(hex::encode(key.to_der()), input);
     }
 
-    // Tests signing and verifying messages. Note, this test is not meant to test
-    // cryptography, it is mostly an API sanity check to verify that everything
-    // seems to work.
-    //
-    // TODO(karalabe): Get some live test vectors for a bit more sanity
+    /// Tests signing and verifying messages. Note, this test is not meant to test
+    /// cryptography, it is mostly an API sanity check to verify that everything
+    /// seems to work.
+    ///
+    /// TODO(karalabe): Get some live test vectors for a bit more sanity
     #[test]
     fn test_sign_verify() {
         // Create the keys for Alice
@@ -1000,8 +1000,8 @@ dbdfd1dd95f38d72218ceeae2461974019c705ef7d2d16a56e7b50a0cd51
         let _ = PublicKey::from_bytes(&ones);
     }
 
-    // Tests that a public key whose algorithm identifier carries parameters is
-    // rejected.
+    /// Tests that a public key whose algorithm identifier carries parameters is
+    /// rejected.
     #[test]
     fn test_publickey_der_rejects_params() {
         // Rebuild a valid public key with injected NULL algorithm parameters
@@ -1017,8 +1017,8 @@ dbdfd1dd95f38d72218ceeae2461974019c705ef7d2d16a56e7b50a0cd51
         assert!(matches!(err, Err(Error::MalformedKey(_))));
     }
 
-    // Tests that a public key whose BIT STRING claims unused bits (non
-    // byte-aligned) is rejected rather than panicking the extractor.
+    /// Tests that a public key whose BIT STRING claims unused bits (non
+    /// byte-aligned) is rejected rather than panicking the extractor.
     #[test]
     fn test_publickey_der_rejects_unused_bits() {
         let key = SecretKey::from_bytes(&[9; 32]).public_key();
@@ -1035,8 +1035,8 @@ dbdfd1dd95f38d72218ceeae2461974019c705ef7d2d16a56e7b50a0cd51
         assert!(matches!(err, Err(Error::MalformedKey(_))));
     }
 
-    // Tests that a private key whose algorithm identifier carries parameters is
-    // rejected.
+    /// Tests that a private key whose algorithm identifier carries parameters is
+    /// rejected.
     #[test]
     fn test_secretkey_der_rejects_params() {
         // Rebuild a valid private key with NULL algorithm parameters spliced in
