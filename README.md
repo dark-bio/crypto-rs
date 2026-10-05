@@ -44,7 +44,7 @@ Signatures come from `xdsa`, encryption from `xhpke`, and `cose` wraps both into
 
 ```toml
 [dependencies]
-darkbio-crypto = { version = "0.18", features = ["cose", "xdsa", "xhpke"] }
+darkbio-crypto = { version = "0.20", features = ["cose", "xdsa", "xhpke"] }
 ```
 
 COSE signing and verification and xHPKE encryption and decryption use an application domain that both sides must agree on. It is prefixed with `dark-bio-v1:` internally and binds the operation to one purpose. Choose distinct domains for distinct purposes. Raw `xdsa` signatures carry no such application domain, which is why the `cose` envelopes are the recommended entry point.
