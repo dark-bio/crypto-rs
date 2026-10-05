@@ -69,7 +69,7 @@ use spki::{AlgorithmIdentifier, ObjectIdentifier, SubjectPublicKeyInfo};
 use subtle::ConstantTimeEq;
 use zeroize::Zeroizing;
 
-/// OID is the ASN.1 object identifier for X-Wing.
+/// The ASN.1 object identifier for X-Wing.
 pub const OID: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.4.1.62253.25722");
 
 // KEM, AEAD and KDF are the HPKE crypto suite parameters. They are all 256 bit
@@ -84,7 +84,7 @@ type KEM = hpke::kem::XWing;
 type AEAD = hpke::aead::ChaCha20Poly1305;
 type KDF = hpke::kdf::HkdfSha256;
 
-/// DOMAIN_PREFIX is the prefix prepended to all domain strings before they are
+/// The prefix prepended to all domain strings before they are
 /// used in HPKE operations. This binds every encryption to the dark-bio application
 /// context, preventing cross-protocol attacks.
 ///
@@ -104,7 +104,7 @@ pub const ENCAP_KEY_SIZE: usize = 1120;
 /// Size of the fingerprint in bytes.
 pub const FINGERPRINT_SIZE: usize = 32;
 
-/// Error is the failures that can occur during xHPKE operations.
+/// Failures of the xHPKE operations.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
     /// The PEM wrapper is malformed. The inner error names the rule it broke.
@@ -145,7 +145,7 @@ pub enum Error {
     OpenFailed(String),
 }
 
-/// SecretKey contains an X-Wing private key for decrypting HPKE messages.
+/// An X-Wing private key for decrypting HPKE messages.
 #[derive(Clone)]
 pub struct SecretKey {
     inner: <KEM as Kem>::PrivateKey,
@@ -161,7 +161,7 @@ impl PartialEq for SecretKey {
 impl Eq for SecretKey {}
 
 impl SecretKey {
-    /// generate creates a new, random private key.
+    /// Creates a new, random private key.
     pub fn generate() -> SecretKey {
         let mut seed = Zeroizing::new([0u8; SECRET_KEY_SIZE]);
         getrandom::fill(seed.as_mut()).unwrap();
@@ -169,13 +169,13 @@ impl SecretKey {
         Self::from_bytes(&seed)
     }
 
-    /// from_bytes converts a 32-byte seed into a private key.
+    /// Converts a 32-byte seed into a private key.
     pub fn from_bytes(bin: &[u8; SECRET_KEY_SIZE]) -> Self {
         let inner = <KEM as Kem>::PrivateKey::from_bytes(bin).unwrap();
         Self { inner }
     }
 
-    /// from_der parses a DER buffer into a private key.
+    /// Parses a DER buffer into a private key.
     pub fn from_der(der: &[u8]) -> Result<Self, Error> {
         // Parse the DER encoded container
         let info =
@@ -213,7 +213,7 @@ impl SecretKey {
         Ok(SecretKey::from_bytes(&bytes))
     }
 
-    /// from_pem parses a PEM string into a private key.
+    /// Parses a PEM string into a private key.
     pub fn from_pem(pem_str: &str) -> Result<Self, Error> {
         // Crack open the PEM to get to the private key info
         let (kind, data) = pem::decode(pem_str.as_bytes())?;
@@ -224,12 +224,12 @@ impl SecretKey {
         Self::from_der(&data)
     }
 
-    /// to_bytes converts a private key into a 32-byte seed.
+    /// Converts a private key into a 32-byte seed.
     pub fn to_bytes(&self) -> Zeroizing<[u8; SECRET_KEY_SIZE]> {
         Zeroizing::new(self.inner.to_bytes().into())
     }
 
-    /// to_der serializes a private key into a DER buffer.
+    /// Serializes a private key into a DER buffer.
     pub fn to_der(&self) -> Zeroizing<Vec<u8>> {
         let bytes = Zeroizing::new(<[u8; SECRET_KEY_SIZE]>::from(self.inner.to_bytes()));
 
@@ -247,25 +247,25 @@ impl SecretKey {
         Zeroizing::new(info.to_der().unwrap())
     }
 
-    /// to_pem serializes a private key into a PEM string.
+    /// Serializes a private key into a PEM string.
     pub fn to_pem(&self) -> Zeroizing<String> {
         Zeroizing::new(pem::encode("PRIVATE KEY", &self.to_der()))
     }
 
-    /// public_key retrieves the public counterpart of the secret key.
+    /// Retrieves the public counterpart of the secret key.
     pub fn public_key(&self) -> PublicKey {
         PublicKey {
             inner: KEM::sk_to_pk(&self.inner),
         }
     }
 
-    /// fingerprint returns a 256-bit unique identifier for this key. For HPKE,
+    /// Returns a 256-bit unique identifier for this key. For HPKE,
     /// that is the SHA256 hash of the raw public key.
     pub fn fingerprint(&self) -> Fingerprint {
         self.public_key().fingerprint()
     }
 
-    /// open consumes a standalone cryptographic construct encrypted to this secret
+    /// Consumes a standalone cryptographic construct encrypted to this secret
     /// key. The method will deconstruct the given encapsulated key and ciphertext
     /// and will also verify the authenticity of the (unencrypted) message-to-auth
     /// (not included in the ciphertext).
@@ -299,7 +299,7 @@ impl SecretKey {
             .map_err(|err| Error::OpenFailed(err.to_string()))
     }
 
-    /// new_receiver creates an HPKE receiver context for multi-message decryption
+    /// Creates an HPKE receiver context for multi-message decryption
     /// using the given encapsulated key. Messages must be decrypted in the same
     /// order they were encrypted by the corresponding [`Sender`].
     ///
@@ -326,14 +326,14 @@ impl SecretKey {
     }
 }
 
-/// PublicKey contains an X-Wing public key for encrypting HPKE messages.
+/// An X-Wing public key for encrypting HPKE messages.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PublicKey {
     inner: <KEM as Kem>::PublicKey,
 }
 
 impl PublicKey {
-    /// from_bytes converts a 1216-byte array into a public key.
+    /// Converts a 1216-byte array into a public key.
     ///
     /// This validates the ML-KEM-768 component by checking that all polynomial
     /// coefficients are in the valid range [0, 3329). This matches Go's validation.
@@ -348,7 +348,7 @@ impl PublicKey {
         Ok(Self { inner })
     }
 
-    /// from_der parses a DER buffer into a public key.
+    /// Parses a DER buffer into a public key.
     pub fn from_der(der: &[u8]) -> Result<Self, Error> {
         // Parse the DER encoded container
         let info: SubjectPublicKeyInfo<AnyRef, BitStringRef> = SubjectPublicKeyInfo::from_der(der)
@@ -383,7 +383,7 @@ impl PublicKey {
         PublicKey::from_bytes(&bytes)
     }
 
-    /// from_pem parses a PEM string into a public key.
+    /// Parses a PEM string into a public key.
     pub fn from_pem(pem_str: &str) -> Result<Self, Error> {
         // Crack open the PEM to get to the public key info
         let (kind, data) = pem::decode(pem_str.as_bytes())?;
@@ -394,14 +394,14 @@ impl PublicKey {
         Self::from_der(&data)
     }
 
-    /// to_bytes converts a public key into a 1216-byte array.
+    /// Converts a public key into a 1216-byte array.
     pub fn to_bytes(&self) -> [u8; PUBLIC_KEY_SIZE] {
         let mut result = [0u8; 1216];
         result.copy_from_slice(&self.inner.to_bytes());
         result
     }
 
-    /// to_der serializes a public key into a DER buffer.
+    /// Serializes a public key into a DER buffer.
     pub fn to_der(&self) -> Vec<u8> {
         let bytes = self.inner.to_bytes();
 
@@ -418,12 +418,12 @@ impl PublicKey {
         info.to_der().unwrap()
     }
 
-    /// to_pem serializes a public key into a PEM string.
+    /// Serializes a public key into a PEM string.
     pub fn to_pem(&self) -> String {
         pem::encode("PUBLIC KEY", &self.to_der())
     }
 
-    /// fingerprint returns a 256-bit unique identifier for this key. For HPKE,
+    /// Returns a 256-bit unique identifier for this key. For HPKE,
     /// that is the SHA256 hash of the raw public key.
     pub fn fingerprint(&self) -> Fingerprint {
         let mut hasher = sha2::Sha256::new();
@@ -431,7 +431,7 @@ impl PublicKey {
         Fingerprint(hasher.finalize().into())
     }
 
-    /// seal creates a standalone cryptographic construct encrypted to this public
+    /// Creates a standalone cryptographic construct encrypted to this public
     /// key. The construct will contain the given message-to-seal (encrypted) and
     /// also an authenticity proof for the (unencrypted) message-to-auth (message
     /// not included).
@@ -466,7 +466,7 @@ impl PublicKey {
         Ok((encap_key, enc))
     }
 
-    /// new_sender creates an HPKE sender context for multi-message encryption
+    /// Creates an HPKE sender context for multi-message encryption
     /// to this public key. Returns the sender context and the encapsulated key
     /// that must be transmitted to the recipient.
     ///
@@ -489,7 +489,7 @@ impl PublicKey {
     }
 }
 
-/// Sender wraps an HPKE sender encryption context for multi-message
+/// An HPKE sender encryption context for multi-message
 /// communication. Each call to [`seal`](Sender::seal) encrypts a message
 /// using an auto-incrementing nonce, ensuring unique ciphertexts even for
 /// identical plaintexts.
@@ -501,7 +501,7 @@ pub struct Sender {
 }
 
 impl Sender {
-    /// seal encrypts a message using the next nonce in the sequence.
+    /// Encrypts a message using the next nonce in the sequence.
     pub fn seal(&mut self, msg_to_seal: &[u8], msg_to_auth: &[u8]) -> Result<Vec<u8>, Error> {
         self.inner
             .seal(msg_to_seal, msg_to_auth)
@@ -509,7 +509,7 @@ impl Sender {
     }
 }
 
-/// Receiver wraps an HPKE receiver decryption context for multi-message
+/// An HPKE receiver decryption context for multi-message
 /// communication. Each call to [`open`](Receiver::open) decrypts a
 /// message using an auto-incrementing nonce.
 ///
@@ -520,7 +520,7 @@ pub struct Receiver {
 }
 
 impl Receiver {
-    /// open decrypts a message using the next nonce in the sequence.
+    /// Decrypts a message using the next nonce in the sequence.
     pub fn open(&mut self, msg_to_open: &[u8], msg_to_auth: &[u8]) -> Result<Vec<u8>, Error> {
         self.inner
             .open(msg_to_open, msg_to_auth)
@@ -567,17 +567,17 @@ impl crate::cbor::Decode for PublicKey {
     }
 }
 
-/// Fingerprint contains a 256-bit unique identifier for an HPKE key.
+/// A 256-bit unique identifier for an HPKE key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Fingerprint([u8; FINGERPRINT_SIZE]);
 
 impl Fingerprint {
-    /// from_bytes converts a 32-byte array into a fingerprint.
+    /// Converts a 32-byte array into a fingerprint.
     pub fn from_bytes(bytes: &[u8; FINGERPRINT_SIZE]) -> Self {
         Self(*bytes)
     }
 
-    /// to_bytes converts a fingerprint into a 32-byte array.
+    /// Converts a fingerprint into a 32-byte array.
     pub fn to_bytes(&self) -> [u8; FINGERPRINT_SIZE] {
         self.0
     }
@@ -658,7 +658,7 @@ fn validate_mlkem768_encapsulation_key(key: &[u8]) -> Result<(), Error> {
 mod tests {
     use super::*;
 
-    // Test vectors from draft-connolly-cfrg-xwing-kem-10 Appendix D
+    /// Test vectors from draft-connolly-cfrg-xwing-kem-10 Appendix D
     // https://datatracker.ietf.org/doc/html/draft-connolly-cfrg-xwing-kem
     mod ietf_vectors {
         pub const SECKEY_SEED: &str =
@@ -701,9 +701,9 @@ OhMjnzQvynZVtuquhFoiHOs+Z/VjnGGT9v3u9X45m4CLfzqitXQKre2QFj3F13XJ
 -----END PUBLIC KEY-----";
     }
 
-    // Tests operations with IETF test vectors: the private key must parse into
-    // the published raw seed, re-encode into the published PEM and DER, and
-    // expand to the draft's matching public key.
+    /// Tests operations with IETF test vectors: the private key must parse into
+    /// the published raw seed, re-encode into the published PEM and DER, and
+    /// expand to the draft's matching public key.
     #[test]
     fn test_ietf_vectors() {
         // Round trip the secret key pem and verify the expected seed
@@ -730,7 +730,7 @@ OhMjnzQvynZVtuquhFoiHOs+Z/VjnGGT9v3u9X45m4CLfzqitXQKre2QFj3F13XJ
         assert_eq!(key.to_der(), *der);
     }
 
-    // Tests that a private key can be serialized to bytes and parsed back.
+    /// Tests that a private key can be serialized to bytes and parsed back.
     #[test]
     fn test_secretkey_bytes_roundtrip() {
         let key = SecretKey::generate();
@@ -739,7 +739,7 @@ OhMjnzQvynZVtuquhFoiHOs+Z/VjnGGT9v3u9X45m4CLfzqitXQKre2QFj3F13XJ
         assert_eq!(key.to_bytes(), parsed.to_bytes());
     }
 
-    // Tests that a public key can be serialized to bytes and parsed back.
+    /// Tests that a public key can be serialized to bytes and parsed back.
     #[test]
     fn test_publickey_bytes_roundtrip() {
         let key = SecretKey::generate().public_key();
@@ -748,7 +748,7 @@ OhMjnzQvynZVtuquhFoiHOs+Z/VjnGGT9v3u9X45m4CLfzqitXQKre2QFj3F13XJ
         assert_eq!(key.to_bytes(), parsed.to_bytes());
     }
 
-    // Tests that a private key can be serialized to DER and parsed back.
+    /// Tests that a private key can be serialized to DER and parsed back.
     #[test]
     fn test_secretkey_der_roundtrip() {
         let key = SecretKey::generate();
@@ -757,7 +757,7 @@ OhMjnzQvynZVtuquhFoiHOs+Z/VjnGGT9v3u9X45m4CLfzqitXQKre2QFj3F13XJ
         assert_eq!(key.to_bytes(), parsed.to_bytes());
     }
 
-    // Tests that a private key can be serialized to PEM and parsed back.
+    /// Tests that a private key can be serialized to PEM and parsed back.
     #[test]
     fn test_secretkey_pem_roundtrip() {
         let key = SecretKey::generate();
@@ -766,7 +766,7 @@ OhMjnzQvynZVtuquhFoiHOs+Z/VjnGGT9v3u9X45m4CLfzqitXQKre2QFj3F13XJ
         assert_eq!(key.to_bytes(), parsed.to_bytes());
     }
 
-    // Tests that a public key can be serialized to DER and parsed back.
+    /// Tests that a public key can be serialized to DER and parsed back.
     #[test]
     fn test_publickey_der_roundtrip() {
         let key = SecretKey::generate().public_key();
@@ -775,7 +775,7 @@ OhMjnzQvynZVtuquhFoiHOs+Z/VjnGGT9v3u9X45m4CLfzqitXQKre2QFj3F13XJ
         assert_eq!(key.to_bytes(), parsed.to_bytes());
     }
 
-    // Tests that a public key can be serialized to PEM and parsed back.
+    /// Tests that a public key can be serialized to PEM and parsed back.
     #[test]
     fn test_publickey_pem_roundtrip() {
         let key = SecretKey::generate().public_key();
@@ -784,9 +784,9 @@ OhMjnzQvynZVtuquhFoiHOs+Z/VjnGGT9v3u9X45m4CLfzqitXQKre2QFj3F13XJ
         assert_eq!(key.to_bytes(), parsed.to_bytes());
     }
 
-    // Tests sealing and opening various combinations of messages (authenticate,
-    // encrypt, both). Note, this test is not meant to test cryptography, it is
-    // mostly an API sanity check to verify that everything seems to work.
+    /// Tests sealing and opening various combinations of messages (authenticate,
+    /// encrypt, both). Note, this test is not meant to test cryptography, it is
+    /// mostly an API sanity check to verify that everything seems to work.
     #[test]
     fn test_seal_open() {
         // Create the keys
@@ -832,8 +832,8 @@ OhMjnzQvynZVtuquhFoiHOs+Z/VjnGGT9v3u9X45m4CLfzqitXQKre2QFj3F13XJ
         }
     }
 
-    // Tests that a sender/receiver context can be established and used to
-    // encrypt/decrypt multiple messages in sequence.
+    /// Tests that a sender/receiver context can be established and used to
+    /// encrypt/decrypt multiple messages in sequence.
     #[test]
     fn test_context_seal_open() {
         let secret = SecretKey::generate();
@@ -866,9 +866,9 @@ OhMjnzQvynZVtuquhFoiHOs+Z/VjnGGT9v3u9X45m4CLfzqitXQKre2QFj3F13XJ
         }
     }
 
-    // Tests that a receiver context rejects messages decrypted out of order.
-    // The HPKE sequence counter is only advanced on success, so after a failed
-    // open the context remains usable for the correct next message.
+    /// Tests that a receiver context rejects messages decrypted out of order.
+    /// The HPKE sequence counter is only advanced on success, so after a failed
+    /// open the context remains usable for the correct next message.
     #[test]
     fn test_context_rejects_out_of_order() {
         let secret = SecretKey::generate();
@@ -905,8 +905,8 @@ OhMjnzQvynZVtuquhFoiHOs+Z/VjnGGT9v3u9X45m4CLfzqitXQKre2QFj3F13XJ
         assert_eq!(pt1, b"message 1");
     }
 
-    // Tests that mismatched domains between sender and receiver prevent
-    // decryption (the HPKE contexts derive different keys).
+    /// Tests that mismatched domains between sender and receiver prevent
+    /// decryption (the HPKE contexts derive different keys).
     #[test]
     fn test_context_rejects_wrong_domain() {
         let secret = SecretKey::generate();
@@ -926,8 +926,8 @@ OhMjnzQvynZVtuquhFoiHOs+Z/VjnGGT9v3u9X45m4CLfzqitXQKre2QFj3F13XJ
         );
     }
 
-    // Tests that mismatched additional authenticated data between seal and open
-    // prevents decryption for both single-shot and context-based APIs.
+    /// Tests that mismatched additional authenticated data between seal and open
+    /// prevents decryption for both single-shot and context-based APIs.
     #[test]
     fn test_rejects_wrong_auth() {
         let secret = SecretKey::generate();
@@ -965,8 +965,8 @@ OhMjnzQvynZVtuquhFoiHOs+Z/VjnGGT9v3u9X45m4CLfzqitXQKre2QFj3F13XJ
         assert_eq!(pt, b"secret");
     }
 
-    // Tests that a public key whose algorithm identifier carries parameters is
-    // rejected.
+    /// Tests that a public key whose algorithm identifier carries parameters is
+    /// rejected.
     #[test]
     fn test_publickey_der_rejects_params() {
         // Rebuild a valid public key with injected NULL algorithm parameters
@@ -982,8 +982,8 @@ OhMjnzQvynZVtuquhFoiHOs+Z/VjnGGT9v3u9X45m4CLfzqitXQKre2QFj3F13XJ
         assert!(matches!(err, Err(Error::MalformedKey(_))));
     }
 
-    // Tests that a public key whose BIT STRING claims unused bits (non
-    // byte-aligned) is rejected rather than panicking the extractor.
+    /// Tests that a public key whose BIT STRING claims unused bits (non
+    /// byte-aligned) is rejected rather than panicking the extractor.
     #[test]
     fn test_publickey_der_rejects_unused_bits() {
         let key = SecretKey::generate().public_key();
@@ -1000,8 +1000,8 @@ OhMjnzQvynZVtuquhFoiHOs+Z/VjnGGT9v3u9X45m4CLfzqitXQKre2QFj3F13XJ
         assert!(matches!(err, Err(Error::MalformedKey(_))));
     }
 
-    // Tests that a private key whose algorithm identifier carries parameters is
-    // rejected.
+    /// Tests that a private key whose algorithm identifier carries parameters is
+    /// rejected.
     #[test]
     fn test_secretkey_der_rejects_params() {
         // Rebuild a valid private key with NULL algorithm parameters spliced in

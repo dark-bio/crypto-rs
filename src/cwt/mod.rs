@@ -75,7 +75,7 @@ pub mod claims;
 use crate::cbor::{self, Decode, Encode, Raw};
 use crate::{cose, xdsa};
 
-/// Error is the failures that can occur during CWT operations.
+/// Failures of the CWT operations.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
     /// The token or its claims are not valid CBOR under this crate's rules.
@@ -111,7 +111,7 @@ pub enum Error {
     },
 }
 
-/// issue signs a set of claims as a CWT using [`cose::sign`].
+/// Signs a set of claims as a CWT using [`cose::sign`].
 ///
 /// The claims value must be a struct whose fields encode as a CBOR map
 /// (using `#[cbor(key = N)]` tags and/or embedded claim types).
@@ -126,7 +126,7 @@ pub fn issue(
     Ok(cose::sign(Raw(claims_bytes), cbor::NULL, signer, domain)?)
 }
 
-/// issue_at signs a set of claims as a CWT with an explicit COSE timestamp.
+/// Signs a set of claims as a CWT with an explicit COSE timestamp.
 ///
 /// This is primarily useful for testing with deterministic timestamps.
 pub fn issue_at(
@@ -145,7 +145,7 @@ pub fn issue_at(
     )?)
 }
 
-/// verify verifies a CWT's COSE signature and temporal validity, then decodes
+/// Verifies a CWT's COSE signature and temporal validity, then decodes
 /// the claims into T.
 ///
 /// When `now` is `Some`, temporal claims are validated. The nbf claim (key 5,
@@ -183,13 +183,13 @@ pub fn verify<T: Decode>(
     Ok(cbor::decode(&raw.0)?)
 }
 
-/// signer extracts the signer's fingerprint from a CWT without verifying
+/// Extracts the signer's fingerprint from a CWT without verifying
 /// the signature. The returned data is unauthenticated.
 pub fn signer(data: &[u8]) -> Result<xdsa::Fingerprint, Error> {
     Ok(cose::signer(data)?)
 }
 
-/// peek extracts and decodes claims from a CWT without verifying the signature.
+/// Extracts and decodes claims from a CWT without verifying the signature.
 ///
 /// **Warning**: This function does NOT verify the signature. The returned payload
 /// is unauthenticated and should not be trusted until verified with [`verify`].
@@ -243,7 +243,7 @@ mod tests {
     use crate::cwt::claims;
     use crate::cwt::claims::eat;
 
-    /// simpleCert is the minimal token type used by most tests.
+    /// The minimal token type used by most tests.
     #[derive(Debug, Cbor)]
     struct SimpleCert {
         #[cbor(embed)]
@@ -256,7 +256,7 @@ mod tests {
         cnf: claims::Confirm<xdsa::PublicKey>,
     }
 
-    /// deviceCert is a composite token type with EAT claims.
+    /// A composite token type with EAT claims.
     #[derive(Debug, Cbor)]
     struct DeviceCert {
         #[cbor(embed)]
@@ -526,7 +526,7 @@ mod tests {
     /// Fixture corpus generated with v0.16.0 to pin the CWT wire format.
     const FIXTURES: &str = include_str!("testdata/v0.16.json");
 
-    /// fixture retrieves a hex encoded field from the v0.16 fixture corpus.
+    /// Retrieves a hex encoded field from the v0.16 fixture corpus.
     fn fixture(corpus: &serde_json::Value, key: &str) -> Vec<u8> {
         hex::decode(corpus[key].as_str().unwrap()).unwrap()
     }

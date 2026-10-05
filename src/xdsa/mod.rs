@@ -41,14 +41,14 @@ use sha2::Digest;
 use spki::{ObjectIdentifier, SubjectPublicKeyInfo};
 use zeroize::Zeroizing;
 
-/// Prefix is the byte encoding of "CompositeAlgorithmSignatures2025" per the
+/// The byte encoding of "CompositeAlgorithmSignatures2025" per the
 /// IETF composite signature spec.
 const SIGNATURE_PREFIX: &[u8] = b"CompositeAlgorithmSignatures2025";
 
-/// Label is the signature label for ML-DSA-65-Ed25519-SHA512.
+/// The signature label for ML-DSA-65-Ed25519-SHA512.
 pub const SIGNATURE_DOMAIN: &[u8] = b"COMPSIG-MLDSA65-Ed25519-SHA512";
 
-/// OID is the ASN.1 object identifier for MLDSA65-Ed25519-SHA512.
+/// The ASN.1 object identifier for MLDSA65-Ed25519-SHA512.
 pub const OID: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.6.48");
 
 /// Size of the secret key in bytes.
@@ -66,7 +66,7 @@ pub const SIGNATURE_SIZE: usize = 3373;
 /// Size of a key fingerprint in bytes.
 pub const FINGERPRINT_SIZE: usize = 32;
 
-/// Error is the failures that can occur during xDSA operations.
+/// Failures of the xDSA operations.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
     /// The PEM wrapper is malformed. The inner error names the rule it broke.
@@ -102,7 +102,7 @@ pub enum Error {
     InvalidSignature,
 }
 
-/// SecretKey is an ML-DSA-65 private key paired with an Ed25519 private key for
+/// An ML-DSA-65 private key paired with an Ed25519 private key for
 /// creating and verifying quantum resistant digital signatures.    
 #[derive(Clone)]
 pub struct SecretKey {
@@ -111,7 +111,7 @@ pub struct SecretKey {
 }
 
 impl SecretKey {
-    /// generate creates a new, random private key.
+    /// Creates a new, random private key.
     pub fn generate() -> SecretKey {
         SecretKey {
             ml_key: mldsa::SecretKey::generate(),
@@ -119,19 +119,19 @@ impl SecretKey {
         }
     }
 
-    /// compose creates a secret key from its constituent ML-DSA-65 and Ed25519
+    /// Creates a secret key from its constituent ML-DSA-65 and Ed25519
     /// secret keys.
     pub fn compose(ml_key: mldsa::SecretKey, ed_key: eddsa::SecretKey) -> Self {
         Self { ml_key, ed_key }
     }
 
-    /// split decomposes a secret key into its constituent ML-DSA-65 and Ed25519
+    /// Decomposes a secret key into its constituent ML-DSA-65 and Ed25519
     /// secret keys.
     pub fn split(self) -> (mldsa::SecretKey, eddsa::SecretKey) {
         (self.ml_key, self.ed_key)
     }
 
-    /// from_bytes creates a private key from a 64-byte seed.
+    /// Creates a private key from a 64-byte seed.
     pub fn from_bytes(seed: &[u8; SECRET_KEY_SIZE]) -> Self {
         let ml_seed: Zeroizing<[u8; 32]> = Zeroizing::new(seed[..32].try_into().unwrap());
         let ed_seed: Zeroizing<[u8; 32]> = Zeroizing::new(seed[32..].try_into().unwrap());
@@ -142,7 +142,7 @@ impl SecretKey {
         }
     }
 
-    /// from_der parses a DER buffer into a private key.
+    /// Parses a DER buffer into a private key.
     pub fn from_der(der: &[u8]) -> Result<Self, Error> {
         // Parse the DER encoded container
         let info = pkcs8::PrivateKeyInfoRef::from_der(der)
@@ -180,7 +180,7 @@ impl SecretKey {
         Ok(Self::from_bytes(&seed))
     }
 
-    /// from_pem parses a PEM string into a private key.
+    /// Parses a PEM string into a private key.
     pub fn from_pem(pem_str: &str) -> Result<Self, Error> {
         // Crack open the PEM to get to the private key info
         let (kind, data) = pem::decode(pem_str.as_bytes())?;
@@ -191,7 +191,7 @@ impl SecretKey {
         Self::from_der(&data)
     }
 
-    /// to_bytes converts a secret key into a 64-byte array.
+    /// Converts a secret key into a 64-byte array.
     pub fn to_bytes(&self) -> Zeroizing<[u8; SECRET_KEY_SIZE]> {
         let mut out = Zeroizing::new([0u8; 64]);
         out[..32].copy_from_slice(self.ml_key.to_bytes().as_slice());
@@ -199,7 +199,7 @@ impl SecretKey {
         out
     }
 
-    /// to_der serializes a private key into a DER buffer.
+    /// Serializes a private key into a DER buffer.
     pub fn to_der(&self) -> Zeroizing<Vec<u8>> {
         // Create the MLDSA65-Ed25519-SHA512 algorithm identifier; parameters
         // MUST be absent
@@ -218,12 +218,12 @@ impl SecretKey {
         Zeroizing::new(info.to_der().unwrap())
     }
 
-    /// to_pem serializes a private key into a PEM string.
+    /// Serializes a private key into a PEM string.
     pub fn to_pem(&self) -> Zeroizing<String> {
         Zeroizing::new(pem::encode("PRIVATE KEY", &self.to_der()))
     }
 
-    /// public_key retrieves the public counterpart of the secret key.
+    /// Retrieves the public counterpart of the secret key.
     pub fn public_key(&self) -> PublicKey {
         PublicKey {
             ml_key: self.ml_key.public_key(),
@@ -231,12 +231,12 @@ impl SecretKey {
         }
     }
 
-    /// fingerprint returns a 256-bit unique identifier for this key.
+    /// Returns a 256-bit unique identifier for this key.
     pub fn fingerprint(&self) -> Fingerprint {
         self.public_key().fingerprint()
     }
 
-    /// sign creates a digital signature of the message.
+    /// Creates a digital signature of the message.
     pub fn sign(&self, message: &[u8]) -> Signature {
         let m_prime = split_signing_message(message);
 
@@ -248,7 +248,7 @@ impl SecretKey {
     }
 }
 
-/// PublicKey is an ML-DSA-65 public key paired with an Ed25519 public key for
+/// An ML-DSA-65 public key paired with an Ed25519 public key for
 /// verifying quantum resistant digital signatures.
 #[derive(Debug, Clone)]
 pub struct PublicKey {
@@ -257,19 +257,19 @@ pub struct PublicKey {
 }
 
 impl PublicKey {
-    /// compose creates a public key from its constituent ML-DSA-65 and Ed25519
+    /// Creates a public key from its constituent ML-DSA-65 and Ed25519
     /// public keys.
     pub fn compose(ml_key: mldsa::PublicKey, ed_key: eddsa::PublicKey) -> Self {
         Self { ml_key, ed_key }
     }
 
-    /// split decomposes a public key into its constituent ML-DSA-65 and Ed25519
+    /// Decomposes a public key into its constituent ML-DSA-65 and Ed25519
     /// public keys.
     pub fn split(self) -> (mldsa::PublicKey, eddsa::PublicKey) {
         (self.ml_key, self.ed_key)
     }
 
-    /// from_bytes converts a 1984-byte array into a public key.
+    /// Converts a 1984-byte array into a public key.
     pub fn from_bytes(bytes: &[u8; PUBLIC_KEY_SIZE]) -> Result<Self, Error> {
         let ml_bytes: [u8; 1952] = bytes[..1952].try_into().unwrap();
         let ed_bytes: [u8; 32] = bytes[1952..].try_into().unwrap();
@@ -281,7 +281,7 @@ impl PublicKey {
         })
     }
 
-    /// from_der parses a DER buffer into a public key.
+    /// Parses a DER buffer into a public key.
     pub fn from_der(der: &[u8]) -> Result<Self, Error> {
         // Parse the DER encoded container
         let info: SubjectPublicKeyInfo<AnyRef, BitStringRef> = SubjectPublicKeyInfo::from_der(der)
@@ -315,7 +315,7 @@ impl PublicKey {
         Self::from_bytes(&key_bytes)
     }
 
-    /// from_pem parses a PEM string into a public key.
+    /// Parses a PEM string into a public key.
     pub fn from_pem(pem_str: &str) -> Result<Self, Error> {
         // Crack open the PEM to get to the public key info
         let (kind, data) = pem::decode(pem_str.as_bytes())?;
@@ -326,7 +326,7 @@ impl PublicKey {
         Self::from_der(&data)
     }
 
-    /// to_bytes converts a public key into a 1984-byte array.
+    /// Converts a public key into a 1984-byte array.
     pub fn to_bytes(&self) -> [u8; PUBLIC_KEY_SIZE] {
         let mut out = [0u8; 1984];
         out[..1952].copy_from_slice(&self.ml_key.to_bytes());
@@ -334,7 +334,7 @@ impl PublicKey {
         out
     }
 
-    /// to_der serializes a public key into a DER buffer.
+    /// Serializes a public key into a DER buffer.
     pub fn to_der(&self) -> Vec<u8> {
         // Create the MLDSA65-Ed25519-SHA512 algorithm identifier; parameters
         // MUST be absent
@@ -352,12 +352,12 @@ impl PublicKey {
         info.to_der().unwrap()
     }
 
-    /// to_pem serializes a public key into a PEM string.
+    /// Serializes a public key into a PEM string.
     pub fn to_pem(&self) -> String {
         pem::encode("PUBLIC KEY", &self.to_der())
     }
 
-    /// fingerprint returns a 256-bit unique identifier for this key.
+    /// Returns a 256-bit unique identifier for this key.
     pub fn fingerprint(&self) -> Fingerprint {
         let mut hasher = sha2::Sha256::new();
         hasher.update(self.ml_key.to_bytes());
@@ -365,7 +365,7 @@ impl PublicKey {
         Fingerprint(hasher.finalize().into())
     }
 
-    /// verify verifies a digital signature.
+    /// Verifies a digital signature.
     pub fn verify(&self, message: &[u8], signature: &Signature) -> Result<(), Error> {
         // Construct M' = Prefix || Label || len(ctx) || ctx || PH(M)
         // where ctx is empty and PH is SHA512
@@ -433,7 +433,7 @@ impl crate::cbor::Decode for PublicKey {
     }
 }
 
-/// split_signing_message derives the composite message M' from a raw message
+/// Derives the composite message M' from a raw message
 /// according to the IETF composite signature spec:
 ///
 ///   M' = Prefix || Label || len(ctx) || ctx || PH(M)
@@ -475,7 +475,7 @@ pub fn split_signing_message(message: &[u8]) -> Vec<u8> {
     m_prime
 }
 
-/// Signature is an ML-DSA-65 signature paired with an Ed25519 signature.
+/// An ML-DSA-65 signature paired with an Ed25519 signature.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Signature {
     ml_sig: mldsa::Signature,
@@ -483,19 +483,19 @@ pub struct Signature {
 }
 
 impl Signature {
-    /// compose creates a signature from its constituent ML-DSA-65 and Ed25519
+    /// Creates a signature from its constituent ML-DSA-65 and Ed25519
     /// signatures.
     pub fn compose(ml_sig: mldsa::Signature, ed_sig: eddsa::Signature) -> Self {
         Self { ml_sig, ed_sig }
     }
 
-    /// split decomposes a signature into its constituent ML-DSA-65 and Ed25519
+    /// Decomposes a signature into its constituent ML-DSA-65 and Ed25519
     /// signatures.
     pub fn split(&self) -> (mldsa::Signature, eddsa::Signature) {
         (self.ml_sig.clone(), self.ed_sig)
     }
 
-    /// from_bytes converts a 3373-byte array into a signature.
+    /// Converts a 3373-byte array into a signature.
     pub fn from_bytes(bytes: &[u8; SIGNATURE_SIZE]) -> Self {
         let ml_bytes: [u8; 3309] = bytes[..3309].try_into().unwrap();
         let ed_bytes: [u8; 64] = bytes[3309..].try_into().unwrap();
@@ -506,7 +506,7 @@ impl Signature {
         }
     }
 
-    /// to_bytes converts a signature into a 3373-byte array.
+    /// Converts a signature into a 3373-byte array.
     pub fn to_bytes(&self) -> [u8; SIGNATURE_SIZE] {
         let mut out = [0u8; SIGNATURE_SIZE];
         out[..3309].copy_from_slice(&self.ml_sig.to_bytes());
@@ -554,17 +554,17 @@ impl crate::cbor::Decode for Signature {
     }
 }
 
-/// Fingerprint contains a 256-bit unique identifier for a composite ML-DSA-65-Ed25519-SHA512 key.
+/// A 256-bit unique identifier for a composite ML-DSA-65-Ed25519-SHA512 key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Fingerprint([u8; FINGERPRINT_SIZE]);
 
 impl Fingerprint {
-    /// from_bytes creates a fingerprint from a 32-byte array.
+    /// Creates a fingerprint from a 32-byte array.
     pub fn from_bytes(bytes: &[u8; FINGERPRINT_SIZE]) -> Self {
         Self(*bytes)
     }
 
-    /// to_bytes converts a fingerprint into a 32-byte array.
+    /// Converts a fingerprint into a 32-byte array.
     pub fn to_bytes(&self) -> [u8; FINGERPRINT_SIZE] {
         self.0
     }
@@ -613,7 +613,7 @@ impl crate::cbor::Decode for Fingerprint {
 mod tests {
     use super::*;
 
-    // Test vectors from draft-ietf-lamps-pq-composite-sigs-latest Appendix E
+    /// Test vectors from draft-ietf-lamps-pq-composite-sigs-latest Appendix E
     // https://datatracker.ietf.org/doc/html/draft-ietf-lamps-pq-composite-sigs
     mod ietf_vectors {
         pub const TEST_SECKEY: &str = "\
@@ -813,7 +813,7 @@ f6e178bcc044204110444ea2b7e80548769ae5010c22707493adb0baf55f\
 1c11ef8c1bbec178a532505506";
     }
 
-    // Tests operations with IETF test vectors.
+    /// Tests operations with IETF test vectors.
     #[test]
     fn test_ietf_vectors() {
         // Parse the secret key seed (ML-DSA seed || Ed25519 seed)
@@ -949,8 +949,8 @@ f6e178bcc044204110444ea2b7e80548769ae5010c22707493adb0baf55f\
         composite_pub.verify(message, &composite_sig).unwrap();
     }
 
-    // Tests that a public key whose algorithm identifier carries parameters is
-    // rejected.
+    /// Tests that a public key whose algorithm identifier carries parameters is
+    /// rejected.
     #[test]
     fn test_publickey_der_rejects_params() {
         // Rebuild a valid public key with injected NULL algorithm parameters
@@ -966,8 +966,8 @@ f6e178bcc044204110444ea2b7e80548769ae5010c22707493adb0baf55f\
         assert!(matches!(err, Err(Error::MalformedKey(_))));
     }
 
-    // Tests that a private key whose algorithm identifier carries parameters is
-    // rejected.
+    /// Tests that a private key whose algorithm identifier carries parameters is
+    /// rejected.
     #[test]
     fn test_secretkey_der_rejects_params() {
         // Rebuild a valid private key with NULL algorithm parameters spliced in

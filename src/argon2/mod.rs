@@ -16,7 +16,7 @@
 use argon2::{Algorithm, Argon2, Block, Params, Version};
 use zeroize::{Zeroize, Zeroizing};
 
-/// key derives a key from the password, salt, and cost parameters using
+/// Derives a key from the password, salt, and cost parameters using
 /// Argon2id returning a fixed-size byte array that can be used as a
 /// cryptographic key.
 ///
@@ -72,7 +72,7 @@ pub fn key<const N: usize>(
     output
 }
 
-/// key_with_len derives a key from the password, salt, and cost parameters
+/// Derives a key from the password, salt, and cost parameters
 /// using Argon2id returning a byte vector that can be used as a cryptographic
 /// key. See [`key`] for parameter meanings and recommended profiles.
 ///
@@ -101,7 +101,7 @@ pub fn key_with_len(
     output
 }
 
-/// hash runs Argon2id over the password and salt into the output buffer using
+/// Runs Argon2id over the password and salt into the output buffer using
 /// working memory owned by this crate, which gets wiped before returning.
 fn hash(argon2: &Argon2, password: &[u8], salt: &[u8], output: &mut [u8]) {
     // The allocating Argon2 API never wipes its working memory, so own it here.

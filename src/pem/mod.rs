@@ -34,7 +34,7 @@ const PEM_HEADER: &[u8] = b"-----BEGIN ";
 const PEM_FOOTER: &[u8] = b"-----END ";
 const PEM_ENDING: &[u8] = b"-----";
 
-/// Error is the failures that can occur while parsing PEM with [`decode`].
+/// Failures of parsing PEM with [`decode`].
 /// [`encode`] returns no errors.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
@@ -219,8 +219,8 @@ pub fn encode(kind: &str, data: &[u8]) -> String {
 mod tests {
     use super::*;
 
-    // Tests that a body without any base64 text is rejected, whether it has no
-    // lines or only blank ones.
+    /// Tests that a body without any base64 text is rejected, whether it has no
+    /// lines or only blank ones.
     #[test]
     fn test_decode_empty_payload() {
         let tests = [
@@ -249,15 +249,15 @@ mod tests {
         }
     }
 
-    // Tests that encoding an empty payload panics, since decoding rejects it.
+    /// Tests that encoding an empty payload panics, since decoding rejects it.
     #[test]
     #[should_panic]
     fn test_encode_empty_payload() {
         encode("PUBLIC KEY", &[]);
     }
 
-    // Tests that payloads around the 64-character line length survive encoding
-    // and decoding unchanged.
+    /// Tests that payloads around the 64-character line length survive encoding
+    /// and decoding unchanged.
     #[test]
     fn test_round_trip() {
         for size in [1, 47, 48, 49, 96, 97] {

@@ -17,7 +17,7 @@ use crate::cose;
 use crate::xdsa;
 use crate::xhpke;
 
-/// Issuer identifies the principal that issued the token (key 1).
+/// The principal that issued the token (key 1).
 #[derive(Clone, Debug, PartialEq, Eq, Cbor)]
 pub struct Issuer {
     /// Issuer identity, a URI or any string the ecosystem agrees on.
@@ -25,7 +25,7 @@ pub struct Issuer {
     pub iss: String,
 }
 
-/// Subject identifies the principal that is the subject of the token (key 2).
+/// The principal that is the subject of the token (key 2).
 #[derive(Clone, Debug, PartialEq, Eq, Cbor)]
 pub struct Subject {
     /// Subject identity, for a device its serial or attestation subject.
@@ -33,7 +33,7 @@ pub struct Subject {
     pub sub: String,
 }
 
-/// Audience identifies the recipients the token is intended for (key 3).
+/// The recipients the token is intended for (key 3).
 #[derive(Clone, Debug, PartialEq, Eq, Cbor)]
 pub struct Audience {
     /// Intended audience, a URI or any string the ecosystem agrees on.
@@ -41,7 +41,7 @@ pub struct Audience {
     pub aud: String,
 }
 
-/// Expiration is the time on or after which the token must not be accepted (key 4).
+/// The time on or after which the token must not be accepted (key 4).
 #[derive(Clone, Debug, PartialEq, Eq, Cbor)]
 pub struct Expiration {
     /// Expiration time, seconds since the Unix epoch. Rejected at or after.
@@ -49,7 +49,7 @@ pub struct Expiration {
     pub exp: u64,
 }
 
-/// NotBefore is the time before which the token must not be accepted (key 5).
+/// The time before which the token must not be accepted (key 5).
 #[derive(Clone, Debug, PartialEq, Eq, Cbor)]
 pub struct NotBefore {
     /// Not-before time, seconds since the Unix epoch. Rejected before.
@@ -57,7 +57,7 @@ pub struct NotBefore {
     pub nbf: u64,
 }
 
-/// IssuedAt is the time at which the token was issued (key 6).
+/// The time at which the token was issued (key 6).
 #[derive(Clone, Debug, PartialEq, Eq, Cbor)]
 pub struct IssuedAt {
     /// Issue time, seconds since the Unix epoch.
@@ -65,7 +65,7 @@ pub struct IssuedAt {
     pub iat: u64,
 }
 
-/// TokenID is a unique identifier for the token (key 7).
+/// A unique identifier for the token (key 7).
 #[derive(Clone, Debug, PartialEq, Eq, Cbor)]
 pub struct TokenId {
     /// Token identifier, opaque bytes unique per token.
@@ -134,7 +134,7 @@ impl sealed::ConfirmKeySealed for xhpke::PublicKey {
 
 impl ConfirmKey for xhpke::PublicKey {}
 
-/// Confirm binds a public key to the token via the cnf claim (key 8, RFC 8747).
+/// The public key bound to the token through the cnf claim (key 8, RFC 8747).
 /// The COSE_Key wrapping is handled internally.
 ///
 /// A verified token authenticates this key binding, but does not prove that
