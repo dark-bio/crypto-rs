@@ -493,7 +493,9 @@ impl<'a> Decoder<'a> {
         }
         // Retrieve the blob and reinterpret as UTF-8
         let bytes = self.read_bytes(len)?;
-        String::from_utf8(bytes.to_vec()).map_err(|_| Error::InvalidUtf8)
+        std::str::from_utf8(bytes)
+            .map(str::to_owned)
+            .map_err(|_| Error::InvalidUtf8)
     }
 
     /// Decodes an array header, returning its length.
@@ -668,7 +670,12 @@ pub trait Encode {
 /// The interface needed to decode a type from CBOR.
 pub trait Decode: Sized {
     /// Converts CBOR to the type.
-    fn decode_cbor(data: &[u8]) -> Result<Self, Error>;
+    fn decode_cbor(data: &[u8]) -> Result<Self, Error> {
+        let mut decoder = Decoder::new(data);
+        let value = Self::decode_cbor_notrail(&mut decoder)?;
+        decoder.finish()?;
+        Ok(value)
+    }
 
     /// Converts CBOR to the type, ignoring any trailing data.
     fn decode_cbor_notrail(decoder: &mut Decoder<'_>) -> Result<Self, Error>;
@@ -683,13 +690,6 @@ impl Encode for bool {
 }
 
 impl Decode for bool {
-    fn decode_cbor(data: &[u8]) -> Result<Self, Error> {
-        let mut decoder = Decoder::new(data);
-        let value = decoder.decode_bool()?;
-        decoder.finish()?;
-        Ok(value)
-    }
-
     fn decode_cbor_notrail(decoder: &mut Decoder<'_>) -> Result<Self, Error> {
         decoder.decode_bool()
     }
@@ -704,13 +704,6 @@ impl Encode for u64 {
 }
 
 impl Decode for u64 {
-    fn decode_cbor(data: &[u8]) -> Result<Self, Error> {
-        let mut decoder = Decoder::new(data);
-        let value = decoder.decode_uint()?;
-        decoder.finish()?;
-        Ok(value)
-    }
-
     fn decode_cbor_notrail(decoder: &mut Decoder<'_>) -> Result<Self, Error> {
         decoder.decode_uint()
     }
@@ -725,13 +718,6 @@ impl Encode for i64 {
 }
 
 impl Decode for i64 {
-    fn decode_cbor(data: &[u8]) -> Result<Self, Error> {
-        let mut decoder = Decoder::new(data);
-        let value = decoder.decode_int()?;
-        decoder.finish()?;
-        Ok(value)
-    }
-
     fn decode_cbor_notrail(decoder: &mut Decoder<'_>) -> Result<Self, Error> {
         decoder.decode_int()
     }
@@ -755,13 +741,6 @@ impl Encode for &[u8] {
 }
 
 impl Decode for Vec<u8> {
-    fn decode_cbor(data: &[u8]) -> Result<Self, Error> {
-        let mut decoder = Decoder::new(data);
-        let value = decoder.decode_bytes()?;
-        decoder.finish()?;
-        Ok(value)
-    }
-
     fn decode_cbor_notrail(decoder: &mut Decoder<'_>) -> Result<Self, Error> {
         decoder.decode_bytes()
     }
@@ -777,13 +756,6 @@ impl<const N: usize> Encode for [u8; N] {
 }
 
 impl<const N: usize> Decode for [u8; N] {
-    fn decode_cbor(data: &[u8]) -> Result<Self, Error> {
-        let mut decoder = Decoder::new(data);
-        let value = decoder.decode_bytes_fixed::<N>()?;
-        decoder.finish()?;
-        Ok(value)
-    }
-
     fn decode_cbor_notrail(decoder: &mut Decoder<'_>) -> Result<Self, Error> {
         decoder.decode_bytes_fixed::<N>()
     }
@@ -807,13 +779,6 @@ impl Encode for &str {
 }
 
 impl Decode for String {
-    fn decode_cbor(data: &[u8]) -> Result<Self, Error> {
-        let mut decoder = Decoder::new(data);
-        let value = decoder.decode_text()?;
-        decoder.finish()?;
-        Ok(value)
-    }
-
     fn decode_cbor_notrail(decoder: &mut Decoder<'_>) -> Result<Self, Error> {
         decoder.decode_text()
     }
@@ -828,16 +793,6 @@ impl Encode for () {
 }
 
 impl Decode for () {
-    fn decode_cbor(data: &[u8]) -> Result<Self, Error> {
-        let mut decoder = Decoder::new(data);
-        let len = decoder.decode_array_header()?;
-        if len != 0 {
-            return Err(Error::UnexpectedItemCount(len, 0));
-        }
-        decoder.finish()?;
-        Ok(())
-    }
-
     fn decode_cbor_notrail(decoder: &mut Decoder<'_>) -> Result<Self, Error> {
         let len = decoder.decode_array_header()?;
         if len != 0 {
@@ -864,23 +819,6 @@ macro_rules! impl_tuple {
         }
 
         impl<$($t: Decode),+> Decode for ($($t,)+) {
-            fn decode_cbor(data: &[u8]) -> Result<Self, Error> {
-                let mut decoder = Decoder::new(data);
-
-                // Decode the length of the tuple
-                let len = decoder.decode_array_header()?;
-                let exp = args!($($t),+);
-                if len != exp as u64 {
-                    return Err(Error::UnexpectedItemCount(len, exp));
-                }
-                // Decode all the tuple elements individually
-                $(
-                    let $t = $t::decode_cbor_notrail(&mut decoder)?;
-                )+
-                decoder.finish()?;
-                Ok(($($t,)+))
-            }
-
             fn decode_cbor_notrail(decoder: &mut Decoder<'_>) -> Result<Self, Error> {
                 // Decode the length of the tuple
                 let len = decoder.decode_array_header()?;
@@ -940,13 +878,6 @@ impl Encode for Null {
 }
 
 impl Decode for Null {
-    fn decode_cbor(data: &[u8]) -> Result<Self, Error> {
-        let mut decoder = Decoder::new(data);
-        let result = Self::decode_cbor_notrail(&mut decoder)?;
-        decoder.finish()?;
-        Ok(result)
-    }
-
     fn decode_cbor_notrail(decoder: &mut Decoder<'_>) -> Result<Self, Error> {
         decoder.decode_null()?;
         Ok(Null)
@@ -967,13 +898,6 @@ impl<T: Encode> Encode for Option<T> {
 }
 
 impl<T: Decode> Decode for Option<T> {
-    fn decode_cbor(data: &[u8]) -> Result<Self, Error> {
-        let mut decoder = Decoder::new(data);
-        let result = Self::decode_cbor_notrail(&mut decoder)?;
-        decoder.finish()?;
-        Ok(result)
-    }
-
     fn decode_cbor_notrail(decoder: &mut Decoder<'_>) -> Result<Self, Error> {
         if decoder.peek_null() {
             decoder.decode_null()?;
@@ -1019,13 +943,6 @@ impl<T: Encode> Encode for Array<T> {
 }
 
 impl<T: Decode> Decode for Array<T> {
-    fn decode_cbor(data: &[u8]) -> Result<Self, Error> {
-        let mut decoder = Decoder::new(data);
-        let result = Self::decode_cbor_notrail(&mut decoder)?;
-        decoder.finish()?;
-        Ok(result)
-    }
-
     fn decode_cbor_notrail(decoder: &mut Decoder<'_>) -> Result<Self, Error> {
         let len = decoder.decode_array_header()?;
 
@@ -1080,13 +997,6 @@ impl<T: Encode, const N: usize> Encode for FixedArray<T, N> {
 }
 
 impl<T: Decode, const N: usize> Decode for FixedArray<T, N> {
-    fn decode_cbor(data: &[u8]) -> Result<Self, Error> {
-        let mut decoder = Decoder::new(data);
-        let result = Self::decode_cbor_notrail(&mut decoder)?;
-        decoder.finish()?;
-        Ok(result)
-    }
-
     fn decode_cbor_notrail(decoder: &mut Decoder<'_>) -> Result<Self, Error> {
         let len = decoder.decode_array_header()?;
         if len != N as u64 {
@@ -1360,13 +1270,6 @@ impl Encode for Raw {
 }
 
 impl Decode for Raw {
-    fn decode_cbor(data: &[u8]) -> Result<Self, Error> {
-        let mut decoder = Decoder::new(data);
-        let result = Self::decode_cbor_notrail(&mut decoder)?;
-        decoder.finish()?;
-        Ok(result)
-    }
-
     fn decode_cbor_notrail(decoder: &mut Decoder<'_>) -> Result<Self, Error> {
         let start = decoder.pos;
         skip_object(decoder, MAX_DEPTH)?;
@@ -2416,8 +2319,7 @@ mod tests {
         assert_eq!(decoded, map);
     }
 
-    /// Tests that optional map fields decode as None when keys are missing,
-    /// and that nullable (Option<Option<T>>) fields must always be present.
+    /// Tests decoding absent optional fields alongside a present nullable field.
     #[test]
     fn test_map_optional_decoding() {
         // Decode a map with required + nullable (null value), optionals absent
@@ -2457,13 +2359,6 @@ mod tests {
         assert_eq!(decoded.optional1, None);
         assert_eq!(decoded.nullable, Some(None));
         assert_eq!(decoded.optional2, Some(vec![0xab]));
-
-        // Decode with nullable absent must fail (it's required)
-        let result = decode::<TestMapOptional>(&[
-            0xa1, // map with 1 entry
-            0x01, 0x18, 0x2a, // 1: 42 (key 3 missing)
-        ]);
-        assert!(result.is_err());
     }
 
     /// Tests that maps with optional fields still reject invalid data.

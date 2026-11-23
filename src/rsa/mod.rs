@@ -275,10 +275,12 @@ impl SecretKey {
 /// SHA256 as the underlying hash algorithm. Whilst RSA could also be used for
 /// decryption, that is not exposed on the API as it's not required by the
 /// project.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PublicKey {
     inner: rsa::pkcs1v15::VerifyingKey<Sha256>,
 }
+
+impl Eq for PublicKey {}
 
 impl PublicKey {
     /// Parses a 264-byte array into a public key.
@@ -430,11 +432,6 @@ impl crate::cbor::Encode for PublicKey {
 
 #[cfg(feature = "cbor")]
 impl crate::cbor::Decode for PublicKey {
-    fn decode_cbor(data: &[u8]) -> Result<Self, crate::cbor::Error> {
-        let bytes = <[u8; PUBLIC_KEY_SIZE]>::decode_cbor(data)?;
-        Self::from_bytes(&bytes).map_err(|e| crate::cbor::Error::DecodeFailed(e.to_string()))
-    }
-
     fn decode_cbor_notrail(
         decoder: &mut crate::cbor::Decoder<'_>,
     ) -> Result<Self, crate::cbor::Error> {
@@ -485,11 +482,6 @@ impl crate::cbor::Encode for Signature {
 
 #[cfg(feature = "cbor")]
 impl crate::cbor::Decode for Signature {
-    fn decode_cbor(data: &[u8]) -> Result<Self, crate::cbor::Error> {
-        let bytes = <[u8; SIGNATURE_SIZE]>::decode_cbor(data)?;
-        Ok(Self::from_bytes(&bytes))
-    }
-
     fn decode_cbor_notrail(
         decoder: &mut crate::cbor::Decoder<'_>,
     ) -> Result<Self, crate::cbor::Error> {
@@ -499,7 +491,7 @@ impl crate::cbor::Decode for Signature {
 }
 
 /// An RSA key fingerprint (SHA256 hash).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Fingerprint([u8; FINGERPRINT_SIZE]);
 
 impl Fingerprint {
@@ -540,11 +532,6 @@ impl crate::cbor::Encode for Fingerprint {
 
 #[cfg(feature = "cbor")]
 impl crate::cbor::Decode for Fingerprint {
-    fn decode_cbor(data: &[u8]) -> Result<Self, crate::cbor::Error> {
-        let bytes = <[u8; FINGERPRINT_SIZE]>::decode_cbor(data)?;
-        Ok(Self::from_bytes(&bytes))
-    }
-
     fn decode_cbor_notrail(
         decoder: &mut crate::cbor::Decoder<'_>,
     ) -> Result<Self, crate::cbor::Error> {
@@ -763,15 +750,8 @@ JJXbL24vf1AajzeJk6CpdQ==
         assert_eq!(key.to_pem().trim(), input.trim());
     }
 
-    /// Tests that a PEM encoded RSA public key can be decoded and re-encoded to
-    /// the same string. The purpose is not to battle-test the PEM implementation,
-    /// rather to ensure that the code implements the PEM format other subsystems
-    /// expect.
-    #[test]
-    fn test_publickey_pem_codec() {
-        // Generated with:
-        //   openssl rsa -in test.key -pubout -out test.pub
-        let input = "\
+    /// Public key exported via `openssl rsa -in test.key -pubout -out test.pub`.
+    const PUBLIC_KEY_PEM: &str = "\
 -----BEGIN PUBLIC KEY-----
 MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsCy10x2mE+e8jR2U+gU5
 ySA2ifBk57tOT58EEHFe14KJteuE+dqmjJr7CvzxpczM0HaPWI2CrBMWRBJZSXuD
@@ -782,6 +762,10 @@ YJoF1y4tgZENG9svBTrg/yYwVy+CrPZ1FZ/5zDGhYQ8Zi92WfQLrwfeAEQdDL7mY
 fQIDAQAB
 -----END PUBLIC KEY-----";
 
+    /// Tests round-tripping an OpenSSL public key through PEM.
+    #[test]
+    fn test_publickey_pem_codec() {
+        let input = PUBLIC_KEY_PEM;
         let key = PublicKey::from_pem(input).unwrap();
         assert_eq!(key.to_pem().trim(), input.trim());
     }
@@ -1003,33 +987,44 @@ fQIDAQAB
         assert_eq!(hex::encode(key.fingerprint().to_bytes()), input);
     }
 
-    /// Tests signing and verifying messages. Note, this test is not meant to test
-    /// cryptography, it is mostly an API sanity check to verify that everything
-    /// seems to work.
-    ///
-    /// TODO(karalabe): Get some live test vectors for a bit more sanity
+    /// Tests message and prehash verification with valid, altered, and wrong-key inputs.
     #[test]
     fn test_sign_verify() {
-        // Create the keys for Alice
         let secret = SecretKey::generate();
         let public = secret.public_key();
+        let other = PublicKey::from_pem(PUBLIC_KEY_PEM).unwrap();
+        let message = b"message to authenticate".as_slice();
+        let signature = secret.sign(message);
+        let mut tampered = signature.clone();
+        tampered.0[0] ^= 1;
 
-        // Run a bunch of different authentication/encryption combinations
-        struct TestCase<'a> {
-            message: &'a [u8],
+        for (key, message, sig, expected) in [
+            (&public, message, &signature, Ok(())),
+            (
+                &public,
+                b"changed".as_slice(),
+                &signature,
+                Err(Error::InvalidSignature),
+            ),
+            (&public, message, &tampered, Err(Error::InvalidSignature)),
+            (&other, message, &signature, Err(Error::InvalidSignature)),
+        ] {
+            assert_eq!(key.verify(message, sig), expected);
+            assert_eq!(key.verify_hash(&Sha256::digest(message), sig), expected);
         }
-        let tests = [TestCase {
-            message: b"message to authenticate",
-        }];
+    }
 
-        for tt in &tests {
-            // Sign the message using the test case data
-            let signature = secret.sign(tt.message);
+    /// Tests round-tripping a public key through JSON and CBOR.
+    #[test]
+    fn test_publickey_serde_roundtrip() {
+        let key = PublicKey::from_pem(PUBLIC_KEY_PEM).unwrap();
+        let json = serde_json::to_string(&key).unwrap();
+        assert_eq!(serde_json::from_str::<PublicKey>(&json).unwrap(), key);
 
-            // Verify the signature message
-            public
-                .verify(tt.message, &signature)
-                .unwrap_or_else(|e| panic!("failed to verify message: {}", e));
+        #[cfg(feature = "cbor")]
+        {
+            let bytes = crate::cbor::encode(&key).unwrap();
+            assert_eq!(crate::cbor::decode::<PublicKey>(&bytes).unwrap(), key);
         }
     }
 

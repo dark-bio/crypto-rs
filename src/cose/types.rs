@@ -6,6 +6,8 @@
 
 //! COSE structure types with CBOR serialization.
 
+use zeroize::Zeroize;
+
 use crate::cbor::Cbor;
 use crate::{xdsa, xhpke};
 
@@ -63,6 +65,9 @@ pub struct EncapKeyHeader {
 
 /// COSE_Sign1 structure per RFC 9052 Section 4.2.
 ///
+/// The payload is wiped when the value is dropped because signed envelopes can
+/// carry plaintext secrets.
+///
 /// ```text
 /// COSE_Sign1 = [
 ///     protected:   bstr,
@@ -82,6 +87,12 @@ pub struct CoseSign1 {
     pub payload: Option<Vec<u8>>,
     /// Signature (fixed size for xDSA)
     pub signature: xdsa::Signature,
+}
+
+impl Drop for CoseSign1 {
+    fn drop(&mut self) {
+        self.payload.zeroize();
+    }
 }
 
 /// COSE_Encrypt0 structure per RFC 9052 Section 5.2.

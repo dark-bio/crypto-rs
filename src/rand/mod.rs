@@ -28,10 +28,9 @@ mod tests {
     /// quality of the generated random numbers.
     #[test]
     fn test_generate() {
-        generate(0);
-        generate(1);
-        generate(32);
-        generate(33);
-        generate(1024 * 1024);
+        for len in [0, 1, 32, 33, 1024 * 1024] {
+            assert_eq!(generate(len).len(), len);
+        }
+        assert_ne!(generate(32), generate(32));
     }
 }

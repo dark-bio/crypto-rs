@@ -554,11 +554,6 @@ impl crate::cbor::Encode for PublicKey {
 
 #[cfg(feature = "cbor")]
 impl crate::cbor::Decode for PublicKey {
-    fn decode_cbor(data: &[u8]) -> Result<Self, crate::cbor::Error> {
-        let bytes = <[u8; PUBLIC_KEY_SIZE]>::decode_cbor(data)?;
-        Self::from_bytes(&bytes).map_err(|e| crate::cbor::Error::DecodeFailed(e.to_string()))
-    }
-
     fn decode_cbor_notrail(
         decoder: &mut crate::cbor::Decoder<'_>,
     ) -> Result<Self, crate::cbor::Error> {
@@ -568,7 +563,7 @@ impl crate::cbor::Decode for PublicKey {
 }
 
 /// A 256-bit unique identifier for an HPKE key.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Fingerprint([u8; FINGERPRINT_SIZE]);
 
 impl Fingerprint {
@@ -609,11 +604,6 @@ impl crate::cbor::Encode for Fingerprint {
 
 #[cfg(feature = "cbor")]
 impl crate::cbor::Decode for Fingerprint {
-    fn decode_cbor(data: &[u8]) -> Result<Self, crate::cbor::Error> {
-        let bytes = <[u8; FINGERPRINT_SIZE]>::decode_cbor(data)?;
-        Ok(Self::from_bytes(&bytes))
-    }
-
     fn decode_cbor_notrail(
         decoder: &mut crate::cbor::Decoder<'_>,
     ) -> Result<Self, crate::cbor::Error> {
@@ -746,6 +736,34 @@ OhMjnzQvynZVtuquhFoiHOs+Z/VjnGGT9v3u9X45m4CLfzqitXQKre2QFj3F13XJ
         let bytes = key.to_bytes();
         let parsed = PublicKey::from_bytes(&bytes).unwrap();
         assert_eq!(key.to_bytes(), parsed.to_bytes());
+    }
+
+    /// Tests round-tripping a public key through JSON and CBOR.
+    #[test]
+    fn test_publickey_serde_roundtrip() {
+        let key = SecretKey::from_bytes(&[7; SECRET_KEY_SIZE]).public_key();
+        let json = serde_json::to_string(&key).unwrap();
+        assert_eq!(serde_json::from_str::<PublicKey>(&json).unwrap(), key);
+
+        #[cfg(feature = "cbor")]
+        {
+            let bytes = crate::cbor::encode(&key).unwrap();
+            assert_eq!(crate::cbor::decode::<PublicKey>(&bytes).unwrap(), key);
+        }
+    }
+
+    /// Tests that either packed ML-KEM coefficient can invalidate a public key.
+    #[test]
+    fn test_publickey_rejects_malformed_mlkem() {
+        let key = SecretKey::from_bytes(&[7; SECRET_KEY_SIZE]).public_key();
+        for pair in [[0xff, 0x0f, 0], [0, 0xf0, 0xff]] {
+            let mut bytes = key.to_bytes();
+            bytes[..3].copy_from_slice(&pair);
+            assert!(matches!(
+                PublicKey::from_bytes(&bytes),
+                Err(Error::MalformedKey(_))
+            ));
+        }
     }
 
     /// Tests that a private key can be serialized to DER and parsed back.

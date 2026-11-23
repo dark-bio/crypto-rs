@@ -47,7 +47,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install wasmtime and wasm-bindgen-cli
+      - name: Install wasmtime
         run: |
           curl https://wasmtime.dev/install.sh -sSf | bash
           echo "$HOME/.wasmtime/bin" >> $GITHUB_PATH
@@ -70,6 +70,13 @@ jobs:
           CARGO_TARGET_WASM32_WASIP1_RUNNER: wasmtime
           RUSTFLAGS: -C link-arg=-zstack-size=8388608
         run: cargo hack test --each-feature --target ${{ matrix.target }}
+
+      - name: Test with all features
+        if: matrix.target == 'wasm32-wasip1'
+        env:
+          CARGO_TARGET_WASM32_WASIP1_RUNNER: wasmtime
+          RUSTFLAGS: -C link-arg=-zstack-size=8388608
+        run: cargo test --all-features --target ${{ matrix.target }}
 
   format:
     runs-on: ubuntu-latest
