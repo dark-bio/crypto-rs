@@ -49,10 +49,10 @@ use zeroize::{Zeroize, Zeroizing};
 /// Size of the payload key in bytes.
 pub const PAYLOAD_KEY_SIZE: usize = 32;
 
-/// The symmetric key encrypting or decrypting a stream.
+/// Symmetric key encrypting or decrypting a stream.
 ///
-/// The key must **never** be repeated across multiple streams. Derive it with
-/// HKDF from both a random file key and a random nonce.
+/// Never reuse a key across streams. Derive each key with HKDF from a fresh
+/// random file key and random nonce.
 pub struct PayloadKey([u8; PAYLOAD_KEY_SIZE]);
 
 impl PayloadKey {
@@ -267,8 +267,8 @@ impl<R: Read + Seek> Seek for StreamReader<R> {
     }
 }
 
-/// The STREAM construction for online authenticated encryption,
-/// instantiated with ChaCha20-Poly1305 in 64KiB chunks.
+/// STREAM construction for online authenticated encryption using
+/// ChaCha20-Poly1305 in 64 KiB chunks.
 pub struct Stream;
 
 impl Stream {

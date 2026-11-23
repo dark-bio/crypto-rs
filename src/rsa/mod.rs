@@ -4,14 +4,14 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//! RSA cryptography wrappers and parametrization.
+//! RSA-2048 digital signatures with SHA-256.
 //!
 //! <https://datatracker.ietf.org/doc/html/rfc8017>
 //!
-//! RSA-2048 with PKCS#1 v1.5 padding over SHA-256, the classical scheme kept
-//! for places where a boot ROM or a legacy system dictates it. New designs
-//! should use the `xdsa` module. Only 2048 bit moduli with the exponent 65537
-//! are accepted, and encryption is deliberately not exposed.
+//! Classical PKCS#1 v1.5 signatures over SHA-256, kept for boot ROMs and
+//! legacy systems that require RSA. Prefer the `xdsa` module for new designs.
+//! Only 2048-bit moduli with public exponent 65537 are accepted, and RSA
+//! encryption is intentionally omitted.
 //!
 //! ```no_run
 //! use darkbio_crypto::rsa;
@@ -40,64 +40,60 @@ use sha2::{Digest, Sha256};
 use spki::{DecodePublicKey, EncodePublicKey, ObjectIdentifier, SubjectPublicKeyInfo};
 use zeroize::Zeroizing;
 
-/// The ASN.1 object identifier for RSA encryption.
+/// ASN.1 object identifier for RSA encryption.
 pub const OID: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.1");
 
-/// Size of the raw secret key in bytes.
-/// Format: p (128 bytes) || q (128 bytes) || d (256 bytes) || e (8 bytes)
+/// Size of the raw secret key in bytes (`p` 128 B || `q` 128 B || `d` 256 B || `e` 8 B).
 pub const SECRET_KEY_SIZE: usize = 520;
 
-/// Size of the raw public key in bytes.
-/// Format: n (256 bytes) || e (8 bytes)
+/// Size of the raw public key in bytes (`n` 256 B || `e` 8 B).
 pub const PUBLIC_KEY_SIZE: usize = 264;
 
-/// Size of an RSA-2048 signature.
+/// Size of an RSA-2048 signature in bytes.
 pub const SIGNATURE_SIZE: usize = 256;
 
-/// Size of an RSA key fingerprint (SHA256 hash).
+/// Size of an RSA key fingerprint in bytes (SHA-256 digest).
 pub const FINGERPRINT_SIZE: usize = 32;
 
-/// Failures of the RSA operations.
+/// Failures returned by RSA operations.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
-    /// The PEM wrapper is malformed. The inner error names the rule it broke.
-    /// Raised by [`SecretKey::from_pem`] and [`PublicKey::from_pem`].
+    /// PEM wrapper is malformed; the inner error identifies the broken rule.
+    /// Returned by [`SecretKey::from_pem`] and [`PublicKey::from_pem`].
     #[error("pem: {0}")]
     Pem(#[from] pem::Error),
-    /// The PEM block type is not the expected one, `PRIVATE KEY` for
-    /// [`SecretKey::from_pem`] and `PUBLIC KEY` for [`PublicKey::from_pem`].
-    /// Carries the type found.
+    /// PEM block label does not match the expected one (`PRIVATE KEY` for
+    /// [`SecretKey::from_pem`] or `PUBLIC KEY` for [`PublicKey::from_pem`]).
+    /// Carries the label found.
     #[error("invalid PEM tag {0}")]
     UnexpectedPemTag(String),
-    /// The DER key names an algorithm other than RSA, see [`OID`].
-    /// Raised by [`SecretKey::from_der`]
-    /// and [`PublicKey::from_der`], and through them by the PEM parsers.
+    /// DER key identifies an algorithm other than RSA (see [`OID`]). Returned
+    /// by [`SecretKey::from_der`] and [`PublicKey::from_der`], and through them
+    /// by the PEM parsers.
     #[error("not an RSA key")]
     UnexpectedAlgorithm,
-    /// The key parsed but its contents are unusable, a modulus that is not
-    /// 2048 bits, an exponent other than 65537, primes that are not both 1024
-    /// bits, a private exponent not below the modulus, primes without a CRT
-    /// coefficient, a non-canonical encoding or an unsupported PKCS#8 version.
-    /// The message names the problem. Raised by every key constructor.
+    /// Key encoding cannot be parsed or its contents are unusable, such as a
+    /// modulus other than 2048 bits, an exponent other than 65537, primes that
+    /// are not both 1024 bits, a private exponent not below the modulus, primes
+    /// without a CRT coefficient, a non-canonical encoding, or an unsupported
+    /// PKCS#8 version. Returned by every key constructor.
     #[error("malformed key: {0}")]
     MalformedKey(String),
-    /// The signature does not verify under the key for this message or hash,
-    /// or it is not a well formed RSA-2048 signature at all. Raised by
-    /// [`PublicKey::verify`] and [`PublicKey::verify_hash`].
+    /// Signature does not verify for this key and message or digest, or is not
+    /// a well-formed RSA-2048 signature. Returned by [`PublicKey::verify`] and
+    /// [`PublicKey::verify_hash`].
     #[error("signature verification failed")]
     InvalidSignature,
 }
 
-/// A 2048-bit RSA private key usable for signing, with SHA256
-/// as the underlying hash algorithm. Whilst RSA could also be used for encryption,
-/// that is not exposed on the API as it's not required by the project.
+/// RSA-2048 private key for PKCS#1 v1.5 signing with SHA-256.
 #[derive(Clone)]
 pub struct SecretKey {
     inner: rsa::pkcs1v15::SigningKey<Sha256>,
 }
 
 impl SecretKey {
-    /// Creates a new, random private key.
+    /// Generates a random 2048-bit private key.
     pub fn generate() -> SecretKey {
         let mut rng = UnwrapErr(getrandom::SysRng);
 
@@ -106,10 +102,8 @@ impl SecretKey {
         Self { inner: sig }
     }
 
-    /// Parses a 520-byte array into a private key.
-    ///
-    /// Format: p (128 bytes) || q (128 bytes) || d (256 bytes) || e (8 bytes),
-    /// all in big-endian.
+    /// Parses a 520-byte big-endian encoding (`p` 128 B || `q` 128 B || `d`
+    /// 256 B || `e` 8 B) into a private key.
     pub fn from_bytes(bytes: &[u8; SECRET_KEY_SIZE]) -> Result<Self, Error> {
         let p = BoxedUint::from_be_slice(&bytes[0..128], 1024).unwrap();
         let q = BoxedUint::from_be_slice(&bytes[128..256], 1024).unwrap();
@@ -123,23 +117,21 @@ impl SecretKey {
         let mut key = RsaPrivateKey::from_components(n, e, d, vec![p, q])
             .map_err(|err| Error::MalformedKey(err.to_string()))?;
 
-        // The modulus must be exactly 2048 bits
+        // Require an exact 2048-bit modulus
         if key.n().bit_width() != 2048 {
             return Err(Error::MalformedKey("modulus not 2048 bits".into()));
         }
-        // Whilst the RSA algorithm permits different exponents, every modern
-        // system only ever uses 65537 and most also enforce this. Might as
-        // well do the same.
+        // Restrict the public exponent to 65537
         if *key.e() != BoxedUint::from(65537u32) {
             return Err(Error::MalformedKey("exponent not 65537".into()));
         }
-        // The private exponent must be below the modulus, as RFC 8017 requires
+        // Require the private exponent to be strictly below the modulus per RFC 8017
         if *key.d() >= **key.n() {
             return Err(Error::MalformedKey(
                 "private exponent not below modulus".into(),
             ));
         }
-        // Ensure CRT parameters are computed before returning
+        // Precompute CRT parameters so invalid prime pairs fail early
         key.precompute()
             .map_err(|_| Error::MalformedKey("invalid CRT coefficient".into()))?;
 
@@ -147,48 +139,43 @@ impl SecretKey {
         Ok(Self { inner: sig })
     }
 
-    /// Parses a DER buffer into a private key.
+    /// Parses a PKCS#8 DER buffer into a private key.
     pub fn from_der(der: &[u8]) -> Result<Self, Error> {
-        // Ensure the algorithm OID matches RSA
+        // Check that the algorithm OID matches RSA
         let info =
             PrivateKeyInfoRef::try_from(der).map_err(|err| Error::MalformedKey(err.to_string()))?;
         if info.algorithm.oid != OID {
             return Err(Error::UnexpectedAlgorithm);
         }
-        // Reject v2 keys. The decoder only ever yields v1 keys without or v2
-        // keys with an embedded public key, all other combinations fail to
-        // parse, so public key presence is an exact v2 marker.
+        // Reject v2 keys. The decoder yields v1 keys without an embedded public
+        // key and v2 keys with one, so a present public key identifies v2.
         if info.public_key.is_some() {
             return Err(Error::MalformedKey("unsupported PKCS#8 version".into()));
         }
         let inner = rsa::pkcs1v15::SigningKey::<Sha256>::from_pkcs8_der(der)
             .map_err(|err| Error::MalformedKey(err.to_string()))?;
 
-        // The modulus must be exactly 2048 bits
+        // Require an exact 2048-bit modulus
         let key: &RsaPrivateKey = inner.as_ref();
         if key.n().bit_width() != 2048 {
             return Err(Error::MalformedKey("modulus not 2048 bits".into()));
         }
-        // Whilst the RSA algorithm permits different exponents, every modern
-        // system only ever uses 65537 and most also enforce this. Might as
-        // well do the same.
+        // Restrict the public exponent to 65537
         if *key.e() != BoxedUint::from(65537u32) {
             return Err(Error::MalformedKey("exponent not 65537".into()));
         }
-        // Both primes must be exactly 1024 bits, as the raw encoding has no room
-        // for any other split of the modulus
+        // Require two 1024-bit primes so the key fits the fixed-width raw encoding
         if key.primes().iter().any(|prime| prime.bit_width() != 1024) {
             return Err(Error::MalformedKey("primes not 1024 bits".into()));
         }
-        // The private exponent must be below the modulus, as RFC 8017 requires
+        // Require the private exponent to be strictly below the modulus per RFC 8017
         if *key.d() >= **key.n() {
             return Err(Error::MalformedKey(
                 "private exponent not below modulus".into(),
             ));
         }
-        // The upstream rsa crate ignores CRT parameters (dP, dQ, qInv) and
-        // recomputes them, accepting malformed values. We don't want to allow
-        // that, so just round trip the format and see if it's matching or not.
+        // Re-encode and compare because the upstream rsa crate recomputes CRT
+        // parameters instead of validating the ones present in DER
         let recoded = rsa::pkcs1v15::SigningKey::<Sha256>::to_pkcs8_der(&inner)
             .map_err(|err| Error::MalformedKey(err.to_string()))?;
         if recoded.as_bytes() != der {
@@ -197,21 +184,17 @@ impl SecretKey {
         Ok(Self { inner })
     }
 
-    /// Parses a PEM string into a private key.
+    /// Parses a PKCS#8 PEM string into a private key.
     pub fn from_pem(pem_str: &str) -> Result<Self, Error> {
-        // Crack open the PEM to get to the private key info
         let (kind, data) = pem::decode(pem_str.as_bytes())?;
         if kind != "PRIVATE KEY" {
             return Err(Error::UnexpectedPemTag(kind));
         }
-        // Parse the DER content
         Self::from_der(&data)
     }
 
-    /// Serializes a private key into a 520-byte array.
-    ///
-    /// Format: p (128 bytes) || q (128 bytes) || d (256 bytes) || e (8 bytes),
-    /// all in big-endian.
+    /// Serializes the private key into a 520-byte big-endian array (`p` 128 B
+    /// || `q` 128 B || `d` 256 B || `e` 8 B).
     pub fn to_bytes(&self) -> Zeroizing<[u8; SECRET_KEY_SIZE]> {
         let key: &RsaPrivateKey = self.inner.as_ref();
         let primes = key.primes();
@@ -233,7 +216,7 @@ impl SecretKey {
         out
     }
 
-    /// Serializes a private key into a DER buffer.
+    /// Serializes the private key into PKCS#8 DER.
     pub fn to_der(&self) -> Zeroizing<Vec<u8>> {
         Zeroizing::new(
             rsa::pkcs1v15::SigningKey::<Sha256>::to_pkcs8_der(&self.inner)
@@ -243,38 +226,34 @@ impl SecretKey {
         )
     }
 
-    /// Serializes a private key into a PEM string.
+    /// Serializes the private key into PKCS#8 PEM.
     pub fn to_pem(&self) -> Zeroizing<String> {
         Zeroizing::new(pem::encode("PRIVATE KEY", &self.to_der()))
     }
 
-    /// Retrieves the public counterpart of the secret key.
+    /// Derives the corresponding public key.
     pub fn public_key(&self) -> PublicKey {
         let key = self.inner.verifying_key();
         PublicKey { inner: key }
     }
 
-    /// Returns a 256-bit unique identifier for this key. For RSA, that
-    /// is the SHA256 hash of the raw (le modulus || le exponent) public key.
+    /// Returns the 256-bit key fingerprint, computed as the SHA-256 hash of
+    /// the little-endian modulus concatenated with the little-endian exponent.
     pub fn fingerprint(&self) -> Fingerprint {
         self.public_key().fingerprint()
     }
 
-    /// Creates a digital signature of the message.
+    /// Signs `message` with PKCS#1 v1.5 over SHA-256.
     pub fn sign(&self, message: &[u8]) -> Signature {
-        // Blind the private key operation with fresh randomness, so its timing
-        // does not correlate with the message. The signature is identical to an
-        // unblinded one.
+        // Blind the private-key operation with fresh randomness so timing does
+        // not correlate with the message; the signature bytes stay unchanged.
         let mut rng = UnwrapErr(getrandom::SysRng);
         let sig = self.inner.sign_with_rng(&mut rng, message);
         Signature(sig.to_bytes().as_ref().try_into().unwrap())
     }
 }
 
-/// A 2048-bit RSA public key usable for verification, with
-/// SHA256 as the underlying hash algorithm. Whilst RSA could also be used for
-/// decryption, that is not exposed on the API as it's not required by the
-/// project.
+/// RSA-2048 public key for PKCS#1 v1.5 signature verification with SHA-256.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PublicKey {
     inner: rsa::pkcs1v15::VerifyingKey<Sha256>,
@@ -283,20 +262,17 @@ pub struct PublicKey {
 impl Eq for PublicKey {}
 
 impl PublicKey {
-    /// Parses a 264-byte array into a public key.
-    ///
-    /// Format: n (256 bytes) || e (8 bytes), all in big-endian.
+    /// Parses a 264-byte big-endian encoding (`n` 256 B || `e` 8 B) into a
+    /// public key.
     pub fn from_bytes(bytes: &[u8; PUBLIC_KEY_SIZE]) -> Result<Self, Error> {
         let n = BoxedUint::from_be_slice(&bytes[0..256], 2048).unwrap();
         let e = BoxedUint::from_be_slice(&bytes[256..264], 64).unwrap();
 
-        // The modulus must be exactly 2048 bits
+        // Require an exact 2048-bit modulus
         if n.bit_width() != 2048 {
             return Err(Error::MalformedKey("modulus not 2048 bits".into()));
         }
-        // Whilst the RSA algorithm permits different exponents, every modern
-        // system only ever uses 65537 and most also enforce this. Might as
-        // well do the same.
+        // Restrict the public exponent to 65537
         if e != BoxedUint::from(65537u32) {
             return Err(Error::MalformedKey("exponent not 65537".into()));
         }
@@ -305,9 +281,9 @@ impl PublicKey {
         Ok(Self { inner })
     }
 
-    /// Parses a DER buffer into a public key.
+    /// Parses an SPKI DER buffer into a public key.
     pub fn from_der(der: &[u8]) -> Result<Self, Error> {
-        // Ensure the algorithm OID matches RSA
+        // Check that the algorithm OID matches RSA
         let info: SubjectPublicKeyInfo<AnyRef, BitStringRef> = SubjectPublicKeyInfo::from_der(der)
             .map_err(|err| Error::MalformedKey(err.to_string()))?;
         if info.algorithm.oid != OID {
@@ -316,34 +292,29 @@ impl PublicKey {
         let inner = rsa::pkcs1v15::VerifyingKey::<Sha256>::from_public_key_der(der)
             .map_err(|err| Error::MalformedKey(err.to_string()))?;
 
-        // The modulus must be exactly 2048 bits
+        // Require an exact 2048-bit modulus
         let key: &RsaPublicKey = inner.as_ref();
         if key.n().bit_width() != 2048 {
             return Err(Error::MalformedKey("modulus not 2048 bits".into()));
         }
-        // Whilst the RSA algorithm permits different exponents, every modern
-        // system only ever uses 65537 and most also enforce this. Might as
-        // well do the same.
+        // Restrict the public exponent to 65537
         if *key.e() != BoxedUint::from(65537u32) {
             return Err(Error::MalformedKey("exponent not 65537".into()));
         }
         Ok(Self { inner })
     }
 
-    /// Parses a PEM string into a public key.
+    /// Parses an SPKI PEM string into a public key.
     pub fn from_pem(pem_str: &str) -> Result<Self, Error> {
-        // Crack open the PEM to get to the public key info
         let (kind, data) = pem::decode(pem_str.as_bytes())?;
         if kind != "PUBLIC KEY" {
             return Err(Error::UnexpectedPemTag(kind));
         }
-        // Parse the DER content
         Self::from_der(&data)
     }
 
-    /// Serializes a public key into a 264-byte array.
-    ///
-    /// Format: n (256 bytes) || e (8 bytes), all in big-endian.
+    /// Serializes the public key into a 264-byte big-endian array (`n` 256 B ||
+    /// `e` 8 B).
     pub fn to_bytes(&self) -> [u8; PUBLIC_KEY_SIZE] {
         let key: &RsaPublicKey = self.inner.as_ref();
 
@@ -358,7 +329,7 @@ impl PublicKey {
         out
     }
 
-    /// Serializes a public key into a DER buffer.
+    /// Serializes the public key into SPKI DER.
     pub fn to_der(&self) -> Vec<u8> {
         rsa::pkcs1v15::VerifyingKey::<Sha256>::to_public_key_der(&self.inner)
             .unwrap()
@@ -366,13 +337,13 @@ impl PublicKey {
             .to_vec()
     }
 
-    /// Serializes a public key into a PEM string.
+    /// Serializes the public key into SPKI PEM.
     pub fn to_pem(&self) -> String {
         pem::encode("PUBLIC KEY", &self.to_der())
     }
 
-    /// Returns a 256-bit unique identifier for this key. For RSA, that
-    /// is the SHA256 hash of the raw (le modulus || le exponent) public key.
+    /// Returns the 256-bit key fingerprint, computed as the SHA-256 hash of
+    /// the little-endian modulus concatenated with the little-endian exponent.
     pub fn fingerprint(&self) -> Fingerprint {
         let pubkey: &RsaPublicKey = self.inner.as_ref();
 
@@ -387,7 +358,7 @@ impl PublicKey {
         Fingerprint(hasher.finalize().into())
     }
 
-    /// Verifies a digital signature.
+    /// Verifies `signature` over `message`.
     pub fn verify(&self, message: &[u8], signature: &Signature) -> Result<(), Error> {
         let sig = rsa::pkcs1v15::Signature::try_from(signature.to_bytes().as_slice())
             .map_err(|_| Error::InvalidSignature)?;
@@ -396,7 +367,7 @@ impl PublicKey {
             .map_err(|_| Error::InvalidSignature)
     }
 
-    /// Verifies a digital signature on an already hashed message.
+    /// Verifies `signature` over a pre-computed SHA-256 digest.
     pub fn verify_hash(&self, hash: &[u8], signature: &Signature) -> Result<(), Error> {
         let sig = rsa::pkcs1v15::Signature::try_from(signature.to_bytes().as_slice())
             .map_err(|_| Error::InvalidSignature)?;
@@ -490,7 +461,7 @@ impl crate::cbor::Decode for Signature {
     }
 }
 
-/// An RSA key fingerprint (SHA256 hash).
+/// RSA key fingerprint (SHA-256 digest).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Fingerprint([u8; FINGERPRINT_SIZE]);
 
@@ -570,9 +541,8 @@ fn copy_le_padded(src: &[u8], dst: &mut [u8]) {
 mod tests {
     use super::*;
 
-    /// Tests that a raw byte encoded RSA private key can be decoded and re-encoded
-    /// to the same bytes. The purpose is not to battle-test the implementation,
-    /// rather to ensure that the code implements the format other subsystems expect.
+    /// Tests that an OpenSSL-generated RSA private key round-trips through raw
+    /// bytes unchanged.
     #[test]
     fn test_secretkey_bytes_codec() {
         // Generated with:
@@ -609,9 +579,8 @@ c9ab9ccdd77b098fc6c0c647ed663781";
         assert_eq!(hex::encode(key.to_bytes()), input);
     }
 
-    /// Tests that a raw byte encoded RSA private key is rejected if its primes
-    /// repeat, as it would fail to encode as DER, or if its private exponent is
-    /// not below the modulus.
+    /// Tests that a raw byte-encoded RSA private key is rejected if its primes
+    /// repeat or its private exponent is not below the modulus.
     #[test]
     fn test_secretkey_bytes_malformed() {
         // A key with p = q = 2^1024 - 1 and d = 65537^-1 mod (p - 1)
@@ -681,9 +650,8 @@ ad60373d51a9cf92aa7ca7640ebf99e9";
         }
     }
 
-    /// Tests that a raw byte encoded RSA public key can be decoded and re-encoded
-    /// to the same bytes. The purpose is not to battle-test the implementation,
-    /// rather to ensure that the code implements the format other subsystems expect.
+    /// Tests that an OpenSSL-generated RSA public key round-trips through raw
+    /// bytes unchanged.
     #[test]
     fn test_publickey_bytes_codec() {
         // Generated with:
@@ -708,10 +676,8 @@ f78fcdf089bc2cb4086af8a7980637fb9cf0b4ed86d6a21208ae5a4e49d1\
         assert_eq!(hex::encode(key.to_bytes()), input);
     }
 
-    /// Tests that a PEM encoded RSA private key can be decoded and re-encoded to
-    /// the same string. The purpose is not to battle-test the PEM implementation,
-    /// rather to ensure that the code implements the PEM format other subsystems
-    /// expect.
+    /// Tests that an OpenSSL-generated RSA private key round-trips through PEM
+    /// unchanged.
     #[test]
     fn test_secretkey_pem_codec() {
         // Generated with:
@@ -770,10 +736,8 @@ fQIDAQAB
         assert_eq!(key.to_pem().trim(), input.trim());
     }
 
-    /// Tests that a DER encoded RSA private key can be decoded and re-encoded to
-    /// the same string. The purpose is not to battle-test the DER implementation,
-    /// rather to ensure that the code implements the DER format other subsystems
-    /// expect.
+    /// Tests that an OpenSSL-generated RSA private key round-trips through DER
+    /// unchanged.
     #[test]
     fn test_privatekey_der_codec() {
         // Generated with:
@@ -827,9 +791,8 @@ df0b68ce2f17835c36ad7abc86fffecbbf145eb285be596b02818022dadb\
         assert_eq!(hex::encode(key.to_der()), input);
     }
 
-    /// Tests that a DER encoded RSA private key is rejected unless both its
-    /// primes are 1024 bits and its private exponent is below the modulus, as
-    /// the raw encoding could not hold it otherwise.
+    /// Tests that a DER-encoded RSA private key is rejected unless both primes
+    /// are 1024 bits and the private exponent is below the modulus.
     #[test]
     fn test_privatekey_der_malformed() {
         // A 1025-bit and a 1023-bit prime spanning a 2048-bit modulus
@@ -859,9 +822,9 @@ e6dab8b74032f857";
             .invert_mod(&unbalanced_totient.to_nz().unwrap())
             .unwrap();
 
-        // A valid key with (p - 1)(q - 1) shifted past 2048 bits added to its
-        // private exponent, encoded directly into PKCS#8 DER since rsa 0.10
-        // refuses to construct a key with d >= n in memory
+        // Build a valid key with (p - 1)(q - 1) shifted past 2048 bits added to
+        // its private exponent, encoded directly into PKCS#8 DER because
+        // RsaPrivateKey rejects d >= n in memory
         let secret = SecretKey::generate();
         let balanced: &RsaPrivateKey = secret.inner.as_ref();
         let p_minus_1 =
@@ -929,10 +892,8 @@ e6dab8b74032f857";
         }
     }
 
-    /// Tests that a DER encoded RSA public key can be decoded and re-encoded to
-    /// the same string. The purpose is not to battle-test the DER implementation,
-    /// rather to ensure that the code implements the DER format other subsystems
-    /// expect.
+    /// Tests that an OpenSSL-generated RSA public key round-trips through DER
+    /// unchanged.
     #[test]
     fn test_publickey_der_codec() {
         // Generated with:
@@ -955,9 +916,8 @@ e63b4690e757a1d234b252ee94f5f03eaabb4f3b80ff9945510c99822d2c\
         assert_eq!(hex::encode(key.to_der()), input);
     }
 
-    /// Tests that the implemented fingerprint algorithm produces the expected
-    /// checksum. The purpose is not to battle-test the implementation, rather
-    /// to ensure that the code implements the format other subsystems expect.
+    /// Tests that the RSA key fingerprint matches the SHA-256 hash of the
+    /// little-endian modulus and exponent.
     #[test]
     fn test_fingerprint() {
         // Generated with:

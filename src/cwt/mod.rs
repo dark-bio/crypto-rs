@@ -4,22 +4,20 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//! CBOR Web Tokens on top of COSE Sign1.
+//! CBOR Web Tokens over `COSE_Sign1`.
 //!
 //! <https://datatracker.ietf.org/doc/html/rfc8392>
 //!
-//! Tokens carry a set of claims encoded as a CBOR map. Standard claims are
-//! provided as embeddable single-field structs ([`claims::Issuer`],
-//! [`claims::Subject`], etc.) that can be composed into application-specific
-//! token types.
+//! Tokens carry a claims set encoded as a deterministic CBOR map. Standard
+//! claims live in [`claims`] as embeddable single-field structs (such as
+//! [`claims::Issuer`] and [`claims::Subject`]) that compose into
+//! application-specific token types.
 //!
-//! [`verify`] checks the signature against the supplied key and, when requested,
-//! the `nbf` and `exp` time bounds. Applications must establish trust in that key,
-//! check issuer and audience claims, and apply their own attestation policy.
-//! EAT claim relationships and proof of possession of a `cnf` key are not
-//! automatically checked.
-//!
-//! # Example
+//! [`verify`] checks the signature against the supplied key and, when a
+//! reference time is given, the `nbf` and `exp` bounds. Applications must
+//! establish trust in the signing key, check issuer and audience claims, and
+//! enforce their own attestation policy. EAT claim relationships and proof of
+//! possession of a `cnf` key are not checked automatically.
 //!
 //! ```
 //! use darkbio_crypto::cbor::Cbor;
@@ -29,32 +27,21 @@
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! #[derive(Cbor)]
 //! struct DeviceCert {
-//!     #[cbor(embed)]
-//!     sub: claims::Subject,
-//!     #[cbor(embed)]
-//!     exp: claims::Expiration,
-//!     #[cbor(embed)]
-//!     nbf: claims::NotBefore,
-//!     #[cbor(embed)]
-//!     cnf: claims::Confirm<xdsa::PublicKey>,
-//!     #[cbor(key = 256)]
-//!     ueid: Vec<u8>,
+//!     #[cbor(embed)] sub: claims::Subject,
+//!     #[cbor(embed)] exp: claims::Expiration,
+//!     #[cbor(embed)] nbf: claims::NotBefore,
+//!     #[cbor(embed)] cnf: claims::Confirm<xdsa::PublicKey>,
 //! }
 //!
 //! let issuer = xdsa::SecretKey::generate();
 //! let device = xdsa::SecretKey::generate();
 //! let now = 1_700_000_000;
 //!
-//! // Example RAND UEID from the generated identity: type 0x01 and 16 identifier bytes.
-//! // Provision it once and retain it for the device's lifetime, even if keys change.
-//! let ueid = [&[0x01][..], &device.fingerprint().to_bytes()[..16]].concat();
-//!
 //! let cert = DeviceCert {
 //!     sub: claims::Subject { sub: "ark-0001".into() },
 //!     exp: claims::Expiration { exp: now + 3600 },
 //!     nbf: claims::NotBefore { nbf: now },
 //!     cnf: claims::Confirm::new(device.public_key()),
-//!     ueid,
 //! };
 //! let token = cwt::issue(&cert, &issuer, b"device-cert")?;
 //!
@@ -64,8 +51,7 @@
 //! assert_eq!(verified.cnf.key().fingerprint(), device.fingerprint());
 //!
 //! // Outside the validity window the token is rejected
-//! let late = cwt::verify::<DeviceCert>(&token, &issuer.public_key(), b"device-cert", Some(now + 7200));
-//! assert!(late.is_err());
+//! assert!(cwt::verify::<DeviceCert>(&token, &issuer.public_key(), b"device-cert", Some(now + 7200)).is_err());
 //! # Ok(())
 //! # }
 //! ```
@@ -75,48 +61,44 @@ pub mod claims;
 use crate::cbor::{self, Decode, Encode, Raw};
 use crate::{cose, xdsa};
 
-/// Failures of the CWT operations.
+/// Failures returned by CWT operations.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
-    /// The token or its claims are not valid CBOR under this crate's rules.
+    /// Token or its claims are not valid CBOR under this crate's rules.
     #[error("cbor: {0}")]
     Cbor(#[from] cbor::Error),
-    /// The [`cose::CoseSign1`] envelope was rejected, a bad signature, the
-    /// wrong key or a malformed header.
+    /// Underlying [`cose::CoseSign1`] envelope failed decoding or verification.
     #[error("cose: {0}")]
     Cose(#[from] cose::Error),
-    /// [`verify`] was asked to check time but the claims carry no `nbf`, key 5.
+    /// [`verify`] requested time validation, but the claims omit `nbf` (key 5).
     #[error("missing nbf claim")]
     MissingNbf,
-    /// The claims map carries a temporal claim key twice.
+    /// Claims map repeats a temporal claim key (`exp` or `nbf`).
     #[error("duplicate claim key {0}")]
     DuplicateKey(i64),
-    /// The token's `nbf` ([`claims::NotBefore`]) lies after the time of the
-    /// check.
+    /// Token's `nbf` ([`claims::NotBefore`]) lies after the check time.
     #[error("token not yet valid: nbf {nbf} > now {now}")]
     NotYetValid {
-        /// Not-before claim, seconds since the Unix epoch.
+        /// Not-before claim in seconds since the Unix epoch.
         nbf: u64,
-        /// Time of the check, seconds since the Unix epoch.
+        /// Check time in seconds since the Unix epoch.
         now: u64,
     },
-    /// The token's `exp` ([`claims::Expiration`]) is at or before the time of
-    /// the check.
+    /// Token's `exp` ([`claims::Expiration`]) is at or before the check time.
     #[error("token already expired: exp {exp} <= now {now}")]
     AlreadyExpired {
-        /// Expiration claim, seconds since the Unix epoch.
+        /// Expiration claim in seconds since the Unix epoch.
         exp: u64,
-        /// Time of the check, seconds since the Unix epoch.
+        /// Check time in seconds since the Unix epoch.
         now: u64,
     },
 }
 
-/// Signs a set of claims as a CWT using [`cose::sign`].
+/// Signs a claims map as a CWT using [`cose::sign`] and the current system
+/// time as the COSE timestamp.
 ///
-/// The claims value must be a struct whose fields encode as a CBOR map
-/// (using `#[cbor(key = N)]` tags and/or embedded claim types).
-///
-/// Uses the current system time as the COSE signature timestamp.
+/// `claims` must encode as a deterministic CBOR map (using `#[cbor(key = N)]`
+/// fields and embedded claim types).
 pub fn issue(
     claims: &impl Encode,
     signer: &xdsa::SecretKey,
@@ -130,9 +112,8 @@ pub fn issue(
     )?)
 }
 
-/// Signs a set of claims as a CWT with an explicit COSE timestamp.
-///
-/// This is primarily useful for testing with deterministic timestamps.
+/// Signs a claims map as a CWT using [`cose::sign_at`] with an explicit Unix
+/// COSE timestamp in seconds.
 pub fn issue_at(
     claims: &impl Encode,
     signer: &xdsa::SecretKey,
@@ -148,7 +129,8 @@ pub fn issue_at(
     )?)
 }
 
-/// Encodes claims to CBOR and verifies that the payload is a canonical CBOR map.
+/// Encodes `claims` to CBOR and verifies that the payload is a canonical CBOR
+/// map.
 fn encode_claims(claims: &impl Encode) -> Result<Raw, cbor::Error> {
     let bytes = cbor::encode(claims)?;
     cbor::Decoder::new(&bytes).decode_map_header()?;
@@ -156,44 +138,42 @@ fn encode_claims(claims: &impl Encode) -> Result<Raw, cbor::Error> {
     Ok(Raw(bytes))
 }
 
-/// Verifies a CWT's COSE signature and temporal validity, then decodes
-/// the claims into T.
+/// Verifies a CWT's COSE signature and temporal validity, then decodes the
+/// claims into `T`.
 ///
-/// When `now` is `Some`, temporal claims are validated. The nbf claim (key 5,
-/// [`claims::NotBefore`]) must be present and `nbf <= now`, and if the exp claim
-/// (key 4, [`claims::Expiration`]) is present then `now < exp`. When `now` is
-/// `None`, temporal validation is skipped entirely.
+/// When `now` is `Some`, `nbf` (key 5, [`claims::NotBefore`]) must be present
+/// with `nbf <= now`, and if `exp` (key 4, [`claims::Expiration`]) is present
+/// then `now < exp`. When `now` is `None`, temporal checks are skipped.
 ///
-/// The COSE signature timestamp is not checked; temporal validity comes from
-/// the CWT claims. `T` determines the accepted claim schema. Successful
-/// verification does not establish issuer trust, enforce an audience, evaluate
-/// attestation policy or EAT claim relationships, or prove possession of a
-/// [`claims::Confirm`] key. The application must perform those checks.
+/// The COSE signature timestamp is ignored because temporal validity comes
+/// from the CWT claims. `T` defines the accepted claim schema. Verification
+/// does not establish issuer trust, enforce an audience, evaluate attestation
+/// policy or EAT claim relationships, or prove possession of a
+/// [`claims::Confirm`] key.
 pub fn verify<T: Decode>(
     data: &[u8],
     verifier: &xdsa::PublicKey,
     domain: &[u8],
     now: Option<u64>,
 ) -> Result<T, Error> {
-    // Verify COSE signature (skip COSE drift check, CWT handles temporal validation)
+    // Verify the COSE signature without COSE drift checks; CWT owns temporal checks
     let raw: Raw = cose::verify(data, cbor::NULL, verifier, domain, None)?;
 
     validate_claims(&raw, now)?;
     Ok(cbor::decode(&raw.0)?)
 }
 
-/// Extracts the signer's fingerprint from a CWT without verifying
-/// the signature. The returned data is unauthenticated.
+/// Extracts the signer's fingerprint from a CWT without verifying its
+/// signature.
 pub fn signer(data: &[u8]) -> Result<xdsa::Fingerprint, Error> {
     Ok(cose::signer(data)?)
 }
 
-/// Extracts and decodes claims from a CWT without verifying the signature.
+/// Extracts and decodes claims from a CWT without verifying its signature.
 ///
-/// **Warning**: This function does NOT verify the signature. The returned payload
-/// is unauthenticated and should not be trusted until verified with [`verify`].
-/// Use [`signer`] to extract the signer's fingerprint for key lookup. The single
-/// case for this method is self-signed key discovery.
+/// Do not trust the returned claims until the token has been verified with
+/// [`verify`]. Use [`signer`] to look up keys by fingerprint; this function is
+/// intended for self-signed key discovery.
 pub fn peek<T: Decode>(data: &[u8]) -> Result<T, Error> {
     let raw: Raw = cose::peek(data)?;
     Ok(cbor::decode(&raw.0)?)
@@ -203,7 +183,7 @@ pub fn peek<T: Decode>(data: &[u8]) -> Result<T, Error> {
 /// is `Some`, enforces the `nbf` (key 5) and optional `exp` (key 4) bounds.
 fn validate_claims(raw: &[u8], now: Option<u64>) -> Result<(), Error> {
     // Parse the top-level map first so duplicate temporal claim keys surface
-    // as `Error::DuplicateKey` rather than a generic CBOR map error.
+    // as Error::DuplicateKey rather than a generic CBOR map error
     let mut dec = cbor::Decoder::new(raw);
     let entries = cbor::decode_map_entries_slices_notrail(&mut dec).map_err(|err| match err {
         cbor::Error::DuplicateMapKey(key @ (4 | 5)) => Error::DuplicateKey(key),
@@ -211,10 +191,10 @@ fn validate_claims(raw: &[u8], now: Option<u64>) -> Result<(), Error> {
     })?;
     dec.finish()?;
 
-    // Verify full canonical CBOR rules across nested values and total depth.
+    // Verify full canonical CBOR rules across nested values and total depth
     cbor::verify(raw)?;
 
-    // Enforce temporal bounds when a reference time is supplied.
+    // Enforce temporal bounds when a reference time is supplied
     if let Some(now) = now {
         let mut nbf = None;
         let mut exp = None;
@@ -293,7 +273,7 @@ mod tests {
         cnf: claims::Confirm<xdsa::PublicKey>,
     }
 
-    /// Tests the happy path: issue a token and verify it.
+    /// Tests issuing and verifying a token with EAT claims.
     #[test]
     fn test_issue_verify() {
         let issuer = xdsa::SecretKey::generate();
@@ -342,7 +322,7 @@ mod tests {
         let issuer = xdsa::SecretKey::generate();
         let verifier = issuer.public_key();
 
-        // Build a claims map whose value nests 31 arrays deep (total depth 32).
+        // Build a claims map whose value nests 31 arrays deep (total depth 32)
         let mut over_depth = vec![0xa2, 1];
         over_depth.extend(std::iter::repeat_n(0x81u8, 31));
         over_depth.extend_from_slice(&[0x00, 5, 0]);
@@ -383,7 +363,7 @@ mod tests {
         }
     }
 
-    /// Tests that now=None skips temporal validation.
+    /// Tests that `now == None` skips temporal validation.
     #[test]
     fn test_verify_skip_time() {
         let issuer = xdsa::SecretKey::generate();
@@ -401,7 +381,7 @@ mod tests {
         assert_eq!(got.sub.sub, "test");
     }
 
-    /// Tests rejection when now < nbf.
+    /// Tests rejection when `now < nbf`.
     #[test]
     fn test_verify_not_yet_valid() {
         let issuer = xdsa::SecretKey::generate();
@@ -419,7 +399,7 @@ mod tests {
         assert!(matches!(err, Error::NotYetValid { .. }));
     }
 
-    /// Tests rejection when now > exp.
+    /// Tests rejection when `now > exp`.
     #[test]
     fn test_verify_expired() {
         let issuer = xdsa::SecretKey::generate();
@@ -437,7 +417,7 @@ mod tests {
         assert!(matches!(err, Error::AlreadyExpired { .. }));
     }
 
-    /// Tests rejection when nbf is absent and time check is on.
+    /// Tests rejection when `nbf` is absent and time validation is enabled.
     #[test]
     fn test_verify_missing_nbf() {
         let issuer = xdsa::SecretKey::generate();
@@ -524,7 +504,7 @@ mod tests {
         );
     }
 
-    /// Tests that now == nbf passes and now == exp fails per RFC 8392.
+    /// Tests that `now == nbf` passes and `now == exp` fails per RFC 8392.
     #[test]
     fn test_verify_boundary_exact() {
         let issuer = xdsa::SecretKey::generate();
@@ -547,7 +527,7 @@ mod tests {
         assert!(matches!(err, Error::AlreadyExpired { .. }));
     }
 
-    /// Tests that a token without exp passes time validation.
+    /// Tests that a token without `exp` passes time validation.
     #[test]
     fn test_verify_no_expiration() {
         let issuer = xdsa::SecretKey::generate();
@@ -591,13 +571,12 @@ mod tests {
     /// Fixture corpus generated with v0.16.0 to pin the CWT wire format.
     const FIXTURES: &str = include_str!("testdata/v0.16.json");
 
-    /// Retrieves a hex encoded field from the v0.16 fixture corpus.
+    /// Retrieves a hex-encoded field from the v0.16 fixture corpus.
     fn fixture(corpus: &serde_json::Value, key: &str) -> Vec<u8> {
         hex::decode(corpus[key].as_str().unwrap()).unwrap()
     }
 
-    /// Tests that the v0.16 fixture corpus still validates, since that was in the
-    /// first public release of the Ark, so we can't change the format anymore.
+    /// Tests that the committed v0.16 CWT fixtures keep their expected validity.
     #[test]
     fn test_v0_16_fixtures() {
         let corpus: serde_json::Value = serde_json::from_str(FIXTURES).unwrap();

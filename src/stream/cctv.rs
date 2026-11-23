@@ -6,7 +6,7 @@
 
 //! STREAM conformance tests against the C2SP CCTV age testkit.
 //!
-//! https://github.com/C2SP/CCTV/tree/main/age
+//! <https://github.com/C2SP/CCTV/tree/main/age>
 
 use super::{PayloadKey, Stream};
 use crate::hkdf;
@@ -130,10 +130,11 @@ const VECTORS: &[(&str, &[u8])] = &[
     ),
 ];
 
-/// Tests the STREAM implementation against the CCTV age testkit vectors:
-/// success vectors must decrypt fully to the expected payload hash and
-/// re-encrypt byte for byte; failure vectors must error with only the
-/// expected prefix released.
+/// Tests STREAM against the CCTV age testkit vectors.
+///
+/// Success vectors must decrypt to the expected payload hash and re-encrypt
+/// identically; failure vectors must error after releasing only the expected
+/// prefix.
 #[test]
 fn test_cctv_vectors() {
     for (name, data) in VECTORS {
@@ -187,8 +188,7 @@ fn test_cctv_vectors() {
             assert_eq!(hex::encode(Sha256::digest(&released)), hash, "{name}");
         }
         if expect == "success" {
-            // Decryption must succeed and re-encrypting the recovered
-            // plaintext must reproduce the ciphertext byte for byte
+            // Decryption must succeed and re-encryption must reproduce the ciphertext
             result.unwrap_or_else(|err| panic!("{name}: {err}"));
 
             let mut reencrypted = Vec::new();

@@ -4,15 +4,16 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//! Procedural macros for darkbio-crypto.
+//! Procedural macros for `darkbio-crypto`.
 //!
-//! Provides the `Cbor` derive macro for structs that generates both `Encode`
-//! and `Decode` implementations.
+//! Provides the `Cbor` derive macro for structs, generating both `Encode` and
+//! `Decode` implementations.
 //!
 //! # Struct encoding modes
 //!
-//! By default, structs encode as CBOR maps with integer keys specified via
-//! `#[cbor(key = N)]`. Use `#[cbor(array)]` to encode as a CBOR array instead.
+//! By default, structs encode as deterministic CBOR maps with integer keys
+//! specified via `#[cbor(key = N)]`. Annotate the struct with `#[cbor(array)]`
+//! to encode as a positional CBOR array instead.
 //!
 //! # Examples
 //!
@@ -25,7 +26,7 @@
 //!     #[cbor(key = -1)]
 //!     value: u64,
 //! }
-//! // Encodes as: {1: name, -1: value} (sorted by bytewise key encoding)
+//! // Encodes as {1: name, -1: value}, sorted by encoded key bytes
 //! ```
 //!
 //! Array encoding:
@@ -36,7 +37,7 @@
 //!     x: u64,
 //!     y: u64,
 //! }
-//! // Encodes as: [x, y]
+//! // Encodes as [x, y]
 //! ```
 
 // The macros only emit tokens and never need unsafe
@@ -49,8 +50,8 @@ use std::cmp::Ordering;
 use std::collections::BTreeSet;
 use syn::{Data, DeriveInput, Expr, Fields, Lit, parse_macro_input};
 
-/// Derives the CBOR encoder and decoder for structs tagged with #[derive(Cbor)]
-/// and internally fields tagged with #[cbor(...)].
+/// Derives CBOR `Encode` and `Decode` for structs annotated with
+/// `#[derive(Cbor)]` and field-level `#[cbor(...)]` attributes.
 #[proc_macro_derive(Cbor, attributes(cbor))]
 pub fn derive_cbor(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -85,7 +86,8 @@ fn derive_encode(input: &DeriveInput) -> syn::Result<TokenStream2> {
     }
 }
 
-/// Generates array-mode `Encode` impl: fields encoded in declaration order.
+/// Generates an array-mode `Encode` implementation encoding fields in
+/// declaration order.
 fn derive_encode_array(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<TokenStream2> {
     let cbor_crate = quote! { darkbio_crypto::cbor };
     for field in fields {
@@ -118,14 +120,15 @@ fn derive_encode_array(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<T
     })
 }
 
-/// Generates map-mode `Encode` impl: fields encoded as key-value pairs, sorted by key bytes.
-/// Option<T> fields are omitted when None (the key-value pair is not encoded).
-/// Fields with #[cbor(embed)] are flattened: their CBOR map entries are merged into the parent.
+/// Generates a map-mode `Encode` implementation with fields sorted by encoded
+/// key bytes.
+///
+/// `Option<T>` fields are omitted when `None`. Fields marked `#[cbor(embed)]`
+/// have their map entries flattened into the parent map.
 fn derive_encode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<TokenStream2> {
     let cbor_crate = quote! { darkbio_crypto::cbor };
 
-    // Validate field attributes: mutual exclusivity, duplicate direct keys,
-    // and reject embed on optional/nullable types.
+    // Validate attribute combinations, duplicate direct keys, and nullable embeds
     let embed_count = fields.iter().filter(|f| f.embed).count();
     let mut direct_keys = BTreeSet::new();
     for field in fields {
@@ -217,7 +220,7 @@ fn derive_encode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
                         <#embed_ty as #cbor_crate::MapEncode>::encode_map(&self.#ident, enc)?;
                     }
                 };
-                // Reject empty embedded schemas here so nested embeds are checked too.
+                // Reject empty embedded schemas here so nested embeds are checked too
                 quote! {
                     if <#embed_ty as #cbor_crate::MapDecode>::cbor_map_keys().is_empty() {
                         return Err(#cbor_crate::Error::DecodeFailed(format!(
@@ -259,7 +262,7 @@ fn derive_encode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
             }
         });
     }
-    // No embed fields, so use direct encode (existing path)
+    // No embed fields, so emit direct map encoding
 
     // Sort fields by CBOR-encoded key bytes for deterministic encoding
     let mut sorted: Vec<_> = fields.iter().collect();
@@ -322,8 +325,7 @@ fn derive_encode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
         })
         .collect();
 
-    // If there are no optional fields, use a static map header size to avoid
-    // generating unnecessary runtime counting code.
+    // Use a static map header length when no optional fields are present
     if has_optional {
         Ok(quote! {
             impl #cbor_crate::Encode for #name {
@@ -375,7 +377,8 @@ fn derive_decode(input: &DeriveInput) -> syn::Result<TokenStream2> {
     }
 }
 
-/// Generates array-mode `Decode` impl: fields decoded in declaration order.
+/// Generates an array-mode `Decode` implementation decoding fields in
+/// declaration order.
 fn derive_decode_array(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<TokenStream2> {
     let cbor_crate = quote! { darkbio_crypto::cbor };
     for field in fields {
@@ -415,9 +418,11 @@ fn derive_decode_array(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<T
     })
 }
 
-/// Generates map-mode `Decode` impl: fields decoded as key-value pairs, validating key order.
-/// Option<T> fields tolerate missing keys by defaulting to None.
-/// Fields with #[cbor(embed)] consume remaining map entries after direct fields are extracted.
+/// Generates a map-mode `Decode` implementation validating deterministic key
+/// order.
+///
+/// `Option<T>` fields default to `None` when absent. Fields marked
+/// `#[cbor(embed)]` consume their declared keys from the remaining map entries.
 fn derive_decode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<TokenStream2> {
     let cbor_crate = quote! { darkbio_crypto::cbor };
 
@@ -541,7 +546,7 @@ fn derive_decode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
         }
     };
 
-    // Per-call decode blocks; overlap was already validated above.
+    // Decode embedded fields after schema overlap validation above
     let extract_embeds: Vec<_> = embeds
         .iter()
         .map(|f| {
@@ -551,10 +556,8 @@ fn derive_decode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
             let embed_ty = extract_option_inner(ty).unwrap_or(ty);
 
             if is_optional {
-                // Optional embed: check if any of the embed's keys are present.
-                // If none → None. If any → decode and wrap in Some (decode_map
-                // validates that all required keys within the embed are present,
-                // giving us all-or-none semantics).
+                // Decode optional embed only when at least one of its keys is
+                // present; decode_map then requires all mandatory keys inside it
                 quote! {
                     let embed_keys: &[i64] = <#embed_ty as #cbor_crate::MapDecode>::cbor_map_keys();
                     let #ident: #ty = {
@@ -581,7 +584,7 @@ fn derive_decode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
                     };
                 }
             } else {
-                // Mandatory embed: all fields must be present.
+                // Decode mandatory embed requiring all of its fields
                 quote! {
                     let embed_keys: &[i64] = <#embed_ty as #cbor_crate::MapDecode>::cbor_map_keys();
                     let mut subset = #cbor_crate::MapEntriesScoped::new(entries, embed_keys);
@@ -630,7 +633,7 @@ fn derive_decode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
             .iter()
             .any(|f| extract_option_inner(&f.kind).is_some());
 
-        // Decode the next key and report mismatches with the earlier CBOR key first.
+        // Decode the next key and report mismatches with the earlier CBOR key first
         let read_key = |expected: i64| {
             quote! {
                 let key = dec.decode_int()?;
@@ -776,12 +779,16 @@ fn want_array(input: &DeriveInput) -> syn::Result<bool> {
     Ok(is_array)
 }
 
-/// Parsed information about a struct field.
+/// Parsed metadata for a struct field.
 struct FieldInfo {
+    /// Field identifier.
     ident: syn::Ident,
+    /// Field type.
     kind: syn::Type,
-    key: Option<i64>, // CBOR map key from #[cbor(key = N)], None for array-mode
-    embed: bool,      // #[cbor(embed)] flattens this field's map into the parent
+    /// CBOR map key from `#[cbor(key = N)]`, or `None` in array mode.
+    key: Option<i64>,
+    /// Whether `#[cbor(embed)]` flattens this field's map into the parent.
+    embed: bool,
 }
 
 /// Extracts field metadata from a struct, including names, types, and CBOR keys.
@@ -839,11 +846,11 @@ fn parse_fields(input: &DeriveInput, array: bool) -> syn::Result<Vec<FieldInfo>>
     Ok(result)
 }
 
-/// Checks if a type is `Option<T>` (but not `Option<Option<T>>`) and returns
-/// the inner type `T`. Used to identify omittable map fields.
+/// Returns the inner type `T` when `ty` is `Option<T>` but not
+/// `Option<Option<T>>`, identifying omittable map fields.
 ///
-/// Returns `None` for `Option<Option<T>>`: nested options represent a
-/// non-omittable nullable field (always present, value is null or T).
+/// Returns `None` for `Option<Option<T>>` because nested options represent a
+/// non-omittable nullable field whose key is always present as `null` or `T`.
 fn extract_option_inner(ty: &syn::Type) -> Option<&syn::Type> {
     if let syn::Type::Path(type_path) = ty {
         let segment = type_path.path.segments.last()?;
@@ -906,7 +913,7 @@ fn parse_key(expr: &Expr) -> syn::Result<i64> {
                 && let Expr::Lit(lit) = &*unary.expr
                 && let Lit::Int(i) = &lit.lit
             {
-                // Parse with the leading sign attached so `i64::MIN` does not overflow.
+                // Parse with the leading sign attached so i64::MIN does not overflow
                 return format!("-{}", i.base10_digits())
                     .parse()
                     .map_err(|err| syn::Error::new_spanned(expr, err));

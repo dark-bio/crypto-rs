@@ -11,9 +11,13 @@
 //! assert_eq!(nonce.len(), 32);
 //! ```
 
-/// Creates an arbitrarily large buffer filled with randomness.
+/// Generates a buffer of `bytes` random bytes from the operating system.
+///
+/// # Panics
+///
+/// Panics if the operating system's random source fails.
 pub fn generate(bytes: usize) -> Vec<u8> {
-    // Create a random buffer with a WASM friendly source
+    // Fill a buffer from the WASM-compatible OS entropy source
     let mut buf = vec![0u8; bytes];
     getrandom::fill(&mut buf[..]).expect("Failed to get random bytes");
     buf
@@ -23,9 +27,8 @@ pub fn generate(bytes: usize) -> Vec<u8> {
 mod tests {
     use crate::rand::generate;
 
-    /// Tests that generating different sized random buffers work. This test is
-    /// more of a smoke-test that the API works; it does not actually test the
-    /// quality of the generated random numbers.
+    /// Tests that random buffers of various sizes are generated with the
+    /// requested length and distinct outputs.
     #[test]
     fn test_generate() {
         for len in [0, 1, 32, 33, 1024 * 1024] {

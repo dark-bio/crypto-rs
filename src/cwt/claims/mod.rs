@@ -17,70 +17,73 @@ use crate::cose;
 use crate::xdsa;
 use crate::xhpke;
 
-/// The principal that issued the token (key 1).
+/// Principal that issued the token (key 1).
 #[derive(Clone, Debug, PartialEq, Eq, Cbor)]
 pub struct Issuer {
-    /// Issuer identity, a URI or any string the ecosystem agrees on.
+    /// Issuer identity, such as a URI or agreed-upon identifier.
     #[cbor(key = 1)]
     pub iss: String,
 }
 
-/// The principal that is the subject of the token (key 2).
+/// Principal that is the subject of the token (key 2).
 #[derive(Clone, Debug, PartialEq, Eq, Cbor)]
 pub struct Subject {
-    /// Subject identity, for a device its serial or attestation subject.
+    /// Subject identity, such as a device serial or attestation subject.
     #[cbor(key = 2)]
     pub sub: String,
 }
 
-/// The recipients the token is intended for (key 3).
+/// Intended recipients of the token (key 3).
 #[derive(Clone, Debug, PartialEq, Eq, Cbor)]
 pub struct Audience {
-    /// Intended audience, a URI or any string the ecosystem agrees on.
+    /// Intended audience, such as a URI or agreed-upon identifier.
     #[cbor(key = 3)]
     pub aud: String,
 }
 
-/// The time on or after which the token must not be accepted (key 4).
+/// Time on or after which the token must not be accepted (key 4).
 #[derive(Clone, Debug, PartialEq, Eq, Cbor)]
 pub struct Expiration {
-    /// Expiration time, seconds since the Unix epoch. Rejected at or after.
+    /// Expiration time in seconds since the Unix epoch; rejected at or after.
     #[cbor(key = 4)]
     pub exp: u64,
 }
 
-/// The time before which the token must not be accepted (key 5).
+/// Time before which the token must not be accepted (key 5).
 #[derive(Clone, Debug, PartialEq, Eq, Cbor)]
 pub struct NotBefore {
-    /// Not-before time, seconds since the Unix epoch. Rejected before.
+    /// Not-before time in seconds since the Unix epoch; rejected before.
     #[cbor(key = 5)]
     pub nbf: u64,
 }
 
-/// The time at which the token was issued (key 6).
+/// Time at which the token was issued (key 6).
 #[derive(Clone, Debug, PartialEq, Eq, Cbor)]
 pub struct IssuedAt {
-    /// Issue time, seconds since the Unix epoch.
+    /// Issue time in seconds since the Unix epoch.
     #[cbor(key = 6)]
     pub iat: u64,
 }
 
-/// A unique identifier for the token (key 7).
+/// Unique identifier for the token (key 7).
 #[derive(Clone, Debug, PartialEq, Eq, Cbor)]
 pub struct TokenId {
-    /// Token identifier, opaque bytes unique per token.
+    /// Opaque bytes uniquely identifying this token.
     #[cbor(key = 7)]
     pub cti: Vec<u8>,
 }
 
-/// Sealed trait implementation module. The supertrait lives in a private module
-/// so external crates cannot implement `ConfirmKey`.
+/// Private module sealing [`ConfirmKey`] so external crates cannot implement it.
 mod sealed {
     use crate::cbor;
 
+    /// Internal codec contract for public keys embedded in a `cnf` claim.
     pub trait ConfirmKeySealed {
+        /// COSE algorithm identifier stored in `COSE_Key`'s `kty` field.
         const ALGORITHM: i64;
+        /// Serializes the key into raw bytes for `COSE_Key` parameter `-2`.
         fn to_confirm_bytes(&self) -> Vec<u8>;
+        /// Parses raw bytes from `COSE_Key` parameter `-2` into the key.
         fn from_confirm_bytes(bytes: &[u8]) -> Result<Self, cbor::Error>
         where
             Self: Sized;
@@ -134,19 +137,19 @@ impl sealed::ConfirmKeySealed for xhpke::PublicKey {
 
 impl ConfirmKey for xhpke::PublicKey {}
 
-/// The public key bound to the token through the cnf claim (key 8, RFC 8747).
-/// The COSE_Key wrapping is handled internally.
+/// Public key bound to the token through the `cnf` claim (key 8, RFC 8747).
 ///
-/// A verified token authenticates this key binding, but does not prove that
-/// the presenter possesses the corresponding private key. Applications must
-/// check that separately using their protocol's proof-of-possession mechanism.
+/// `COSE_Key` wrapping is handled internally. A verified token authenticates
+/// this key binding, but does not prove that the presenter possesses the
+/// corresponding private key; applications must check proof of possession
+/// separately.
 #[derive(Clone, Debug)]
 pub struct Confirm<T: ConfirmKey> {
     key: T,
 }
 
 impl<T: ConfirmKey> Confirm<T> {
-    /// Creates a Confirm value binding the given public key.
+    /// Creates a [`Confirm`] claim binding `key`.
     pub fn new(key: T) -> Self {
         Self { key }
     }
@@ -157,15 +160,15 @@ impl<T: ConfirmKey> Confirm<T> {
     }
 }
 
-/// Internal: `{ 1: COSE_Key }`, the cnf claim value envelope.
+/// Wire envelope `{ 1: COSE_Key }` for the `cnf` claim value.
 #[derive(Clone, Debug, PartialEq, Eq, Cbor)]
 struct CnfMap {
     #[cbor(key = 1)]
     cose_key: CoseKey,
 }
 
-/// Internal: `{ 1: kty, -2: x }`, a minimal COSE_Key. Parameter -2 carries
-/// the full public key bytes, following the OKP convention (RFC 9053 Section 7.2).
+/// Minimal `COSE_Key` `{ 1: kty, -2: x }` carrying raw public key bytes in
+/// parameter `-2` per the OKP convention (RFC 9053 Section 7.2).
 #[derive(Clone, Debug, PartialEq, Eq, Cbor)]
 struct CoseKey {
     #[cbor(key = 1)]
@@ -237,7 +240,7 @@ impl<T: ConfirmKey> MapDecode for Confirm<T> {
 mod tests {
     use super::*;
 
-    /// Verifies round-trip encoding of a Confirm<xdsa::PublicKey>.
+    /// Tests round-trip encoding of `Confirm<xdsa::PublicKey>`.
     #[test]
     fn test_confirm_xdsa() {
         let key = xdsa::SecretKey::generate().public_key();
@@ -256,7 +259,7 @@ mod tests {
         assert_eq!(got.cnf.key().to_bytes(), key.to_bytes());
     }
 
-    /// Verifies round-trip encoding of a Confirm<xhpke::PublicKey>.
+    /// Tests round-trip encoding of `Confirm<xhpke::PublicKey>`.
     #[test]
     fn test_confirm_xhpke() {
         let key = xhpke::SecretKey::generate().public_key();
@@ -275,7 +278,7 @@ mod tests {
         assert_eq!(got.cnf.key().to_bytes(), key.to_bytes());
     }
 
-    /// Verifies a struct embedding multiple claim types.
+    /// Tests round-trip encoding of a struct embedding multiple claim types.
     #[test]
     fn test_composite_claims() {
         let key = xdsa::SecretKey::generate().public_key();
@@ -312,7 +315,7 @@ mod tests {
         assert_eq!(got.ueid, b"SN-12345");
     }
 
-    /// Tests that decoding a cnf with mismatched kty fails.
+    /// Tests that decoding a `cnf` claim with a mismatched `kty` fails.
     #[test]
     fn test_confirm_wrong_key_type() {
         let key = xdsa::SecretKey::generate().public_key();
