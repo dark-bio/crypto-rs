@@ -83,7 +83,7 @@ chacha20poly1305 = { version = "0.11.0", features = ["zeroize"], optional = true
 darkbio-crypto-cbor-derive = { version = "=0.21.0", path = "src/cbor/derive", optional = true }
 der = { version = "0.8.3", features = ["derive"], optional = true }
 ed25519-dalek = { version = "3.0.0", features = ["pem", "rand_core", "zeroize"], optional = true }
-getrandom = { version = "0.4.3", features = ["wasm_js"], optional = true } # wasm_js also needs the getrandom_backend cfg set in .cargo/config.toml
+getrandom = { version = "0.4.3", features = ["sys_rng", "wasm_js"], optional = true } # wasm_js also needs the getrandom_backend cfg set in .cargo/config.toml
 hkdf = { version = "0.13.0", optional = true }
 hpke = { version = "0.15.1", default-features = false, features = ["alloc", "mlkem", "x25519", "chacha", "hkdfsha2", "getrandom"], optional = true }
 ml-dsa = { version = "0.1.2", features = ["rand_core", "zeroize"], optional = true }
