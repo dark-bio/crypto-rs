@@ -64,6 +64,7 @@ pub fn key<const N: usize>(
     memory: u32,
     threads: u32,
 ) -> Zeroizing<[u8; N]> {
+    validate_input_lengths(password.len(), salt.len());
     let params = Params::new(memory, time, threads, Some(N)).unwrap();
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
 
@@ -84,7 +85,7 @@ pub fn key<const N: usize>(
 /// # Panics
 ///
 /// Panics for the same invalid inputs as [`key`], with `out` in place of `N`,
-/// or if allocation of the working memory fails.
+/// or if allocation of the output or working memory fails.
 pub fn key_with_len(
     password: &[u8],
     salt: &[u8],
@@ -93,12 +94,25 @@ pub fn key_with_len(
     threads: u32,
     out: usize,
 ) -> Zeroizing<Vec<u8>> {
+    validate_input_lengths(password.len(), salt.len());
     let params = Params::new(memory, time, threads, Some(out)).unwrap();
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
 
-    let mut output = Zeroizing::new(vec![0u8; out]);
+    let mut output = Zeroizing::new(Vec::new());
+    output.try_reserve_exact(out).unwrap();
+    output.resize(out, 0);
     hash(&argon2, password, salt, &mut output);
     output
+}
+
+/// Validates password and salt lengths against RFC 9106 bounds before
+/// allocating output or working memory.
+fn validate_input_lengths(password_len: usize, salt_len: usize) {
+    assert!(password_len <= argon2::MAX_PWD_LEN, "password too long");
+    assert!(
+        (argon2::MIN_SALT_LEN..=argon2::MAX_SALT_LEN).contains(&salt_len),
+        "invalid salt length"
+    );
 }
 
 /// Runs Argon2id over the password and salt into the output buffer using
@@ -124,6 +138,60 @@ fn hash(argon2: &Argon2, password: &[u8], salt: &[u8], output: &mut [u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Tests RFC 9106 input and output length boundaries, ensuring invalid
+    /// parameters panic before allocating output or working memory.
+    #[test]
+    fn test_argon2id_limits() {
+        // Minimum valid output length succeeds.
+        assert_eq!(key_with_len(b"", b"12345678", 1, 8, 1, 4).len(), 4);
+
+        #[cfg(target_pointer_width = "64")]
+        validate_input_lengths(u32::MAX as usize, u32::MAX as usize);
+
+        // On native targets, verify each out-of-range input triggers the
+        // expected validation panic rather than a later allocation failure.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let mut cases: Vec<(&str, &str, fn())> = vec![
+                ("short output", "OutputTooShort", || {
+                    key_with_len(b"", b"12345678", 1, 8, 1, 3);
+                }),
+                ("zero time", "TimeTooSmall", || {
+                    key_with_len(b"", b"12345678", 0, 8, 1, 4);
+                }),
+                ("short salt in key", "invalid salt length", || {
+                    key::<4>(b"", b"1234567", 1, 8, 1);
+                }),
+                ("short salt in key_with_len", "invalid salt length", || {
+                    key_with_len(b"", b"1234567", 1, 8, 1, 4);
+                }),
+            ];
+            #[cfg(target_pointer_width = "64")]
+            cases.extend([
+                (
+                    "oversized password",
+                    "password too long",
+                    (|| validate_input_lengths(u32::MAX as usize + 1, 8)) as fn(),
+                ),
+                ("oversized salt", "invalid salt length", || {
+                    validate_input_lengths(0, u32::MAX as usize + 1);
+                }),
+                ("oversized output", "OutputTooLong", || {
+                    key_with_len(b"", b"12345678", 1, 8, 1, usize::MAX);
+                }),
+            ]);
+            for (name, want, run) in cases {
+                let err = std::panic::catch_unwind(run).expect_err(name);
+                let msg = err
+                    .downcast_ref::<&str>()
+                    .copied()
+                    .or_else(|| err.downcast_ref::<String>().map(String::as_str))
+                    .unwrap_or("");
+                assert!(msg.contains(want), "{name}: got panic `{msg}`");
+            }
+        }
+    }
 
     #[test]
     fn test_argon2id_vectors() {

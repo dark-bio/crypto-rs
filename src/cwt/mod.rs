@@ -122,8 +122,12 @@ pub fn issue(
     signer: &xdsa::SecretKey,
     domain: &[u8],
 ) -> Result<Vec<u8>, Error> {
-    let claims_bytes = cbor::encode(claims)?;
-    Ok(cose::sign(Raw(claims_bytes), cbor::NULL, signer, domain)?)
+    Ok(cose::sign(
+        encode_claims(claims)?,
+        cbor::NULL,
+        signer,
+        domain,
+    )?)
 }
 
 /// Signs a set of claims as a CWT with an explicit COSE timestamp.
@@ -135,14 +139,21 @@ pub fn issue_at(
     domain: &[u8],
     timestamp: i64,
 ) -> Result<Vec<u8>, Error> {
-    let claims_bytes = cbor::encode(claims)?;
     Ok(cose::sign_at(
-        Raw(claims_bytes),
+        encode_claims(claims)?,
         cbor::NULL,
         signer,
         domain,
         timestamp,
     )?)
+}
+
+/// Encodes claims to CBOR and verifies that the payload is a canonical CBOR map.
+fn encode_claims(claims: &impl Encode) -> Result<Raw, cbor::Error> {
+    let bytes = cbor::encode(claims)?;
+    cbor::Decoder::new(&bytes).decode_map_header()?;
+    cbor::verify(&bytes)?;
+    Ok(Raw(bytes))
 }
 
 /// Verifies a CWT's COSE signature and temporal validity, then decodes
@@ -167,19 +178,7 @@ pub fn verify<T: Decode>(
     // Verify COSE signature (skip COSE drift check, CWT handles temporal validation)
     let raw: Raw = cose::verify(data, cbor::NULL, verifier, domain, None)?;
 
-    // Extract and validate temporal claims if requested
-    if let Some(now) = now {
-        let (nbf, exp) = read_temporal_claims(&raw)?;
-        if now < nbf {
-            return Err(Error::NotYetValid { nbf, now });
-        }
-        if let Some(exp) = exp
-            && now >= exp
-        {
-            return Err(Error::AlreadyExpired { exp, now });
-        }
-    }
-    // Decode claims into T
+    validate_claims(&raw, now)?;
     Ok(cbor::decode(&raw.0)?)
 }
 
@@ -200,40 +199,43 @@ pub fn peek<T: Decode>(data: &[u8]) -> Result<T, Error> {
     Ok(cbor::decode(&raw.0)?)
 }
 
-/// Reads temporal claims (exp key 4, nbf key 5) from raw CBOR map bytes.
-/// Returns nbf (required) and exp (optional, None if absent).
-fn read_temporal_claims(raw: &[u8]) -> Result<(u64, Option<u64>), Error> {
+/// Validates that the claims payload is a canonical CBOR map and, when `now`
+/// is `Some`, enforces the `nbf` (key 5) and optional `exp` (key 4) bounds.
+fn validate_claims(raw: &[u8], now: Option<u64>) -> Result<(), Error> {
+    // Parse the top-level map first so duplicate temporal claim keys surface
+    // as `Error::DuplicateKey` rather than a generic CBOR map error.
     let mut dec = cbor::Decoder::new(raw);
-    let n = dec.decode_map_header()?;
+    let entries = cbor::decode_map_entries_slices_notrail(&mut dec).map_err(|err| match err {
+        cbor::Error::DuplicateMapKey(key @ (4 | 5)) => Error::DuplicateKey(key),
+        _ => Error::Cbor(err),
+    })?;
+    dec.finish()?;
 
-    let mut nbf: Option<u64> = None;
-    let mut exp: Option<u64> = None;
+    // Verify full canonical CBOR rules across nested values and total depth.
+    cbor::verify(raw)?;
 
-    for _ in 0..n {
-        let key = dec.decode_int()?;
-        match key {
-            4 => {
-                // exp (reject duplicates)
-                if exp.is_some() {
-                    return Err(Error::DuplicateKey(4));
-                }
-                exp = Some(dec.decode_uint()?);
-            }
-            5 => {
-                // nbf (reject duplicates)
-                if nbf.is_some() {
-                    return Err(Error::DuplicateKey(5));
-                }
-                nbf = Some(dec.decode_uint()?);
-            }
-            _ => {
-                // Skip unknown claim value
-                Raw::decode_cbor_notrail(&mut dec)?;
+    // Enforce temporal bounds when a reference time is supplied.
+    if let Some(now) = now {
+        let mut nbf = None;
+        let mut exp = None;
+        for (key, value) in entries {
+            match key {
+                4 => exp = Some(cbor::decode::<u64>(value)?),
+                5 => nbf = Some(cbor::decode::<u64>(value)?),
+                _ => {}
             }
         }
+        let nbf = nbf.ok_or(Error::MissingNbf)?;
+        if now < nbf {
+            return Err(Error::NotYetValid { nbf, now });
+        }
+        if let Some(exp) = exp
+            && now >= exp
+        {
+            return Err(Error::AlreadyExpired { exp, now });
+        }
     }
-    let nbf = nbf.ok_or(Error::MissingNbf)?;
-    Ok((nbf, exp))
+    Ok(())
 }
 
 #[cfg(test)]
@@ -316,6 +318,69 @@ mod tests {
         assert_eq!(got.exp.unwrap().exp, 2000000);
         assert_eq!(got.cnf.key().to_bytes(), device.public_key().to_bytes(),);
         assert_eq!(got.ueid.ueid, b"SN-999");
+    }
+
+    /// Tests that `issue` and `issue_at` reject non-map and non-canonical raw claims.
+    #[test]
+    fn test_issue_requires_map() {
+        let issuer = xdsa::SecretKey::generate();
+        let err = Error::Cbor(cbor::Error::InvalidMajorType(4, 5));
+        let array = Raw(vec![0x80]);
+        assert_eq!(issue(&array, &issuer, b"test"), Err(err.clone()));
+        assert_eq!(issue_at(&array, &issuer, b"test", 1), Err(err));
+
+        let unsorted = Raw(vec![0xa2, 5, 0, 1, 0]);
+        let order_err = Error::Cbor(cbor::Error::InvalidMapKeyOrder(1, 5));
+        assert_eq!(issue(&unsorted, &issuer, b"test"), Err(order_err.clone()));
+        assert_eq!(issue_at(&unsorted, &issuer, b"test", 1), Err(order_err));
+    }
+
+    /// Tests that `verify::<Raw>` enforces map structure, canonical key order,
+    /// duplicate detection, UTF-8 validity, and total nesting depth.
+    #[test]
+    fn test_verify_raw_claims_wire_format() {
+        let issuer = xdsa::SecretKey::generate();
+        let verifier = issuer.public_key();
+
+        // Build a claims map whose value nests 31 arrays deep (total depth 32).
+        let mut over_depth = vec![0xa2, 1];
+        over_depth.extend(std::iter::repeat_n(0x81u8, 31));
+        over_depth.extend_from_slice(&[0x00, 5, 0]);
+
+        let cases: &[(&[u8], Error)] = &[
+            (&[0x80], Error::Cbor(cbor::Error::InvalidMajorType(4, 5))),
+            (
+                &[0xa2, 5, 0, 1, 0],
+                Error::Cbor(cbor::Error::InvalidMapKeyOrder(1, 5)),
+            ),
+            (
+                &[0xa3, 1, 0, 1, 0, 5, 0],
+                Error::Cbor(cbor::Error::DuplicateMapKey(1)),
+            ),
+            (&[0xa2, 4, 1, 4, 1], Error::DuplicateKey(4)),
+            (&[0xa2, 5, 0, 5, 0], Error::DuplicateKey(5)),
+            (
+                &[0xa2, 1, 0x81, 0x61, 0xff, 5, 0],
+                Error::Cbor(cbor::Error::InvalidUtf8),
+            ),
+            (
+                &[0xa2, 1, 0xa2, 4, 0, 4, 0, 5, 0],
+                Error::Cbor(cbor::Error::DuplicateMapKey(4)),
+            ),
+            (
+                &over_depth,
+                Error::Cose(cose::Error::CborError(cbor::Error::MaxDepthExceeded(32))),
+            ),
+        ];
+        for (bytes, err) in cases {
+            let token = cose::sign(Raw(bytes.to_vec()), cbor::NULL, &issuer, b"test").unwrap();
+            for now in [None, Some(0)] {
+                assert_eq!(
+                    verify::<Raw>(&token, &verifier, b"test", now),
+                    Err(err.clone())
+                );
+            }
+        }
     }
 
     /// Tests that now=None skips temporal validation.

@@ -66,8 +66,9 @@ pub fn derive_cbor(input: TokenStream) -> TokenStream {
 
 /// Generates the `Encode` trait implementation for a struct.
 fn derive_encode(input: &DeriveInput) -> syn::Result<TokenStream2> {
-    let fields = parse_fields(input)?;
-    if want_array(input) {
+    let array = want_array(input)?;
+    let fields = parse_fields(input, array)?;
+    if array {
         derive_encode_array(&input.ident, &fields)
     } else {
         derive_encode_map(&input.ident, &fields)
@@ -193,17 +194,27 @@ fn derive_encode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
             .iter()
             .map(|f| {
                 let ident = &f.ident;
-                if let Some(inner_ty) = extract_option_inner(&f.kind) {
+                let optional = extract_option_inner(&f.kind);
+                let embed_ty = optional.unwrap_or(&f.kind);
+                let encode = if optional.is_some() {
                     quote! {
                         if let Some(ref v) = self.#ident {
-                            <#inner_ty as #cbor_crate::MapEncode>::encode_map(v, enc)?;
+                            <#embed_ty as #cbor_crate::MapEncode>::encode_map(v, enc)?;
                         }
                     }
                 } else {
-                    let ty = &f.kind;
                     quote! {
-                        <#ty as #cbor_crate::MapEncode>::encode_map(&self.#ident, enc)?;
+                        <#embed_ty as #cbor_crate::MapEncode>::encode_map(&self.#ident, enc)?;
                     }
+                };
+                // Reject empty embedded schemas here so nested embeds are checked too.
+                quote! {
+                    if <#embed_ty as #cbor_crate::MapDecode>::cbor_map_keys().is_empty() {
+                        return Err(#cbor_crate::Error::DecodeFailed(format!(
+                            "embedded field `{}` has no CBOR map keys", stringify!(#ident)
+                        )));
+                    }
+                    #encode
                 }
             })
             .collect();
@@ -349,8 +360,9 @@ fn derive_encode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
 
 /// Generates the `Decode` trait implementation for a struct.
 fn derive_decode(input: &DeriveInput) -> syn::Result<TokenStream2> {
-    let fields = parse_fields(input)?;
-    if want_array(input) {
+    let array = want_array(input)?;
+    let fields = parse_fields(input, array)?;
+    if array {
         derive_decode_array(&input.ident, &fields)
     } else {
         derive_decode_map(&input.ident, &fields)
@@ -623,6 +635,20 @@ fn derive_decode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
             .iter()
             .any(|f| extract_option_inner(&f.kind).is_some());
 
+        // Decode the next key and report mismatches with the earlier CBOR key first.
+        let read_key = |expected: i64| {
+            quote! {
+                let key = dec.decode_int()?;
+                if key != #expected {
+                    return Err(if #cbor_crate::cbor_key_cmp(key, #expected).is_lt() {
+                        #cbor_crate::Error::InvalidMapKeyOrder(key, #expected)
+                    } else {
+                        #cbor_crate::Error::InvalidMapKeyOrder(#expected, key)
+                    });
+                }
+            }
+        };
+
         if !has_optional {
             let decode_fields: Vec<_> = sorted
                 .iter()
@@ -635,11 +661,9 @@ fn derive_decode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
                     } else {
                         quote! { <#ty as #cbor_crate::Decode>::decode_cbor_notrail(dec)? }
                     };
+                    let read_key = read_key(key);
                     quote! {
-                        let key = dec.decode_int()?;
-                        if key != #key {
-                            return Err(#cbor_crate::Error::InvalidMapKeyOrder(key, #key));
-                        }
+                        #read_key
                         let #ident = #decode_expr;
                     }
                 })
@@ -690,14 +714,14 @@ fn derive_decode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
                     } else {
                         quote! { <#ty as #cbor_crate::Decode>::decode_cbor_notrail(dec)? }
                     };
+                    let read_key = read_key(key);
                     quote! {
                         if remaining == 0 {
-                            return Err(#cbor_crate::Error::InvalidMapKeyOrder(0, #key));
+                            return Err(#cbor_crate::Error::DecodeFailed(
+                                format!("missing required key {}", #key)
+                            ));
                         }
-                        let key = dec.decode_int()?;
-                        if key != #key {
-                            return Err(#cbor_crate::Error::InvalidMapKeyOrder(key, #key));
-                        }
+                        #read_key
                         remaining -= 1;
                         let #ident = #decode_expr;
                     }
@@ -761,23 +785,21 @@ fn derive_decode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
     })
 }
 
-/// Returns true if the struct has #[cbor(array)] attribute.
-fn want_array(input: &DeriveInput) -> bool {
+/// Returns whether the struct carries `#[cbor(array)]`, rejecting unknown struct attributes.
+fn want_array(input: &DeriveInput) -> syn::Result<bool> {
+    let mut is_array = false;
     for attr in &input.attrs {
         if attr.path().is_ident("cbor") {
-            let mut is_array = false;
-            let _ = attr.parse_nested_meta(|meta| {
-                if meta.path.is_ident("array") {
-                    is_array = true;
+            attr.parse_nested_meta(|meta| {
+                if !meta.path.is_ident("array") {
+                    return Err(meta.error("unknown CBOR struct attribute"));
                 }
+                is_array = true;
                 Ok(())
-            });
-            if is_array {
-                return true;
-            }
+            })?;
         }
     }
-    false
+    Ok(is_array)
 }
 
 /// Parsed information about a struct field.
@@ -789,7 +811,7 @@ struct FieldInfo {
 }
 
 /// Extracts field metadata from a struct, including names, types, and CBOR keys.
-fn parse_fields(input: &DeriveInput) -> syn::Result<Vec<FieldInfo>> {
+fn parse_fields(input: &DeriveInput, array: bool) -> syn::Result<Vec<FieldInfo>> {
     // Ensure we're only tagging structs with plain fields
     let fields = match &input.data {
         Data::Struct(data) => match &data.fields {
@@ -816,11 +838,18 @@ fn parse_fields(input: &DeriveInput) -> syn::Result<Vec<FieldInfo>> {
             if attr.path().is_ident("cbor") {
                 attr.parse_nested_meta(|meta| {
                     if meta.path.is_ident("key") {
+                        if array {
+                            return Err(meta.error("CBOR keys are not supported on array fields"));
+                        }
+                        if key.is_some() {
+                            return Err(meta.error("duplicate CBOR key attribute"));
+                        }
                         let value: Expr = meta.value()?.parse()?;
                         key = Some(parse_key(&value)?);
-                    }
-                    if meta.path.is_ident("embed") {
+                    } else if meta.path.is_ident("embed") {
                         embed = true;
+                    } else {
+                        return Err(meta.error("unknown CBOR field attribute"));
                     }
                     Ok(())
                 })?;
@@ -903,11 +932,51 @@ fn parse_key(expr: &Expr) -> syn::Result<i64> {
                 && let Expr::Lit(lit) = &*unary.expr
                 && let Lit::Int(i) = &lit.lit
             {
-                let val: i64 = i.base10_parse()?;
-                return Ok(-val);
+                // Parse with the leading sign attached so `i64::MIN` does not overflow.
+                return format!("-{}", i.base10_digits())
+                    .parse()
+                    .map_err(|err| syn::Error::new_spanned(expr, err));
             }
             Err(syn::Error::new_spanned(expr, "expected integer literal"))
         }
         _ => Err(syn::Error::new_spanned(expr, "expected integer literal")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Tests that unknown, duplicate, and array-mode key attributes fail macro parsing.
+    #[test]
+    fn test_rejects_invalid_attributes() {
+        let cases = [
+            ("#[cbor(arry)] struct S {}", "unknown CBOR struct attribute"),
+            (
+                "#[cbor(array)] #[cbor(typo)] struct S {}",
+                "unknown CBOR struct attribute",
+            ),
+            (
+                "struct S { #[cbor(key = 1, typo)] x: u8 }",
+                "unknown CBOR field attribute",
+            ),
+            (
+                "struct S { #[cbor(key = 1, key = 2)] x: u8 }",
+                "duplicate CBOR key attribute",
+            ),
+            (
+                "struct S { #[cbor(key = 1)] #[cbor(key = 2)] x: u8 }",
+                "duplicate CBOR key attribute",
+            ),
+            (
+                "#[cbor(array)] struct S { #[cbor(key = 1)] x: u8 }",
+                "CBOR keys are not supported on array fields",
+            ),
+        ];
+        for (source, error) in cases {
+            let input = syn::parse_str(source).unwrap();
+            assert_eq!(derive_encode(&input).unwrap_err().to_string(), error);
+            assert_eq!(derive_decode(&input).unwrap_err().to_string(), error);
+        }
     }
 }
