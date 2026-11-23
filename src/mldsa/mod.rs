@@ -35,7 +35,7 @@ use spki::der::AnyRef;
 use spki::der::asn1::BitStringRef;
 use spki::{AlgorithmIdentifier, ObjectIdentifier, SubjectPublicKeyInfo};
 use subtle::ConstantTimeEq;
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroizing;
 
 use crate::pem;
 
@@ -102,30 +102,23 @@ pub enum Error {
 #[derive(Clone)]
 pub struct SecretKey {
     inner: ml_dsa::SigningKey<MlDsa65>,
-    seed: ml_dsa::Seed,
-}
-
-impl Drop for SecretKey {
-    fn drop(&mut self) {
-        self.seed.zeroize();
-    }
 }
 
 impl SecretKey {
     /// Creates a new, random private key.
     pub fn generate() -> SecretKey {
-        let mut seed = ml_dsa::Seed::default();
-        getrandom::fill(&mut seed).unwrap();
+        let mut seed = Zeroizing::new(ml_dsa::Seed::default());
+        getrandom::fill(seed.as_mut_slice()).unwrap();
 
         let inner = ml_dsa::SigningKey::<MlDsa65>::from_seed(&seed);
-        Self { inner, seed }
+        Self { inner }
     }
 
     /// Creates a private key from a 32-byte seed.
     pub fn from_bytes(seed: &[u8; SECRET_KEY_SIZE]) -> Self {
-        let array = ml_dsa::Seed::try_from(seed.as_slice()).unwrap();
-        let inner = ml_dsa::SigningKey::<MlDsa65>::from_seed(&array);
-        Self { inner, seed: array }
+        let seed = Zeroizing::new(ml_dsa::Seed::from(*seed));
+        let inner = ml_dsa::SigningKey::<MlDsa65>::from_seed(&seed);
+        Self { inner }
     }
 
     /// Parses a DER buffer into a private key.
@@ -204,9 +197,8 @@ impl SecretKey {
 
     /// Returns the 32-byte seed of the private key.
     pub fn to_bytes(&self) -> Zeroizing<[u8; SECRET_KEY_SIZE]> {
-        let mut out = Zeroizing::new([0u8; 32]);
-        out.copy_from_slice(self.seed.as_slice());
-        out
+        let seed = Zeroizing::new(self.inner.to_seed());
+        Zeroizing::new(seed.0)
     }
 
     /// Serializes a private key into a DER buffer.
@@ -214,8 +206,9 @@ impl SecretKey {
         #[allow(deprecated)] // to_expanded is wasteful, but that's the DER spec
         let enc = Zeroizing::new(self.inner.expanded_key().to_expanded());
 
+        let seed = Zeroizing::new(self.inner.to_seed());
         let inner_key = MlDsa65PrivateKeyInner {
-            seed: OctetStringRef::new(self.seed.as_slice()).unwrap(),
+            seed: OctetStringRef::new(seed.as_slice()).unwrap(),
             expanded: OctetStringRef::new(enc.as_slice()).unwrap(),
         };
         let inner = Zeroizing::new(inner_key.to_der().unwrap());
@@ -270,10 +263,12 @@ impl SecretKey {
 }
 
 /// An ML-DSA-65 public key usable for verification.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PublicKey {
     inner: ml_dsa::VerifyingKey<MlDsa65>,
 }
+
+impl Eq for PublicKey {}
 
 impl PublicKey {
     /// Converts a 1952-byte array into a public key.
@@ -406,11 +401,6 @@ impl crate::cbor::Encode for PublicKey {
 
 #[cfg(feature = "cbor")]
 impl crate::cbor::Decode for PublicKey {
-    fn decode_cbor(data: &[u8]) -> Result<Self, crate::cbor::Error> {
-        let bytes = <[u8; PUBLIC_KEY_SIZE]>::decode_cbor(data)?;
-        Ok(Self::from_bytes(&bytes))
-    }
-
     fn decode_cbor_notrail(
         decoder: &mut crate::cbor::Decoder<'_>,
     ) -> Result<Self, crate::cbor::Error> {
@@ -461,11 +451,6 @@ impl crate::cbor::Encode for Signature {
 
 #[cfg(feature = "cbor")]
 impl crate::cbor::Decode for Signature {
-    fn decode_cbor(data: &[u8]) -> Result<Self, crate::cbor::Error> {
-        let bytes = <[u8; SIGNATURE_SIZE]>::decode_cbor(data)?;
-        Ok(Self::from_bytes(&bytes))
-    }
-
     fn decode_cbor_notrail(
         decoder: &mut crate::cbor::Decoder<'_>,
     ) -> Result<Self, crate::cbor::Error> {
@@ -475,7 +460,7 @@ impl crate::cbor::Decode for Signature {
 }
 
 /// A 32-byte unique identifier for an ML-DSA-65 key.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Fingerprint([u8; FINGERPRINT_SIZE]);
 
 impl Fingerprint {
@@ -516,11 +501,6 @@ impl crate::cbor::Encode for Fingerprint {
 
 #[cfg(feature = "cbor")]
 impl crate::cbor::Decode for Fingerprint {
-    fn decode_cbor(data: &[u8]) -> Result<Self, crate::cbor::Error> {
-        let bytes = <[u8; FINGERPRINT_SIZE]>::decode_cbor(data)?;
-        Ok(Self::from_bytes(&bytes))
-    }
-
     fn decode_cbor_notrail(
         decoder: &mut crate::cbor::Decoder<'_>,
     ) -> Result<Self, crate::cbor::Error> {
@@ -949,44 +929,62 @@ dbdfd1dd95f38d72218ceeae2461974019c705ef7d2d16a56e7b50a0cd51
         assert_eq!(hex::encode(key.to_der()), input);
     }
 
-    /// Tests signing and verifying messages. Note, this test is not meant to test
-    /// cryptography, it is mostly an API sanity check to verify that everything
-    /// seems to work.
-    ///
-    /// TODO(karalabe): Get some live test vectors for a bit more sanity
+    /// Tests that verification binds the message, context, signature, and key.
     #[test]
     fn test_sign_verify() {
-        // Create the keys for Alice
         let secret = SecretKey::generate();
         let public = secret.public_key();
-
-        // Run a bunch of different authentication/encryption combinations
-        struct TestCase<'a> {
-            message: &'a [u8],
-            ctx: &'a [u8],
+        let other = SecretKey::from_bytes(&[7; SECRET_KEY_SIZE]).public_key();
+        let message = b"message to authenticate".as_slice();
+        for ctx in [b"".as_slice(), b"application context"] {
+            let signature = secret.sign(message, ctx);
+            let mut tampered = signature.clone();
+            tampered.0[0] ^= 1;
+            public.verify(message, ctx, &signature).unwrap();
+            for (key, message, ctx, sig) in [
+                (&public, b"changed".as_slice(), ctx, &signature),
+                (&public, message, b"wrong context".as_slice(), &signature),
+                (&public, message, ctx, &tampered),
+                (&other, message, ctx, &signature),
+            ] {
+                assert_eq!(key.verify(message, ctx, sig), Err(Error::InvalidSignature));
+            }
         }
-        let tests = [
-            TestCase {
-                message: b"message to authenticate",
-                ctx: b"",
-            },
-            TestCase {
-                message: b"message to authenticate",
-                ctx: b"application context",
-            },
-        ];
+    }
 
-        for tt in &tests {
-            // Sign and verify the message
-            let signature = secret.sign(tt.message, tt.ctx);
-            public.verify(tt.message, tt.ctx, &signature).unwrap();
+    /// Tests that signing rejects a context one byte over the ML-DSA limit.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    #[should_panic(expected = "signature::Error")]
+    fn test_sign_rejects_long_context() {
+        SecretKey::from_bytes(&[7; SECRET_KEY_SIZE]).sign(b"message", &[0; 256]);
+    }
 
-            // Verify wrong context fails
-            assert!(
-                public
-                    .verify(tt.message, b"wrong context", &signature)
-                    .is_err()
-            );
+    /// Tests that a DER private key's expanded bytes must match its seed.
+    #[test]
+    fn test_secretkey_der_rejects_mismatched_expanded_key() {
+        let mut der = SecretKey::from_bytes(&[7; SECRET_KEY_SIZE]).to_der();
+        // The expanded key is the last OCTET STRING in the private key.
+        *der.last_mut().unwrap() ^= 1;
+        assert_eq!(
+            SecretKey::from_der(&der).err(),
+            Some(Error::MalformedKey(
+                "expanded key does not match seed".into()
+            ))
+        );
+    }
+
+    /// Tests round-tripping a public key through JSON and CBOR.
+    #[test]
+    fn test_publickey_serde_roundtrip() {
+        let key = SecretKey::from_bytes(&[7; SECRET_KEY_SIZE]).public_key();
+        let json = serde_json::to_string(&key).unwrap();
+        assert_eq!(serde_json::from_str::<PublicKey>(&json).unwrap(), key);
+
+        #[cfg(feature = "cbor")]
+        {
+            let bytes = crate::cbor::encode(&key).unwrap();
+            assert_eq!(crate::cbor::decode::<PublicKey>(&bytes).unwrap(), key);
         }
     }
 

@@ -42,12 +42,10 @@
 // The macros only emit tokens and never need unsafe
 #![forbid(unsafe_code)]
 
-mod cbor;
-
-use cbor::cbor_key_bytes;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
+use std::cmp::Ordering;
 use std::collections::BTreeSet;
 use syn::{Data, DeriveInput, Expr, Fields, Lit, parse_macro_input};
 
@@ -61,6 +59,18 @@ pub fn derive_cbor(input: TokenStream) -> TokenStream {
     match (encode, decode) {
         (Ok(enc), Ok(dec)) => quote! { #enc #dec }.into(),
         (Err(e), _) | (_, Err(e)) => e.to_compile_error().into(),
+    }
+}
+
+/// Orders CBOR integer keys by their deterministic wire encoding, with
+/// non-negative keys first in ascending order and negative keys second in
+/// descending order (`-1` before `-2`).
+fn cbor_key_cmp(a: i64, b: i64) -> Ordering {
+    match (a.is_negative(), b.is_negative()) {
+        (false, false) => a.cmp(&b),
+        (true, true) => b.cmp(&a),
+        (false, true) => Ordering::Less,
+        (true, false) => Ordering::Greater,
     }
 }
 
@@ -253,11 +263,7 @@ fn derive_encode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
 
     // Sort fields by CBOR-encoded key bytes for deterministic encoding
     let mut sorted: Vec<_> = fields.iter().collect();
-    sorted.sort_by(|a, b| {
-        let ka = cbor_key_bytes(a.key.unwrap());
-        let kb = cbor_key_bytes(b.key.unwrap());
-        ka.cmp(&kb)
-    });
+    sorted.sort_by(|a, b| cbor_key_cmp(a.key.unwrap(), b.key.unwrap()));
 
     // Check if any field is optional (affects whether map size is static or dynamic)
     let has_optional = sorted
@@ -397,13 +403,6 @@ fn derive_decode_array(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<T
 
     Ok(quote! {
         impl #cbor_crate::Decode for #name {
-            fn decode_cbor(data: &[u8]) -> Result<Self, #cbor_crate::Error> {
-                let mut dec = #cbor_crate::Decoder::new(data);
-                let result = Self::decode_cbor_notrail(&mut dec)?;
-                dec.finish()?; // Ensure no trailing data
-                Ok(result)
-            }
-
             fn decode_cbor_notrail(dec: &mut #cbor_crate::Decoder) -> Result<Self, #cbor_crate::Error> {
                 let len = dec.decode_array_header()?;
                 if len != #len as u64 {
@@ -624,11 +623,7 @@ fn derive_decode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
 
     if embeds.is_empty() {
         let mut sorted: Vec<_> = fields.iter().collect();
-        sorted.sort_by(|a, b| {
-            let ka = cbor_key_bytes(a.key.unwrap());
-            let kb = cbor_key_bytes(b.key.unwrap());
-            ka.cmp(&kb)
-        });
+        sorted.sort_by(|a, b| cbor_key_cmp(a.key.unwrap(), b.key.unwrap()));
 
         let len = sorted.len();
         let has_optional = sorted
@@ -671,13 +666,6 @@ fn derive_decode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
 
             return Ok(quote! {
                 impl #cbor_crate::Decode for #name {
-                    fn decode_cbor(data: &[u8]) -> Result<Self, #cbor_crate::Error> {
-                        let mut dec = #cbor_crate::Decoder::new(data);
-                        let result = Self::decode_cbor_notrail(&mut dec)?;
-                        dec.finish()?;
-                        Ok(result)
-                    }
-
                     fn decode_cbor_notrail(dec: &mut #cbor_crate::Decoder) -> Result<Self, #cbor_crate::Error> {
                         let len = dec.decode_map_header()?;
                         if len != #len as u64 {
@@ -731,13 +719,6 @@ fn derive_decode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
 
         return Ok(quote! {
             impl #cbor_crate::Decode for #name {
-                fn decode_cbor(data: &[u8]) -> Result<Self, #cbor_crate::Error> {
-                    let mut dec = #cbor_crate::Decoder::new(data);
-                    let result = Self::decode_cbor_notrail(&mut dec)?;
-                    dec.finish()?;
-                    Ok(result)
-                }
-
                 fn decode_cbor_notrail(dec: &mut #cbor_crate::Decoder) -> Result<Self, #cbor_crate::Error> {
                     let map_len = dec.decode_map_header()?;
                     if map_len > #len as u64 {
@@ -758,13 +739,6 @@ fn derive_decode_map(name: &syn::Ident, fields: &[FieldInfo]) -> syn::Result<Tok
 
     Ok(quote! {
         impl #cbor_crate::Decode for #name {
-            fn decode_cbor(data: &[u8]) -> Result<Self, #cbor_crate::Error> {
-                let mut dec = #cbor_crate::Decoder::new(data);
-                let result = Self::decode_cbor_notrail(&mut dec)?;
-                dec.finish()?;
-                Ok(result)
-            }
-
             fn decode_cbor_notrail(dec: &mut #cbor_crate::Decoder) -> Result<Self, #cbor_crate::Error> {
                 let entries = #cbor_crate::decode_map_entries_slices_notrail(dec)?;
                 let mut remaining = #cbor_crate::MapEntries::new(entries);

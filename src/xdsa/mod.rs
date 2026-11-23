@@ -250,7 +250,7 @@ impl SecretKey {
 
 /// An ML-DSA-65 public key paired with an Ed25519 public key for
 /// verifying quantum resistant digital signatures.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PublicKey {
     ml_key: mldsa::PublicKey,
     ed_key: eddsa::PublicKey,
@@ -367,18 +367,7 @@ impl PublicKey {
 
     /// Verifies a digital signature.
     pub fn verify(&self, message: &[u8], signature: &Signature) -> Result<(), Error> {
-        // Construct M' = Prefix || Label || len(ctx) || ctx || PH(M)
-        // where ctx is empty and PH is SHA512
-        let mut hasher = sha2::Sha512::new();
-        hasher.update(message);
-        let prehash: [u8; 64] = hasher.finalize().into();
-
-        let mut m_prime =
-            Vec::with_capacity(SIGNATURE_PREFIX.len() + SIGNATURE_DOMAIN.len() + 1 + 64);
-        m_prime.extend_from_slice(SIGNATURE_PREFIX);
-        m_prime.extend_from_slice(SIGNATURE_DOMAIN);
-        m_prime.push(0); // len(ctx) = 0, no ctx bytes follow
-        m_prime.extend_from_slice(&prehash);
+        let m_prime = split_signing_message(message);
 
         // Split and verify both signatures
         let (ml_sig, ed_sig) = signature.split();
@@ -420,11 +409,6 @@ impl crate::cbor::Encode for PublicKey {
 
 #[cfg(feature = "cbor")]
 impl crate::cbor::Decode for PublicKey {
-    fn decode_cbor(data: &[u8]) -> Result<Self, crate::cbor::Error> {
-        let bytes = <[u8; PUBLIC_KEY_SIZE]>::decode_cbor(data)?;
-        Self::from_bytes(&bytes).map_err(|e| crate::cbor::Error::DecodeFailed(e.to_string()))
-    }
-
     fn decode_cbor_notrail(
         decoder: &mut crate::cbor::Decoder<'_>,
     ) -> Result<Self, crate::cbor::Error> {
@@ -541,11 +525,6 @@ impl crate::cbor::Encode for Signature {
 
 #[cfg(feature = "cbor")]
 impl crate::cbor::Decode for Signature {
-    fn decode_cbor(data: &[u8]) -> Result<Self, crate::cbor::Error> {
-        let bytes = <[u8; SIGNATURE_SIZE]>::decode_cbor(data)?;
-        Ok(Self::from_bytes(&bytes))
-    }
-
     fn decode_cbor_notrail(
         decoder: &mut crate::cbor::Decoder<'_>,
     ) -> Result<Self, crate::cbor::Error> {
@@ -555,7 +534,7 @@ impl crate::cbor::Decode for Signature {
 }
 
 /// A 256-bit unique identifier for a composite ML-DSA-65-Ed25519-SHA512 key.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Fingerprint([u8; FINGERPRINT_SIZE]);
 
 impl Fingerprint {
@@ -596,11 +575,6 @@ impl crate::cbor::Encode for Fingerprint {
 
 #[cfg(feature = "cbor")]
 impl crate::cbor::Decode for Fingerprint {
-    fn decode_cbor(data: &[u8]) -> Result<Self, crate::cbor::Error> {
-        let bytes = <[u8; FINGERPRINT_SIZE]>::decode_cbor(data)?;
-        Ok(Self::from_bytes(&bytes))
-    }
-
     fn decode_cbor_notrail(
         decoder: &mut crate::cbor::Decoder<'_>,
     ) -> Result<Self, crate::cbor::Error> {
@@ -826,7 +800,7 @@ f6e178bcc044204110444ea2b7e80548769ae5010c22707493adb0baf55f\
         let pubkey = seckey.public_key();
         assert_eq!(pubkey.to_bytes().to_vec(), expected_pubkey);
 
-        // Sign and verify (ML-DSA uses randomized signing, so we can't compare bytes)
+        // Signing uses deterministic ML-DSA, while the IETF vector signature used hedged signing.
         let signature = seckey.sign(ietf_vectors::TEST_MSG.as_bytes());
         pubkey
             .verify(ietf_vectors::TEST_MSG.as_bytes(), &signature)
@@ -992,5 +966,19 @@ f6e178bcc044204110444ea2b7e80548769ae5010c22707493adb0baf55f\
 
         let err = SecretKey::from_der(&bad);
         assert!(matches!(err, Err(Error::MalformedKey(_))));
+    }
+
+    /// Tests round-tripping a public key through JSON and CBOR.
+    #[test]
+    fn test_publickey_serde_roundtrip() {
+        let key = SecretKey::from_bytes(&[7; SECRET_KEY_SIZE]).public_key();
+        let json = serde_json::to_string(&key).unwrap();
+        assert_eq!(serde_json::from_str::<PublicKey>(&json).unwrap(), key);
+
+        #[cfg(feature = "cbor")]
+        {
+            let bytes = crate::cbor::encode(&key).unwrap();
+            assert_eq!(crate::cbor::decode::<PublicKey>(&bytes).unwrap(), key);
+        }
     }
 }

@@ -106,13 +106,6 @@ impl Encode for OemidValue {
 }
 
 impl Decode for OemidValue {
-    fn decode_cbor(data: &[u8]) -> Result<Self, cbor::Error> {
-        let mut dec = cbor::Decoder::new(data);
-        let result = Self::decode_cbor_notrail(&mut dec)?;
-        dec.finish()?;
-        Ok(result)
-    }
-
     fn decode_cbor_notrail(dec: &mut cbor::Decoder<'_>) -> Result<Self, cbor::Error> {
         // Peek at major type to determine format: uint -> PEN, bytes -> Random or IEEE
         if dec.peek_uint().is_ok() {
@@ -148,13 +141,6 @@ impl Encode for Oemid {
 }
 
 impl Decode for Oemid {
-    fn decode_cbor(data: &[u8]) -> Result<Self, cbor::Error> {
-        let mut dec = cbor::Decoder::new(data);
-        let result = Self::decode_cbor_notrail(&mut dec)?;
-        dec.finish()?;
-        Ok(result)
-    }
-
     fn decode_cbor_notrail(dec: &mut cbor::Decoder<'_>) -> Result<Self, cbor::Error> {
         let entries = cbor::decode_map_entries_slices_notrail(dec)?;
         let mut remaining = cbor::MapEntries::new(entries);
@@ -233,13 +219,6 @@ impl Encode for HwVersion {
 }
 
 impl Decode for HwVersion {
-    fn decode_cbor(data: &[u8]) -> Result<Self, cbor::Error> {
-        let mut dec = cbor::Decoder::new(data);
-        let result = Self::decode_cbor_notrail(&mut dec)?;
-        dec.finish()?;
-        Ok(result)
-    }
-
     fn decode_cbor_notrail(dec: &mut cbor::Decoder<'_>) -> Result<Self, cbor::Error> {
         let entries = cbor::decode_map_entries_slices_notrail(dec)?;
         let mut remaining = cbor::MapEntries::new(entries);
@@ -322,13 +301,6 @@ impl Encode for DebugState {
 }
 
 impl Decode for DebugState {
-    fn decode_cbor(data: &[u8]) -> Result<Self, cbor::Error> {
-        let mut dec = cbor::Decoder::new(data);
-        let result = Self::decode_cbor_notrail(&mut dec)?;
-        dec.finish()?;
-        Ok(result)
-    }
-
     fn decode_cbor_notrail(dec: &mut cbor::Decoder<'_>) -> Result<Self, cbor::Error> {
         let value = dec.decode_uint()?;
         match value {
@@ -407,13 +379,6 @@ impl Encode for SwVersion {
 }
 
 impl Decode for SwVersion {
-    fn decode_cbor(data: &[u8]) -> Result<Self, cbor::Error> {
-        let mut dec = cbor::Decoder::new(data);
-        let result = Self::decode_cbor_notrail(&mut dec)?;
-        dec.finish()?;
-        Ok(result)
-    }
-
     fn decode_cbor_notrail(dec: &mut cbor::Decoder<'_>) -> Result<Self, cbor::Error> {
         let entries = cbor::decode_map_entries_slices_notrail(dec)?;
         let mut remaining = cbor::MapEntries::new(entries);
@@ -476,13 +441,6 @@ impl Encode for Use {
 }
 
 impl Decode for Use {
-    fn decode_cbor(data: &[u8]) -> Result<Self, cbor::Error> {
-        let mut dec = cbor::Decoder::new(data);
-        let result = Self::decode_cbor_notrail(&mut dec)?;
-        dec.finish()?;
-        Ok(result)
-    }
-
     fn decode_cbor_notrail(dec: &mut cbor::Decoder<'_>) -> Result<Self, cbor::Error> {
         let value = dec.decode_uint()?;
         match value {

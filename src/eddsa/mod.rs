@@ -27,7 +27,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use der::asn1::OctetStringRef;
 use der::{Decode, Encode};
-use ed25519_dalek::pkcs8::{DecodePublicKey, EncodePublicKey};
+use ed25519_dalek::pkcs8::EncodePublicKey;
 use ed25519_dalek::{Signer, Verifier};
 use pkcs8::PrivateKeyInfoRef;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
@@ -210,7 +210,7 @@ impl SecretKey {
 }
 
 /// An Ed25519 public key usable for verification.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PublicKey {
     inner: ed25519_dalek::VerifyingKey,
 }
@@ -244,9 +244,12 @@ impl PublicKey {
                 "unexpected algorithm parameters".into(),
             ));
         }
-        let inner = ed25519_dalek::VerifyingKey::from_public_key_der(der)
-            .map_err(|err| Error::MalformedKey(err.to_string()))?;
-        Ok(Self { inner })
+        let bytes: &[u8; PUBLIC_KEY_SIZE] = info
+            .subject_public_key
+            .as_bytes()
+            .and_then(|bytes| bytes.try_into().ok())
+            .ok_or_else(|| Error::MalformedKey("invalid public key bit string".into()))?;
+        Self::from_bytes(bytes)
     }
 
     /// Parses a PEM string into a public key.
@@ -316,11 +319,6 @@ impl crate::cbor::Encode for PublicKey {
 
 #[cfg(feature = "cbor")]
 impl crate::cbor::Decode for PublicKey {
-    fn decode_cbor(data: &[u8]) -> Result<Self, crate::cbor::Error> {
-        let bytes = <[u8; PUBLIC_KEY_SIZE]>::decode_cbor(data)?;
-        Self::from_bytes(&bytes).map_err(|e| crate::cbor::Error::DecodeFailed(e.to_string()))
-    }
-
     fn decode_cbor_notrail(
         decoder: &mut crate::cbor::Decoder<'_>,
     ) -> Result<Self, crate::cbor::Error> {
@@ -371,11 +369,6 @@ impl crate::cbor::Encode for Signature {
 
 #[cfg(feature = "cbor")]
 impl crate::cbor::Decode for Signature {
-    fn decode_cbor(data: &[u8]) -> Result<Self, crate::cbor::Error> {
-        let bytes = <[u8; SIGNATURE_SIZE]>::decode_cbor(data)?;
-        Ok(Self::from_bytes(&bytes))
-    }
-
     fn decode_cbor_notrail(
         decoder: &mut crate::cbor::Decoder<'_>,
     ) -> Result<Self, crate::cbor::Error> {
@@ -385,7 +378,7 @@ impl crate::cbor::Decode for Signature {
 }
 
 /// An Ed25519 key fingerprint.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Fingerprint([u8; FINGERPRINT_SIZE]);
 
 impl Fingerprint {
@@ -426,11 +419,6 @@ impl crate::cbor::Encode for Fingerprint {
 
 #[cfg(feature = "cbor")]
 impl crate::cbor::Decode for Fingerprint {
-    fn decode_cbor(data: &[u8]) -> Result<Self, crate::cbor::Error> {
-        let bytes = <[u8; FINGERPRINT_SIZE]>::decode_cbor(data)?;
-        Ok(Self::from_bytes(&bytes))
-    }
-
     fn decode_cbor_notrail(
         decoder: &mut crate::cbor::Decoder<'_>,
     ) -> Result<Self, crate::cbor::Error> {
@@ -504,31 +492,61 @@ MCowBQYDK2VwAyEAGb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE=
         assert!(SecretKey::from_pem(ietf_vectors::SECKEY_V2_PEM).is_err());
     }
 
-    /// Tests signing and verifying messages. Note, this test is not meant to test
-    /// cryptography, it is mostly an API sanity check to verify that everything
-    /// seems to work.
+    /// Tests verification with the original and altered messages, signatures, and keys.
     #[test]
     fn test_sign_verify() {
-        // Create the keys for Alice
         let secret = SecretKey::generate();
         let public = secret.public_key();
+        let other = SecretKey::from_bytes(&[7; SECRET_KEY_SIZE]).public_key();
+        let message = b"message to authenticate".as_slice();
+        let signature = secret.sign(message);
+        let mut tampered = signature;
+        tampered.0[0] ^= 1;
 
-        // Run a bunch of different authentication/encryption combinations
-        struct TestCase<'a> {
-            message: &'a [u8],
+        public.verify(message, &signature).unwrap();
+        for (key, message, sig) in [
+            (&public, b"changed".as_slice(), &signature),
+            (&public, message, &tampered),
+            (&other, message, &signature),
+        ] {
+            assert_eq!(key.verify(message, sig), Err(Error::InvalidSignature));
         }
-        let tests = [TestCase {
-            message: b"message to authenticate",
-        }];
+    }
 
-        for tt in &tests {
-            // Sign the message using the test case data
-            let signature = secret.sign(tt.message);
+    /// Tests round-tripping a public key through JSON and CBOR.
+    #[test]
+    fn test_publickey_serde_roundtrip() {
+        let key = SecretKey::from_bytes(&[7; SECRET_KEY_SIZE]).public_key();
+        let json = serde_json::to_string(&key).unwrap();
+        assert_eq!(serde_json::from_str::<PublicKey>(&json).unwrap(), key);
 
-            // Verify the signature message
-            public
-                .verify(tt.message, &signature)
-                .unwrap_or_else(|e| panic!("failed to verify message: {}", e));
+        #[cfg(feature = "cbor")]
+        {
+            let bytes = crate::cbor::encode(&key).unwrap();
+            assert_eq!(crate::cbor::decode::<PublicKey>(&bytes).unwrap(), key);
+        }
+    }
+
+    /// Tests that Ed25519 SPKI keys must contain exactly 32 byte-aligned bytes.
+    #[test]
+    fn test_publickey_der_rejects_invalid_bit_strings() {
+        let bytes = [0; PUBLIC_KEY_SIZE + 1];
+        for (unused, len) in [
+            (1, PUBLIC_KEY_SIZE),
+            (0, PUBLIC_KEY_SIZE - 1),
+            (0, PUBLIC_KEY_SIZE + 1),
+        ] {
+            let info = SubjectPublicKeyInfo {
+                algorithm: spki::AlgorithmIdentifierRef {
+                    oid: OID,
+                    parameters: None,
+                },
+                subject_public_key: BitStringRef::new(unused, &bytes[..len]).unwrap(),
+            };
+            assert_eq!(
+                PublicKey::from_der(&info.to_der().unwrap()),
+                Err(Error::MalformedKey("invalid public key bit string".into()))
+            );
         }
     }
 

@@ -101,10 +101,10 @@ pub use types::{
     EncapKeyHeader, HEADER_TIMESTAMP, SigProtectedHeader, SigStructure,
 };
 
-// Use an indirect time package that mostly defers to sts::time on most platforms,
+// Use an indirect time package that mostly defers to std::time on most platforms,
 // except on wasm, where it uses the JS engine's time subsystem.
 use web_time::{SystemTime, UNIX_EPOCH};
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroizing;
 
 use crate::cbor::{self, Decode, Encode, Raw};
 use crate::{xdsa, xhpke};
@@ -217,6 +217,14 @@ pub const ALGORITHM_ID_XDSA: i64 = -70000;
 /// Private COSE algorithm identifier for X-Wing (ML-KEM-768 + X25519).
 pub const ALGORITHM_ID_XHPKE: i64 = -70001;
 
+/// Returns the current Unix timestamp in seconds.
+fn now_unix() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time before Unix epoch")
+        .as_secs() as i64
+}
+
 /// Creates a COSE_Sign1 digital signature without an embedded payload, whose
 /// envelope payload is null.
 ///
@@ -236,11 +244,7 @@ pub fn sign_detached<A: Encode>(
     signer: &xdsa::SecretKey,
     domain: &[u8],
 ) -> Result<Vec<u8>, Error> {
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system time before Unix epoch")
-        .as_secs() as i64;
-    sign_detached_at(msg_to_auth, signer, domain, timestamp)
+    sign_detached_at(msg_to_auth, signer, domain, now_unix())
 }
 
 /// Creates a COSE_Sign1 digital signature with an embedded payload.
@@ -260,11 +264,7 @@ pub fn sign<E: Encode, A: Encode>(
     signer: &xdsa::SecretKey,
     domain: &[u8],
 ) -> Result<Vec<u8>, Error> {
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system time before Unix epoch")
-        .as_secs() as i64;
-    sign_at(msg_to_embed, msg_to_auth, signer, domain, timestamp)
+    sign_at(msg_to_embed, msg_to_auth, signer, domain, now_unix())
 }
 
 /// Creates a COSE_Sign1 digital signature without an embedded payload, with an
@@ -356,19 +356,18 @@ pub fn sign_at<E: Encode, A: Encode>(
     )?;
     let signature = signer.sign(&blob);
 
-    // Build and encode COSE_Sign1, wiping the payload it holds once encoded
+    // Build and encode COSE_Sign1; its Drop impl wipes the payload on return
     let len = protected.len() + msg_to_embed.len() + xdsa::SIGNATURE_SIZE;
-    let mut sign1 = CoseSign1 {
+    let sign1 = CoseSign1 {
         protected,
         unprotected: EmptyHeader {},
         payload: Some(std::mem::take(&mut *msg_to_embed)),
         signature,
     };
-    let encoded = encode_wiped(&sign1, len);
-    sign1.payload.zeroize();
+    let mut encoded = encode_wiped(&sign1, len)?;
 
     // Hand the encoded COSE_Sign1 over to the caller
-    Ok(std::mem::take(&mut *encoded?))
+    Ok(std::mem::take(&mut *encoded))
 }
 
 /// Validates a COSE_Sign1 digital signature with a detached payload.
@@ -391,10 +390,7 @@ pub fn verify_detached<A: Encode>(
 ) -> Result<(), Error> {
     // Read the clock only if max_drift is specified
     let now = match max_drift {
-        Some(_) => SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system time before Unix epoch")
-            .as_secs() as i64,
+        Some(_) => now_unix(),
         None => 0,
     };
     verify_detached_at(msg_to_check, msg_to_auth, verifier, domain, max_drift, now)
@@ -425,7 +421,7 @@ pub fn verify_detached_at<A: Encode>(
     // Parse COSE_Sign1
     let sign1: CoseSign1 = cbor::decode(msg_to_check)?;
 
-    // Verify payload is null (detached)
+    // Verify payload is null (detached); CoseSign1::drop wipes any payload
     if sign1.payload.is_some() {
         return Err(Error::UnexpectedPayload);
     }
@@ -477,10 +473,7 @@ pub fn verify<E: Decode, A: Encode>(
 ) -> Result<E, Error> {
     // Read the clock only if max_drift is specified
     let now = match max_drift {
-        Some(_) => SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system time before Unix epoch")
-            .as_secs() as i64,
+        Some(_) => now_unix(),
         None => 0,
     };
     verify_at(msg_to_check, msg_to_auth, verifier, domain, max_drift, now)
@@ -513,9 +506,8 @@ pub fn verify_at<E: Decode, A: Encode>(
     // Parse COSE_Sign1
     let sign1: CoseSign1 = cbor::decode(msg_to_check)?;
 
-    // Verify payload is present (embedded). It can hold secrets, so every
-    // buffer holding it is wiped on drop.
-    let payload = Zeroizing::new(sign1.payload.ok_or(Error::MissingPayload)?);
+    // Verify payload is present (embedded); CoseSign1::drop wipes it on return
+    let payload = sign1.payload.as_deref().ok_or(Error::MissingPayload)?;
 
     // Verify the protected header
     let header = verify_sig_protected_header(&sign1.protected, ALGORITHM_ID_XDSA, verifier)?;
@@ -533,7 +525,7 @@ pub fn verify_at<E: Decode, A: Encode>(
             context: "Signature1",
             protected: &sign1.protected,
             external_aad: &aad,
-            payload: &payload,
+            payload,
         },
         sign1.protected.len() + aad.len() + payload.len(),
     )?;
@@ -543,7 +535,7 @@ pub fn verify_at<E: Decode, A: Encode>(
         .verify(&blob, &sign1.signature)
         .map_err(|e| Error::InvalidSignature(e.to_string()))?;
 
-    Ok(cbor::decode(&payload)?)
+    Ok(cbor::decode(payload)?)
 }
 
 /// Extracts the signer's fingerprint from a COSE_Sign1 signature without
@@ -557,10 +549,6 @@ pub fn verify_at<E: Decode, A: Encode>(
 /// Returns the signer's fingerprint from the protected header's `kid` field.
 pub fn signer(signature: &[u8]) -> Result<xdsa::Fingerprint, Error> {
     let sign1: CoseSign1 = cbor::decode(signature)?;
-
-    // The payload can hold secrets and is never read, so it is wiped right away
-    drop(Zeroizing::new(sign1.payload));
-
     let header: SigProtectedHeader = cbor::decode(&sign1.protected)?;
     Ok(header.kid)
 }
@@ -577,10 +565,8 @@ pub fn signer(signature: &[u8]) -> Result<xdsa::Fingerprint, Error> {
 /// Returns the CBOR-decoded payload.
 pub fn peek<E: Decode>(signature: &[u8]) -> Result<E, Error> {
     let sign1: CoseSign1 = cbor::decode(signature)?;
-
-    // The payload can hold secrets, so it is wiped on drop
-    let payload = Zeroizing::new(sign1.payload.ok_or(Error::MissingPayload)?);
-    Ok(cbor::decode(&payload)?)
+    let payload = sign1.payload.as_deref().ok_or(Error::MissingPayload)?;
+    Ok(cbor::decode(payload)?)
 }
 
 /// Signs a message, then encrypts it to a recipient.
@@ -610,10 +596,6 @@ pub fn seal<E: Encode, A: Encode>(
     domain: &[u8],
     padding: &Padding,
 ) -> Result<Vec<u8>, Error> {
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system time before Unix epoch")
-        .as_secs() as i64;
     seal_at(
         msg_to_seal,
         msg_to_auth,
@@ -621,7 +603,7 @@ pub fn seal<E: Encode, A: Encode>(
         recipient,
         domain,
         padding,
-        timestamp,
+        now_unix(),
     )
 }
 
@@ -652,19 +634,13 @@ pub fn seal_at<E: Encode, A: Encode>(
     timestamp: i64,
 ) -> Result<Vec<u8>, Error> {
     // Pre-encode for EncStructure (which needs raw bytes for external_aad)
-    let msg_to_auth = cbor::encode(msg_to_auth)?;
+    let aad = Raw(cbor::encode(msg_to_auth)?);
 
     // Create a COSE_Sign1 with the payload, binding the AAD (use Raw to avoid
     // re-encoding). It holds the plaintext, so it is wiped once encrypted.
-    let signed = Zeroizing::new(sign_at(
-        msg_to_seal,
-        Raw(msg_to_auth.clone()),
-        signer,
-        domain,
-        timestamp,
-    )?);
+    let signed = Zeroizing::new(sign_at(msg_to_seal, &aad, signer, domain, timestamp)?);
     // Encrypt the signed message to the recipient
-    encrypt(&signed, Raw(msg_to_auth), recipient, domain, padding)
+    encrypt(&signed, &aad, recipient, domain, padding)
 }
 
 /// Encrypts an already signed COSE_Sign1 to a recipient.
@@ -743,7 +719,7 @@ pub fn encrypt<A: Encode>(
 ///   `Some(n)` accepts differences up to and including `n`; `None` skips the check.
 ///
 /// Returns the CBOR-decoded payload if decryption and verification succeed.
-pub fn open<E: Decode, A: Encode + Clone>(
+pub fn open<E: Decode, A: Encode>(
     msg_to_open: &[u8],
     msg_to_auth: A,
     recipient: &xhpke::SecretKey,
@@ -753,10 +729,7 @@ pub fn open<E: Decode, A: Encode + Clone>(
 ) -> Result<E, Error> {
     // Read the clock only if max_drift is specified
     let now = match max_drift {
-        Some(_) => SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system time before Unix epoch")
-            .as_secs() as i64,
+        Some(_) => now_unix(),
         None => 0,
     };
     open_at(
@@ -783,7 +756,7 @@ pub fn open<E: Decode, A: Encode + Clone>(
 /// - `now`: Unix timestamp in seconds to use for drift checking
 ///
 /// Returns the CBOR-decoded payload if decryption and verification succeed.
-pub fn open_at<E: Decode, A: Encode + Clone>(
+pub fn open_at<E: Decode, A: Encode>(
     msg_to_open: &[u8],
     msg_to_auth: A,
     recipient: &xhpke::SecretKey,
@@ -792,19 +765,11 @@ pub fn open_at<E: Decode, A: Encode + Clone>(
     max_drift: Option<u64>,
     now: i64,
 ) -> Result<E, Error> {
-    // Decrypt the COSE_Encrypt0 to get the COSE_Sign1. It holds the plaintext,
-    // so it is wiped on drop, as is the payload extracted from it.
-    let sign1 = Zeroizing::new(decrypt(
-        msg_to_open,
-        msg_to_auth.clone(),
-        recipient,
-        domain,
-    )?);
+    let aad = Raw(cbor::encode(msg_to_auth)?);
 
-    // Verify the signature and extract the payload
-    let raw: Raw = verify_at::<Raw, _>(&sign1, &msg_to_auth, sender, domain, max_drift, now)?;
-    let payload = Zeroizing::new(raw.0);
-    Ok(cbor::decode(&payload)?)
+    // The signed envelope holds the plaintext, so it is wiped after verification.
+    let sign1 = Zeroizing::new(decrypt(msg_to_open, &aad, recipient, domain)?);
+    verify_at::<E, _>(&sign1, &aad, sender, domain, max_drift, now)
 }
 
 /// Decrypts a sealed message without verifying its signature.
@@ -1323,12 +1288,9 @@ mod tests {
             timestamp: Option<i64>,
             max_drift: Option<u64>,
             wrong_key: bool,
-            want_ok: bool,
+            want_err: Option<fn(&Error) -> bool>,
         }
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
+        let now = now_unix();
 
         let tests = [
             // Valid signature with aad
@@ -1341,7 +1303,7 @@ mod tests {
                 timestamp: None,
                 max_drift: None,
                 wrong_key: false,
-                want_ok: true,
+                want_err: None,
             },
             // Valid signature, empty aad
             TestCase {
@@ -1353,7 +1315,7 @@ mod tests {
                 timestamp: None,
                 max_drift: None,
                 wrong_key: false,
-                want_ok: true,
+                want_err: None,
             },
             // Valid signature with explicit timestamp, no drift check
             TestCase {
@@ -1365,7 +1327,7 @@ mod tests {
                 timestamp: Some(now),
                 max_drift: None,
                 wrong_key: false,
-                want_ok: true,
+                want_err: None,
             },
             // Valid signature within drift tolerance
             TestCase {
@@ -1377,7 +1339,7 @@ mod tests {
                 timestamp: Some(now - 30),
                 max_drift: Some(60),
                 wrong_key: false,
-                want_ok: true,
+                want_err: None,
             },
             // Signature too old (exceeds max_drift)
             TestCase {
@@ -1389,7 +1351,7 @@ mod tests {
                 timestamp: Some(now - 120),
                 max_drift: Some(60),
                 wrong_key: false,
-                want_ok: false,
+                want_err: Some(|err| matches!(err, Error::StaleSignature(..))),
             },
             // Signature too far in the future (exceeds max_drift)
             TestCase {
@@ -1401,7 +1363,7 @@ mod tests {
                 timestamp: Some(now + 120),
                 max_drift: Some(60),
                 wrong_key: false,
-                want_ok: false,
+                want_err: Some(|err| matches!(err, Error::StaleSignature(..))),
             },
             // Wrong domain
             TestCase {
@@ -1410,10 +1372,10 @@ mod tests {
                 verifier_msg_to_auth: b"bar",
                 domain: b"baz",
                 verifier_domain: b"baz2",
-                timestamp: Some(now + 120),
-                max_drift: Some(60),
+                timestamp: None,
+                max_drift: None,
                 wrong_key: false,
-                want_ok: false,
+                want_err: Some(|err| matches!(err, Error::InvalidSignature(_))),
             },
             // Wrong aad
             TestCase {
@@ -1425,7 +1387,7 @@ mod tests {
                 timestamp: None,
                 max_drift: None,
                 wrong_key: false,
-                want_ok: false,
+                want_err: Some(|err| matches!(err, Error::InvalidSignature(_))),
             },
             // Wrong key
             TestCase {
@@ -1437,7 +1399,7 @@ mod tests {
                 timestamp: None,
                 max_drift: None,
                 wrong_key: true,
-                want_ok: false,
+                want_err: Some(|err| matches!(err, Error::UnexpectedSigningKey(..))),
             },
         ];
 
@@ -1473,11 +1435,12 @@ mod tests {
                 test.max_drift,
             );
 
-            if test.want_ok {
+            if let Some(check) = test.want_err {
+                let err = result.unwrap_err();
+                assert!(check(&err), "test {i}: unexpected error {err:?}");
+            } else {
                 let recovered = result.unwrap_or_else(|_| panic!("test {}: expected success", i));
                 assert_eq!(recovered, test.msg_to_sign, "test {}: payload mismatch", i);
-            } else {
-                assert!(result.is_err(), "test {}: expected error", i);
             }
         }
     }
@@ -1558,13 +1521,10 @@ mod tests {
             timestamp: Option<i64>,
             max_drift: Option<u64>,
             wrong_signer: bool,
-            want_ok: bool,
+            want_err: Option<fn(&Error) -> bool>,
         }
         // Fetch the current time for drift tests
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
+        let now = now_unix();
 
         let tests = [
             // Valid seal/open with aad
@@ -1577,7 +1537,7 @@ mod tests {
                 timestamp: None,
                 max_drift: None,
                 wrong_signer: false,
-                want_ok: true,
+                want_err: None,
             },
             // Valid seal/open, empty aad
             TestCase {
@@ -1589,7 +1549,7 @@ mod tests {
                 timestamp: None,
                 max_drift: None,
                 wrong_signer: false,
-                want_ok: true,
+                want_err: None,
             },
             // Valid seal/open, no drift check
             TestCase {
@@ -1601,7 +1561,7 @@ mod tests {
                 timestamp: Some(now),
                 max_drift: None,
                 wrong_signer: false,
-                want_ok: true,
+                want_err: None,
             },
             // Valid seal/open, valid drift
             TestCase {
@@ -1613,7 +1573,7 @@ mod tests {
                 timestamp: Some(now - 30),
                 max_drift: Some(60),
                 wrong_signer: false,
-                want_ok: true,
+                want_err: None,
             },
             // Wrong domain
             TestCase {
@@ -1625,7 +1585,7 @@ mod tests {
                 timestamp: None,
                 max_drift: None,
                 wrong_signer: false,
-                want_ok: false,
+                want_err: Some(|err| matches!(err, Error::DecryptionFailed(_))),
             },
             // Wrong aad
             TestCase {
@@ -1637,7 +1597,7 @@ mod tests {
                 timestamp: None,
                 max_drift: None,
                 wrong_signer: false,
-                want_ok: false,
+                want_err: Some(|err| matches!(err, Error::DecryptionFailed(_))),
             },
             // Wrong signer
             TestCase {
@@ -1649,7 +1609,7 @@ mod tests {
                 timestamp: None,
                 max_drift: None,
                 wrong_signer: true,
-                want_ok: false,
+                want_err: Some(|err| matches!(err, Error::UnexpectedSigningKey(..))),
             },
             // Timestamp too far in the past
             TestCase {
@@ -1661,7 +1621,7 @@ mod tests {
                 timestamp: Some(now - 120),
                 max_drift: Some(60),
                 wrong_signer: false,
-                want_ok: false,
+                want_err: Some(|err| matches!(err, Error::StaleSignature(..))),
             },
             // Timestamp too far in the future
             TestCase {
@@ -1673,7 +1633,7 @@ mod tests {
                 timestamp: Some(now + 120),
                 max_drift: Some(60),
                 wrong_signer: false,
-                want_ok: false,
+                want_err: Some(|err| matches!(err, Error::StaleSignature(..))),
             },
         ];
 
@@ -1711,19 +1671,81 @@ mod tests {
             };
             let result: Result<Vec<u8>, _> = open(
                 &sealed,
-                &test.opener_msg_to_auth.to_vec(),
+                test.opener_msg_to_auth,
                 &carol,
                 &verifier,
                 test.opener_domain,
                 test.max_drift,
             );
 
-            if test.want_ok {
+            if let Some(check) = test.want_err {
+                let err = result.unwrap_err();
+                assert!(check(&err), "test {i}: unexpected error {err:?}");
+            } else {
                 let recovered = result.unwrap_or_else(|_| panic!("test {}: expected success", i));
                 assert_eq!(recovered, test.msg_to_seal, "test {}: payload mismatch", i);
-            } else {
-                assert!(result.is_err(), "test {}: expected error", i);
             }
+        }
+    }
+
+    /// Tests rejection of incorrect COSE headers, payload modes, and encapsulated key sizes.
+    #[test]
+    fn test_header_and_envelope_errors() {
+        let signer = xdsa::SecretKey::generate();
+        let verifier = signer.public_key();
+        let kid = verifier.fingerprint();
+        let other = xdsa::Fingerprint::from_bytes(&[0; xdsa::FINGERPRINT_SIZE]);
+        let signed = sign_at((), (), &signer, b"", 0).unwrap();
+        let mut sign1: CoseSign1 = cbor::decode(&signed).unwrap();
+
+        // Check Sign1 payload-mode and protected-header mismatches.
+        assert_eq!(
+            verify_detached_at(&signed, (), &verifier, b"", None, 0),
+            Err(Error::UnexpectedPayload)
+        );
+        let alg = ALGORITHM_ID_XDSA;
+        let crit = HEADER_TIMESTAMP;
+        for (algorithm, crit, kid, expected) in [
+            (0, crit, kid, Error::UnexpectedAlgorithm(0, alg)),
+            (alg, 0, kid, Error::UnexpectedAlgorithm(0, crit)),
+            (alg, crit, other, Error::UnexpectedSigningKey(other, kid)),
+        ] {
+            sign1.protected = cbor::encode(SigProtectedHeader {
+                algorithm,
+                crit: CritHeader { timestamp: crit },
+                kid,
+                timestamp: 0,
+            })
+            .unwrap();
+            let envelope = cbor::encode(&sign1).unwrap();
+            assert_eq!(
+                verify_at::<(), _>(&envelope, (), &verifier, b"", None, 0),
+                Err(expected)
+            );
+        }
+        let detached = sign_detached_at((), &signer, b"", 0).unwrap();
+        assert_eq!(
+            verify_at::<(), _>(&detached, (), &verifier, b"", None, 0),
+            Err(Error::MissingPayload)
+        );
+
+        // Check Encrypt0 protected-header and encapsulated-key-length errors.
+        let recipient = xhpke::SecretKey::generate();
+        let kid = recipient.fingerprint();
+        let other = xhpke::Fingerprint::from_bytes(&[0; xhpke::FINGERPRINT_SIZE]);
+        let size = xhpke::ENCAP_KEY_SIZE;
+        let sealed = encrypt(&signed, (), &recipient.public_key(), b"", &Padding::None).unwrap();
+        let alg = ALGORITHM_ID_XHPKE;
+        for (algorithm, kid, len, expected) in [
+            (0, kid, size, Error::UnexpectedAlgorithm(0, alg)),
+            (alg, other, size, Error::UnexpectedEncryptionKey(other, kid)),
+            (alg, kid, 0, Error::InvalidEncapKeySize(0, size)),
+        ] {
+            let mut encrypt0: CoseEncrypt0 = cbor::decode(&sealed).unwrap();
+            encrypt0.protected = cbor::encode(EncProtectedHeader { algorithm, kid }).unwrap();
+            encrypt0.unprotected.encap_key.truncate(len);
+            let envelope = cbor::encode(&encrypt0).unwrap();
+            assert_eq!(decrypt(&envelope, (), &recipient, b""), Err(expected));
         }
     }
 

@@ -183,13 +183,6 @@ impl<T: ConfirmKey> Encode for Confirm<T> {
 }
 
 impl<T: ConfirmKey> Decode for Confirm<T> {
-    fn decode_cbor(data: &[u8]) -> Result<Self, cbor::Error> {
-        let mut dec = cbor::Decoder::new(data);
-        let result = Self::decode_cbor_notrail(&mut dec)?;
-        dec.finish()?;
-        Ok(result)
-    }
-
     fn decode_cbor_notrail(dec: &mut cbor::Decoder<'_>) -> Result<Self, cbor::Error> {
         let entries = cbor::decode_map_entries_slices_notrail(dec)?;
         let mut remaining = cbor::MapEntries::new(entries);
