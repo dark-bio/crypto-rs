@@ -4,7 +4,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//! Tiny, security-focused CBOR encoder/decoder.
+//! Tiny, security-focused CBOR encoder and decoder.
 //!
 //! <https://datatracker.ietf.org/doc/html/rfc8949>
 //!
@@ -14,16 +14,16 @@
 //!
 //! - **Booleans:** `bool`
 //! - **Integers:** `u64`, `i64`
-//! - **Text:**     `String`, `&str`
-//! - **Bytes:**    `Vec<u8>`, `&[u8]`, `[u8; N]`
-//! - **Null:**     `Option<T>::None`, [`Null`]
-//! - **Arrays:**   `()`, `(X,)`, `(X, Y)`, ... tuples, [`Array<T>`], [`FixedArray<T, N>`], or structs with `#[cbor(array)]`
-//! - **Maps:**     structs with `#[cbor(key = N)]` fields (integer keys, deterministic order)
-//! - **Raw:**      [`Raw`] (opaque CBOR bytes, passed through without parsing)
+//! - **Text:** `String`, `&str`
+//! - **Bytes:** `Vec<u8>`, `&[u8]`, `[u8; N]`
+//! - **Null:** `Option<T>::None`, [`Null`]
+//! - **Arrays:** `()`, `(X,)`, `(X, Y)`, ... tuples, [`Array<T>`], [`FixedArray<T, N>`], or structs with `#[cbor(array)]`
+//! - **Maps:** structs with `#[cbor(key = N)]` fields (integer keys, deterministic order)
+//! - **Raw:** [`Raw`] (opaque CBOR bytes, passed through without parsing)
 //!
 //! # Values
 //!
-//! Built in types and tuples go through [`encode`] and [`decode`] directly, and
+//! Built-in types and tuples go through [`encode`] and [`decode`] directly, and
 //! decoding a whole blob rejects trailing bytes.
 //!
 //! ```
@@ -38,7 +38,7 @@
 //!
 //! # Derive macros
 //!
-//! Array mode, fields encode positionally:
+//! Array mode encodes fields positionally:
 //!
 //! ```
 //! use darkbio_crypto::cbor::{self, Cbor};
@@ -56,7 +56,7 @@
 //! assert_eq!(cbor::decode::<Foo>(&bytes).unwrap(), foo);
 //! ```
 //!
-//! Map mode, fields encode as key-value pairs sorted by CBOR key bytes:
+//! Map mode encodes fields as key-value pairs sorted by CBOR key bytes:
 //!
 //! ```
 //! use darkbio_crypto::cbor::{self, Cbor};
@@ -141,9 +141,9 @@
 //! # Encoding rules
 //!
 //! Built-in types and derived structs use deterministic encoding (RFC 8949
-//! Section 4.2.1): shortest-form integers, map keys sorted by encoded bytes, no
-//! indefinite lengths, no floats, and no tags. Their decoders enforce these
-//! rules for the values they decode and reject unknown struct fields.
+//! Section 4.2.1), with shortest-form integers, map keys sorted by encoded
+//! bytes, no indefinite lengths, no floats, and no tags. Their decoders enforce
+//! these rules for the values they decode and reject unknown struct fields.
 //!
 //! [`Raw`] is an exception. Encoding copies its bytes without validation, and
 //! decoding only walks enough structure to find an item's boundaries. A raw
@@ -257,27 +257,25 @@ pub fn decode<T: Decode>(data: &[u8]) -> Result<T, Error> {
     T::decode_cbor(data)
 }
 
-/// Does a dry-run decoding to verify that only the tiny, strict subset of
-/// types permitted by this package were used.
+/// Verifies that `data` contains a single valid CBOR item within the tiny,
+/// strict subset of types permitted by this package.
 ///
-/// Checks exactly one complete item, including UTF-8 text, deterministic integer
-/// and length encodings, integer map keys in order without duplicates, and the
-/// nesting limit. It does not validate application-specific schemas or values.
+/// Checks UTF-8 text, deterministic integer and length encodings, integer map
+/// keys in order without duplicates, and the nesting limit. Does not validate
+/// application-specific schemas or values.
 pub fn verify(data: &[u8]) -> Result<(), Error> {
     let mut decoder = Decoder::new(data);
     verify_object(&mut decoder, MAX_DEPTH)?;
     decoder.finish()
 }
 
-/// The low level implementation of the CBOR encoder with only the
-/// handful of desired types supported.
+/// Low-level CBOR encoder supporting only this module's restricted type subset.
 pub struct Encoder {
     buf: Vec<u8>,
 }
 
 impl Encoder {
-    /// Creates a CBOR encoder with an underlying buffer, pre-allocated to
-    /// 1KB (small enough not to be relevant, large enough to avoid tiny appends).
+    /// Creates a CBOR encoder with a 1 KiB pre-allocated buffer.
     pub fn new() -> Self {
         Self {
             buf: Vec::with_capacity(1024),
@@ -294,12 +292,12 @@ impl Encoder {
         self.buf.extend_from_slice(bytes);
     }
 
-    /// Encodes a positive integer into its canonical shortest-form.
+    /// Encodes a positive integer in its canonical shortest form.
     pub fn encode_uint(&mut self, value: u64) {
         self.encode_length(MAJOR_UINT, value);
     }
 
-    /// Encodes a signed integer into its canonical shortest-form.
+    /// Encodes a signed integer in its canonical shortest form.
     pub fn encode_int(&mut self, value: i64) {
         if value >= 0 {
             self.encode_length(MAJOR_UINT, value as u64);
@@ -325,7 +323,7 @@ impl Encoder {
         self.encode_length(MAJOR_ARRAY, len as u64);
     }
 
-    /// Special cases the empty tuple to encode as [].
+    /// Encodes the empty tuple as an empty CBOR array (`[]`).
     pub fn encode_empty_tuple(&mut self) {
         self.encode_array_header(0);
     }
@@ -403,8 +401,7 @@ pub fn encode_map_header_to(buf: &mut Vec<u8>, len: usize) {
     encode_length_to(buf, MAJOR_MAP, len as u64);
 }
 
-/// The low level implementation of the CBOR decoder with only the
-/// handful of desired types supported.
+/// Low-level CBOR decoder supporting only this module's restricted type subset.
 #[derive(Clone)]
 pub struct Decoder<'a> {
     data: &'a [u8],
@@ -425,7 +422,7 @@ impl<'a> Decoder<'a> {
         Ok(())
     }
 
-    /// Decodes a positive integer, enforcing minimal canonicalness.
+    /// Decodes a positive integer, enforcing shortest-form encoding.
     pub fn decode_uint(&mut self) -> Result<u64, Error> {
         let (major, value) = self.decode_header()?;
         if major != MAJOR_UINT {
@@ -505,7 +502,7 @@ impl<'a> Decoder<'a> {
         if major != MAJOR_ARRAY {
             return Err(Error::InvalidMajorType(major, MAJOR_ARRAY));
         }
-        // Sanity check: each element needs at least 1 byte
+        // Reject impossible lengths since each element needs at least 1 byte
         let remaining = (self.data.len() - self.pos) as u64;
         if len > remaining {
             return Err(Error::UnexpectedEof);
@@ -520,7 +517,7 @@ impl<'a> Decoder<'a> {
         if major != MAJOR_MAP {
             return Err(Error::InvalidMajorType(major, MAJOR_MAP));
         }
-        // Sanity check: each key-value pair needs at least 2 bytes
+        // Reject impossible lengths since each key-value pair needs at least 2 bytes
         let remaining = (self.data.len() - self.pos) as u64;
         if len > remaining / 2 {
             return Err(Error::UnexpectedEof);
@@ -619,11 +616,11 @@ impl<'a> Decoder<'a> {
             _ => Err(Error::InvalidAdditionalInfo(info)),
         }?;
 
-        // IEEE 754 floats (additional info 25..=27) have no integer width to validate.
+        // IEEE 754 floats (additional info 25..=27) have no integer width to validate
         if major == MAJOR_SIMPLE && info >= INFO_UINT16 {
             return Err(Error::UnsupportedType(major));
         }
-        // Ensure it was canonical in the first place
+        // Enforce shortest-form integer encoding
         if !match info {
             0..=23 => value < 24,
             INFO_UINT8 => value >= 24 && value <= u8::MAX as u64,
@@ -637,7 +634,7 @@ impl<'a> Decoder<'a> {
         Ok((major, value))
     }
 
-    /// Retrieves the next handful of bytes from the buffer.
+    /// Reads the next `len` bytes from the buffer.
     fn read_bytes(&mut self, len: u64) -> Result<&'a [u8], Error> {
         // Ensure there's still enough data left in the buffer
         if len > usize::MAX as u64 {
@@ -866,7 +863,7 @@ impl<T: Encode> Encode for &T {
 /// Constant for convenient CBOR null encoding, the [`Null`] unit value.
 pub const NULL: Null = Null;
 
-/// A unit type that encodes/decodes as CBOR null (0xf6).
+/// Unit type that encodes and decodes as CBOR null (`0xf6`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Null;
 
@@ -946,9 +943,9 @@ impl<T: Decode> Decode for Array<T> {
     fn decode_cbor_notrail(decoder: &mut Decoder<'_>) -> Result<Self, Error> {
         let len = decoder.decode_array_header()?;
 
-        // Cap pre-allocation: the wire can't produce more in-memory elements
-        // than remaining bytes / per-element size. Prevents OOM from inflated
-        // headers. .max(1) guards against zero-sized types.
+        // Cap pre-allocation so inflated headers cannot trigger OOM; the wire
+        // cannot hold more elements than remaining bytes divided by element
+        // size, with max(1) guarding zero-sized types.
         let wire_remaining = decoder.data.len() - decoder.pos;
         let elem_size = std::mem::size_of::<T>().max(1);
         let safe_cap = wire_remaining / elem_size;
@@ -962,7 +959,7 @@ impl<T: Decode> Decode for Array<T> {
 }
 
 /// A `[T; N]` wrapper that encodes and decodes as a CBOR array with an exact
-/// element count. Decoding rejects any length other than N.
+/// element count. Decoding rejects any length other than `N`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FixedArray<T, const N: usize>(pub [T; N]);
 
@@ -1020,9 +1017,9 @@ pub trait MapEncode {
     fn encode_map(&self, enc: &mut MapEncodeBuffer) -> Result<(), Error>;
 }
 
-/// A collector of CBOR map entries in a single shared buffer,
-/// recording (key, start, end) offsets. This avoids per-field allocation:
-/// all encoded values are written contiguously into `data`.
+/// Collector of CBOR map entries in a single shared buffer, recording
+/// `(key, start, end)` offsets so encoded values sit contiguously in `data`
+/// without per-field allocations.
 pub struct MapEncodeBuffer {
     /// Encoded values, written back to back.
     pub data: Vec<u8>,
@@ -1048,7 +1045,7 @@ impl MapEncodeBuffer {
         Ok(())
     }
 
-    /// Encodes an optional field; omits the entry entirely when None.
+    /// Encodes an optional field, omitting the entry when `None`.
     pub fn push_optional<T: Encode>(&mut self, key: i64, value: &Option<T>) -> Result<(), Error> {
         if let Some(v) = value {
             self.push(key, v)?;
@@ -1059,7 +1056,7 @@ impl MapEncodeBuffer {
     /// Assembles the final CBOR map into the provided buffer. Sorts entries
     /// by CBOR key order if not already sorted, then verifies no duplicate keys.
     pub fn finish_to(mut self, out: &mut Vec<u8>) -> Result<(), Error> {
-        // Check if already in order (common case: keys from embeds interleave nicely)
+        // Check if already in deterministic key order
         let ordered = self
             .entries
             .windows(2)
@@ -1074,7 +1071,7 @@ impl MapEncodeBuffer {
                 return Err(Error::DuplicateMapKey(w[0].0));
             }
         }
-        // Assemble output: map header + sorted key-value pairs
+        // Write the map header followed by sorted key-value pairs
         out.reserve(self.data.len() + self.entries.len() * 10 + 5);
         encode_length_to(out, MAJOR_MAP, self.entries.len() as u64);
         for &(key, start, end) in &self.entries {
@@ -1198,9 +1195,8 @@ impl<'a, 'b, E: MapEntryAccess<'a>> MapEntriesScoped<'a, 'b, E> {
         }
     }
 
-    /// Checks whether a key belongs to this scoped view. The keys slice
-    /// originates from `cbor_map_keys()` which is sorted by `cbor_key_cmp`,
-    /// so a binary search replaces the former linear scan.
+    /// Reports whether `key` belongs to this scoped view using binary search
+    /// over `keys` (sorted by [`cbor_key_cmp`]).
     fn key_allowed(&self, key: i64) -> bool {
         self.keys
             .binary_search_by(|k| cbor_key_cmp(*k, key))
@@ -1222,13 +1218,12 @@ impl<'a, 'b, E: MapEntryAccess<'a>> MapEntryAccess<'a> for MapEntriesScoped<'a, 
     }
 
     fn is_empty(&self) -> bool {
-        // We are iterating self.keys, so every key is allowed by
-        // definition; skip key_allowed and probe the parent directly.
+        // Every key in self.keys is allowed, so probe the parent directly
         self.keys.iter().all(|k| !self.entries.contains(*k))
     }
 
     fn remaining_keys(&self) -> Vec<i64> {
-        // Same: iterating self.keys, so key_allowed is always true.
+        // Every key in self.keys is allowed, so filter against the parent directly
         self.keys
             .iter()
             .copied()
@@ -1317,27 +1312,21 @@ fn skip_object(decoder: &mut Decoder<'_>, depth: usize) -> Result<(), Error> {
     }
 }
 
-/// Compares two i64 keys according to CBOR deterministic encoding
-/// order (RFC 8949 Section 4.2.1): bytewise lexicographic order of encoded keys.
+/// Compares two `i64` keys by CBOR deterministic encoding order (RFC 8949
+/// Section 4.2.1), matching bytewise lexicographic order of encoded keys.
 ///
-/// For integers this means: positive integers (0, 1, 2, ...) come before negative
-/// integers (-1, -2, -3, ...), and within each category they're ordered by their
-/// encoded length first, then by value.
+/// Non-negative integers (`0, 1, 2, ...`) sort before negative integers
+/// (`-1, -2, -3, ...`), and within each group shorter encodings (smaller
+/// magnitudes) sort first.
 pub fn cbor_key_cmp(a: i64, b: i64) -> Ordering {
-    // CBOR deterministic encoding of integer keys:
-    //   - Major type 0 (non-negative) encodes as 0x00..0x1b; shorter forms sort first.
-    //   - Major type 1 (negative)     encodes as 0x20..0x3b; shorter forms sort first.
-    //   - Major 0 bytes always < Major 1 bytes, so all non-negatives sort before negatives.
-    //
-    // Within each sign category, CBOR uses canonical shortest-form encoding,
-    // so smaller absolute values get shorter encodings which sort first; equal
-    // lengths are ordered by value. This matches plain unsigned comparison of
-    // the wire value (the value itself for non-negative, (-1 - n) for negative n).
+    // Major type 0 (non-negative) encodes in 0x00..=0x1b, always below major
+    // type 1 (negative) in 0x20..=0x3b. Within each sign, shortest-form
+    // encoding makes wire byte order match unsigned comparison of the wire
+    // argument (n for non-negative, -1 - n for negative).
     match (a >= 0, b >= 0) {
         (true, true) => (a as u64).cmp(&(b as u64)),
         (false, false) => {
-            // Wire value for negative n is (-1 - n) as u64.
-            // -1 → wire 0, -2 → wire 1, … so smaller absolute value sorts first.
+            // Wire value for negative n is (-1 - n) as u64 (-1 -> 0, -2 -> 1, ...)
             ((-1 - a) as u64).cmp(&((-1 - b) as u64))
         }
         (true, false) => Ordering::Less,
@@ -1425,9 +1414,8 @@ fn verify_object(decoder: &mut Decoder, depth: usize) -> Result<(), Error> {
 
     match major {
         MAJOR_UINT | MAJOR_NINT => {
-            // Integers are valid (canonicalness was already verified in the
-            // header decoding). Overflow checking is done at decode time based
-            // on the target type (u64 vs i64).
+            // Shortest-form encoding was already verified by decode_header;
+            // range checks happen at decode time based on u64 vs i64
             Ok(())
         }
         MAJOR_BYTES => {
@@ -1790,7 +1778,8 @@ mod tests {
         }
     }
 
-    /// Tests that byte strings encode correctly on a bunch of samples.
+    /// Tests that byte strings encode correctly across owned, slice, and
+    /// fixed-array inputs.
     #[test]
     fn test_bytes_encoding() {
         // Empty bytes
@@ -1830,7 +1819,7 @@ mod tests {
         assert_eq!(encoded, vec![0x43, 10, 11, 12]);
     }
 
-    /// Tests that byte strings decode correctly on a bunch of samples.
+    /// Tests that byte strings decode into vectors and fixed-size arrays.
     #[test]
     fn test_bytes_decoding() {
         // Empty bytes
@@ -1913,7 +1902,7 @@ mod tests {
         check::<32>();
     }
 
-    /// Tests that UTF-8 strings encode correctly on a bunch of samples.
+    /// Tests that UTF-8 strings encode correctly across `&str` and `String`.
     #[test]
     fn test_string_encoding() {
         // Empty string
@@ -1945,7 +1934,7 @@ mod tests {
         assert_eq!(&encoded[1..], string_ref.as_bytes());
     }
 
-    /// Tests that UTF-8 strings decode correctly on a bunch of samples.
+    /// Tests that UTF-8 strings decode correctly.
     #[test]
     fn test_string_decoding() {
         // Empty string
@@ -1990,7 +1979,7 @@ mod tests {
         }
     }
 
-    /// Tests that tuples encode correctly on a bunch of samples.
+    /// Tests that tuples encode as CBOR arrays.
     #[test]
     fn test_tuple_encoding() {
         // 0-tuple
@@ -1998,7 +1987,7 @@ mod tests {
         let encoded = encode(empty).unwrap();
         assert_eq!(encoded, vec![0x80]); // major 4, length 0 (empty array)
 
-        // 1-tuple (wonky Rust syntax)
+        // 1-tuple
         let one_tuple = (42u64,);
         let encoded = encode(one_tuple).unwrap();
         assert_eq!(encoded[0], 0x81); // major 4, length 1 (array with 1 element)
@@ -2009,22 +1998,22 @@ mod tests {
         let t = ("hello".to_string(), 42u64);
         let encoded = encode(&t).unwrap();
         assert_eq!(encoded[0], 0x82); // major 4, length 2 (array with 2 elements)
-        // First element: "hello" -> 0x65 + "hello" bytes
+        // First element is "hello" (0x65 + bytes)
         assert_eq!(encoded[1], 0x65); // major 3, length 5
         assert_eq!(&encoded[2..7], b"hello");
-        // Second element: 42 -> 0x182a
+        // Second element is 42 (0x18 0x2a)
         assert_eq!(encoded[7], 0x18); // major 0, INFO_UINT8
         assert_eq!(encoded[8], 42);
     }
 
-    /// Tests that tuples decode correctly on a bunch of samples.
+    /// Tests that tuples decode from CBOR arrays.
     #[test]
     fn test_tuple_decoding() {
         // 0-tuple
         let encoded = vec![0x80]; // empty array
         decode::<()>(&encoded).unwrap();
 
-        // 1-tuple (wonky Rust syntax)
+        // 1-tuple
         let mut encoded = vec![0x81]; // array length 1
         encoded.extend_from_slice(&encode(42u64).unwrap()); // single element
         let decoded = decode::<(u64,)>(&encoded).unwrap();
@@ -2449,21 +2438,21 @@ mod tests {
         assert_eq!(params.0, vec![0x82, 0x01, 0x63, 0x61, 0x72, 0x67]);
     }
 
-    /// Tests that Raw rejects unsupported major types.
+    /// Tests that `Raw` rejects unsupported major types and trailing bytes.
     #[test]
     fn test_raw_rejection() {
-        // Major type 6 (tags) - unsupported
+        // Major type 6 (tags) is unsupported
         let data = vec![0xc0, 0x01]; // tag(0) followed by 1
         assert!(matches!(
             decode::<Raw>(&data),
             Err(Error::UnsupportedType(6))
         ));
 
-        // Major type 7 (floats) - unsupported, but bools/null are now supported
-        let data = vec![0xf5]; // true - now valid
+        // Booleans and null under major type 7 are valid
+        let data = vec![0xf5]; // true
         assert!(decode::<Raw>(&data).is_ok());
 
-        // Float16 is still unsupported
+        // Float16 is unsupported
         let data = vec![0xf9, 0x3c, 0x00]; // 1.0 as float16
         assert!(matches!(
             decode::<Raw>(&data),
@@ -2475,7 +2464,8 @@ mod tests {
         assert!(matches!(decode::<Raw>(&data), Err(Error::TrailingBytes)));
     }
 
-    /// Tests that the dry-decoding verifier properly restricts the allowed types.
+    /// Tests that `verify` accepts the allowed CBOR subset and rejects all
+    /// disallowed types, invalid UTF-8, and non-canonical encodings.
     #[test]
     fn test_verify() {
         // Valid types should pass
@@ -2527,7 +2517,7 @@ mod tests {
             ),
         }
 
-        // Major type 6 (tags) - unsupported
+        // Major type 6 (tags) is unsupported
         let tagged_data = vec![
             0xc0, 0x74, 0x32, 0x30, 0x31, 0x33, 0x2d, 0x30, 0x33, 0x2d, 0x32, 0x31, 0x54, 0x32,
             0x30, 0x3a, 0x30, 0x34, 0x3a, 0x30, 0x30, 0x5a,
@@ -2538,12 +2528,12 @@ mod tests {
             other => panic!("Expected UnsupportedType(6) error, got {:?}", other),
         }
 
-        // Booleans and null are now supported
+        // Booleans and null are supported
         assert!(verify(&encode(false).unwrap()).is_ok());
         assert!(verify(&encode(true).unwrap()).is_ok());
         assert!(verify(&encode(None::<u64>).unwrap()).is_ok());
 
-        // undefined (0xf7) is still unsupported
+        // Undefined (0xf7) is unsupported
         let undefined_val = vec![0xf7];
         assert!(verify(&undefined_val).is_err());
         match verify(&undefined_val).unwrap_err() {
@@ -2591,11 +2581,11 @@ mod tests {
             other => panic!("Expected NonCanonical error, got {:?}", other),
         }
 
-        // Nested arrays with booleans are now valid
+        // Nested arrays with booleans are valid
         let nested_bool = vec![0x81, 0xf4]; // [false]
         assert!(verify(&nested_bool).is_ok());
 
-        // Nested arrays with floats are still invalid
+        // Nested arrays with floats are rejected
         let nested_float = vec![0x81, 0xf9, 0x3c, 0x00]; // [1.0 as float16]
         assert!(verify(&nested_float).is_err());
         match verify(&nested_float).unwrap_err() {
@@ -2647,8 +2637,8 @@ mod tests {
         }
     }
 
-    /// Tests a length overflow caught by the fuzzer, fixed in
-    /// <https://github.com/dark-bio/crypto-rs/pull/3>.
+    /// Tests that an oversized 64-bit string length header fails cleanly
+    /// without overflowing slice bounds.
     #[test]
     fn test_issue_3() {
         let encoded = vec![123, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255];
@@ -3154,8 +3144,8 @@ mod tests {
         }
     }
 
-    /// Tests that an optional embed (Option<T> with #[cbor(embed)]) produces
-    /// the correct CBOR: Some → all fields present, None → all fields absent.
+    /// Tests that an optional embed (`Option<T>` with `#[cbor(embed)]`)
+    /// encodes all fields for `Some` and omits all fields for `None`.
     #[test]
     fn test_map_embed_optional_roundtrip() {
         #[derive(Debug, PartialEq, Cbor)]
@@ -3165,7 +3155,7 @@ mod tests {
             #[cbor(key = 3)]
             c: u64,
         }
-        // Non-nil: all fields present
+        // Present embed includes all inner fields
         let original = Embedded {
             inner: Some(Inner {
                 a: 1,
@@ -3178,7 +3168,7 @@ mod tests {
         let decoded = decode::<Embedded>(&data).unwrap();
         assert_eq!(decoded, original);
 
-        // Byte identity with flat struct
+        // Encoding matches the equivalent flat struct
         let flat = Flat {
             a: 1,
             b: "two".to_string(),
@@ -3186,7 +3176,7 @@ mod tests {
         };
         assert_eq!(data, encode(&flat).unwrap());
 
-        // Nil: only direct field present
+        // Absent embed leaves only the direct field
         let nil_original = Embedded { inner: None, c: 3 };
         let data = encode(&nil_original).unwrap();
         assert_eq!(data[0], 0xa1); // map with 1 entry (only key 3)
@@ -3379,10 +3369,8 @@ mod tests {
         assert_eq!(decoded, outer_only);
         assert!(decoded.a.as_ref().unwrap().b.is_none());
 
-        // Bug case: inner key present (Y from B), outer key missing (X from A).
-        // Wire {2: 2, 3: 3} must fail, since B's activity propagates to A, making
-        // X required. This is the Go TestMapEmbedNestedPointerAllOrNone
-        // "inner-active-outer-missing" case.
+        // Inner key present (key 2 from B) while outer required key 1 from A is
+        // missing must fail because B's presence activates A
         let mut enc = Encoder::new();
         enc.encode_map_header(2);
         enc.encode_int(2);
@@ -3650,7 +3638,7 @@ mod tests {
         let decoded = decode::<Mixed>(&data).unwrap();
         assert_eq!(decoded, val);
 
-        // Wire missing mandatory embed's key but optional present → error
+        // Wire missing mandatory embed key while optional embed is present fails
         let mut enc = Encoder::new();
         enc.encode_map_header(2);
         enc.encode_int(2);
@@ -3683,8 +3671,8 @@ mod tests {
             #[cbor(key = 3)]
             c: u64,
         }
-        // All absent: encode Some(AllOpt { None, None }) → only key 3 on wire
-        // Decode back → None (indistinguishable from outer None)
+        // When every inner optional is None, only key 3 goes on the wire and
+        // decoding yields None (indistinguishable from outer None)
         let val = Outer {
             opt: Some(AllOpt { a: None, b: None }),
             c: 7,
@@ -3777,7 +3765,7 @@ mod tests {
         for (header, width) in [(0xf9, 2), (0xfa, 4), (0xfb, 8)] {
             let mut bytes = vec![0; 1 + width];
             bytes[0] = header;
-            // Include payloads whose low bits match false, true, or null.
+            // Include payloads whose low bits match false, true, or null
             for bits in [0, 1, SIMPLE_FALSE, SIMPLE_TRUE, SIMPLE_NULL] {
                 bytes[width] = bits;
                 assert_eq!(verify(&bytes), Err(Error::UnsupportedType(MAJOR_SIMPLE)));

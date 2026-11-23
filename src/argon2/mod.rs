@@ -4,48 +4,45 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//! Argon2id cryptography wrappers and parametrization.
+//! Argon2id password-based key derivation.
 //!
 //! <https://datatracker.ietf.org/doc/html/rfc9106>
 //!
-//! Turns a password and a salt into key material, made deliberately slow and
-//! memory hungry so guessing passwords is expensive. The output is wiped when
-//! dropped. For stretching a secret that is already random, see the `hkdf`
+//! Derives key material from a password and salt with configurable time and
+//! memory cost to slow down offline guessing. Both the derived key and working
+//! memory are wiped when dropped. For high-entropy secrets, use the `hkdf`
 //! module instead.
+//!
+//! ```
+//! use darkbio_crypto::argon2;
+//!
+//! // Example salt only; generate and store a fresh random 16-byte salt in real code
+//! let salt = b"example salt1234";
+//! let key = argon2::key::<32>(b"password", salt, 3, 64 * 1024, 4);
+//! assert_eq!(key.len(), 32);
+//! ```
 
 use argon2::{Algorithm, Argon2, Block, Params, Version};
 use zeroize::{Zeroize, Zeroizing};
 
-/// Derives a key from the password, salt, and cost parameters using
-/// Argon2id returning a fixed-size byte array that can be used as a
-/// cryptographic key.
-///
-/// For example, a 32 byte key using RFC 9106's recommended profile for
-/// memory-constrained environments:
-///
-/// ```
-/// use darkbio_crypto::argon2;
-///
-/// // Example salt only; generate and store a fresh random 16-byte salt in real code.
-/// let salt = b"example salt1234";
-/// let key = argon2::key::<32>(b"password", salt, 3, 64 * 1024, 4);
-/// assert_eq!(key.len(), 32);
-/// ```
+/// Derives a fixed-size key from `password`, `salt`, and cost parameters using
+/// Argon2id.
 ///
 /// [RFC 9106 Section 4] recommends `time = 1`, `memory = 2 * 1024 * 1024`
-/// (2 GiB), and `threads = 4`. Its second recommendation uses `time = 3`,
-/// `memory = 64 * 1024` (64 MiB), and `threads = 4`. Both use a random 16-byte
-/// salt and a 32-byte output.
+/// (2 GiB), and `threads = 4`, or `time = 3`, `memory = 64 * 1024` (64 MiB),
+/// and `threads = 4` for memory-constrained environments. Both profiles use a
+/// random 16-byte salt and a 32-byte output.
 ///
 /// `time` is the number of passes and `memory` is the total working memory in
-/// KiB. `threads` is Argon2's lane count, an algorithm parameter that changes
-/// the derived key. This crate configures its Argon2 dependency for serial
-/// execution; this argument does not select an OS thread count. Store the salt
-/// and all cost parameters so the same key can be reproduced on other devices.
+/// KiB. `threads` is Argon2's lane count, which changes the derived key even
+/// though this crate runs Argon2 serially rather than spawning OS threads.
+/// Store the salt and all cost parameters so other devices can reproduce the
+/// same key.
 ///
 /// # Panics
 ///
-/// Panics if any of these input limits are violated:
+/// Panics if any input violates RFC 9106 bounds or working-memory allocation
+/// fails:
 ///
 /// - `time` must be at least 1.
 /// - `threads` must be in `1..=0x00ff_ffff`.
@@ -53,8 +50,6 @@ use zeroize::{Zeroize, Zeroizing};
 /// - `salt` must contain 8 to `u32::MAX` bytes.
 /// - `password` must contain at most `u32::MAX` bytes.
 /// - `N` must be in `4..=u32::MAX`.
-///
-/// Also panics if allocation of the working memory fails.
 ///
 /// [RFC 9106 Section 4]: https://www.rfc-editor.org/rfc/rfc9106.html#section-4
 pub fn key<const N: usize>(
@@ -73,19 +68,18 @@ pub fn key<const N: usize>(
     output
 }
 
-/// Derives a key from the password, salt, and cost parameters
-/// using Argon2id returning a byte vector that can be used as a cryptographic
-/// key. See [`key`] for parameter meanings and recommended profiles.
+/// Derives a variable-length key from `password`, `salt`, and cost parameters
+/// using Argon2id.
 ///
-/// This method is analogous to [`key`] but takes the output size as a parameter
-/// and returns a vector instead of a fixed-sized array. Its purpose is to be
-/// used on FFI interfaces where generics break composability. Do not use it in
-/// Rust code.
+/// See [`key`] for parameter meanings and recommended profiles. Analogous to
+/// [`key`], taking the output length at runtime and returning a `Vec<u8>`.
+/// Intended for FFI bindings where const generics do not compose; prefer
+/// [`key`] in Rust.
 ///
 /// # Panics
 ///
 /// Panics for the same invalid inputs as [`key`], with `out` in place of `N`,
-/// or if allocation of the output or working memory fails.
+/// or if allocating the output or working memory fails.
 pub fn key_with_len(
     password: &[u8],
     salt: &[u8],
@@ -115,11 +109,11 @@ fn validate_input_lengths(password_len: usize, salt_len: usize) {
     );
 }
 
-/// Runs Argon2id over the password and salt into the output buffer using
-/// working memory owned by this crate, which gets wiped before returning.
+/// Runs Argon2id into `output` using working memory owned by this crate and
+/// wiped before returning.
 fn hash(argon2: &Argon2, password: &[u8], salt: &[u8], output: &mut [u8]) {
     // The allocating Argon2 API never wipes its working memory, so own it here.
-    // Reserving first keeps an allocation failure a panic instead of an abort.
+    // Reserving first turns an allocation failure into a panic rather than an abort.
     let count = argon2.params().block_count();
     let mut blocks = Vec::new();
     blocks.try_reserve_exact(count).unwrap();
@@ -128,7 +122,7 @@ fn hash(argon2: &Argon2, password: &[u8], salt: &[u8], output: &mut [u8]) {
     let result =
         argon2.hash_password_into_with_memory(password, salt, output, blocks.as_mut_slice());
 
-    // Wipe through the word slices, the Block impl goes word by word instead
+    // Wipe each block's backing words before releasing working memory
     for block in blocks.iter_mut() {
         block.as_mut().zeroize();
     }
@@ -143,14 +137,13 @@ mod tests {
     /// parameters panic before allocating output or working memory.
     #[test]
     fn test_argon2id_limits() {
-        // Minimum valid output length succeeds.
+        // Minimum valid output length succeeds
         assert_eq!(key_with_len(b"", b"12345678", 1, 8, 1, 4).len(), 4);
 
         #[cfg(target_pointer_width = "64")]
         validate_input_lengths(u32::MAX as usize, u32::MAX as usize);
 
-        // On native targets, verify each out-of-range input triggers the
-        // expected validation panic rather than a later allocation failure.
+        // Verify each out-of-range input triggers its validation panic on native targets
         #[cfg(not(target_arch = "wasm32"))]
         {
             let mut cases: Vec<(&str, &str, fn())> = vec![
@@ -193,6 +186,7 @@ mod tests {
         }
     }
 
+    /// Tests Argon2id key derivation against the Go `x/crypto/argon2` vectors.
     #[test]
     fn test_argon2id_vectors() {
         // Test vectors from Go's x/crypto/argon2 package.

@@ -4,13 +4,13 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//! Composite ML-DSA cryptography wrappers and parametrization.
+//! Composite ML-DSA-65 and Ed25519 digital signatures.
 //!
 //! <https://datatracker.ietf.org/doc/html/draft-ietf-lamps-pq-composite-sigs>
 //!
-//! A key signs a message with ML-DSA-65 and Ed25519 at once, and a signature
-//! verifies only if both halves do. Keys and signatures round trip through
-//! fixed size byte arrays. Keys also support DER and PEM serialization.
+//! Signs each message with both ML-DSA-65 and Ed25519, and verifies a
+//! signature only when both halves verify. Keys and signatures serialize as
+//! fixed-size byte arrays, and keys also support DER and PEM.
 //!
 //! ```
 //! use darkbio_crypto::xdsa;
@@ -41,69 +41,63 @@ use sha2::Digest;
 use spki::{ObjectIdentifier, SubjectPublicKeyInfo};
 use zeroize::Zeroizing;
 
-/// The byte encoding of "CompositeAlgorithmSignatures2025" per the
-/// IETF composite signature spec.
+/// Fixed prefix from the IETF composite signature specification.
 const SIGNATURE_PREFIX: &[u8] = b"CompositeAlgorithmSignatures2025";
 
-/// The signature label for ML-DSA-65-Ed25519-SHA512.
+/// Signature label for ML-DSA-65-Ed25519-SHA512.
 pub const SIGNATURE_DOMAIN: &[u8] = b"COMPSIG-MLDSA65-Ed25519-SHA512";
 
-/// The ASN.1 object identifier for MLDSA65-Ed25519-SHA512.
+/// ASN.1 object identifier for MLDSA65-Ed25519-SHA512.
 pub const OID: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.6.48");
 
-/// Size of the secret key in bytes.
-/// Format: ML-DSA seed (32 bytes) || Ed25519 seed (32 bytes)
+/// Size of the secret key in bytes (32 B ML-DSA-65 seed || 32 B Ed25519 seed).
 pub const SECRET_KEY_SIZE: usize = 64;
 
-/// Size of the public key in bytes.
-/// Format: ML-DSA (1952 bytes) || Ed25519 (32 bytes)
+/// Size of the public key in bytes (1952 B ML-DSA-65 || 32 B Ed25519).
 pub const PUBLIC_KEY_SIZE: usize = 1984;
 
-/// Size of a composite signature in bytes.
-/// Format: ML-DSA (3309 bytes) || Ed25519 (64 bytes)
+/// Size of a composite signature in bytes (3309 B ML-DSA-65 || 64 B Ed25519).
 pub const SIGNATURE_SIZE: usize = 3373;
 
 /// Size of a key fingerprint in bytes.
 pub const FINGERPRINT_SIZE: usize = 32;
 
-/// Failures of the xDSA operations.
+/// Failures returned by xDSA operations.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
-    /// The PEM wrapper is malformed. The inner error names the rule it broke.
-    /// Raised by [`SecretKey::from_pem`] and [`PublicKey::from_pem`].
+    /// PEM wrapper is malformed; the inner error identifies the broken rule.
+    /// Returned by [`SecretKey::from_pem`] and [`PublicKey::from_pem`].
     #[error("pem: {0}")]
     Pem(#[from] pem::Error),
-    /// The PEM block type is not the expected one, `PRIVATE KEY` for
-    /// [`SecretKey::from_pem`] and `PUBLIC KEY` for [`PublicKey::from_pem`].
-    /// Carries the type found.
+    /// PEM block label does not match the expected one (`PRIVATE KEY` for
+    /// [`SecretKey::from_pem`] or `PUBLIC KEY` for [`PublicKey::from_pem`]).
+    /// Carries the label found.
     #[error("invalid PEM tag {0}")]
     UnexpectedPemTag(String),
-    /// The DER key names an algorithm other than composite
-    /// ML-DSA-65-Ed25519-SHA512, see [`OID`]. Raised by [`SecretKey::from_der`]
-    /// and [`PublicKey::from_der`], and through them by the PEM parsers.
+    /// DER key identifies an algorithm other than ML-DSA-65-Ed25519-SHA512
+    /// (see [`OID`]). Returned by [`SecretKey::from_der`] and
+    /// [`PublicKey::from_der`], and through them by the PEM parsers.
     #[error("not a composite ML-DSA-65-Ed25519-SHA512 key")]
     UnexpectedAlgorithm,
-    /// The key encoding cannot be parsed or its contents are unusable, such
-    /// as invalid component keys or sizes, unexpected algorithm parameters,
-    /// trailing DER bytes, or an unsupported PKCS#8 version. The message names
-    /// the problem. Raised by the fallible key constructors.
+    /// Key encoding cannot be parsed or its contents are unusable, such as
+    /// invalid component keys or sizes, unexpected algorithm parameters,
+    /// trailing DER bytes, or an unsupported PKCS#8 version. Returned by the
+    /// fallible key constructors.
     #[error("malformed key: {0}")]
     MalformedKey(String),
-    /// A parsed DER key re-encodes to a different length than the input.
-    /// This is a fallback consistency check in the DER constructors. The DER
-    /// parser rejects appended bytes first and reports [`Error::MalformedKey`]
-    /// instead, including when called through the PEM constructors.
+    /// Parsed DER key re-encodes to a different length than the input. This is
+    /// a fallback consistency check in the DER constructors; the DER parser
+    /// rejects appended bytes first with [`Error::MalformedKey`].
     #[error("trailing data in key encoding")]
     TrailingData,
-    /// The signature does not verify under the key for this message. Either
-    /// half failing produces this, the halves are not told apart. Raised by
+    /// Signature does not verify for this key and message. Failures in the
+    /// ML-DSA-65 and Ed25519 halves are not distinguished. Returned by
     /// [`PublicKey::verify`].
     #[error("signature verification failed")]
     InvalidSignature,
 }
 
-/// An ML-DSA-65 private key paired with an Ed25519 private key for
-/// creating and verifying quantum resistant digital signatures.    
+/// Composite ML-DSA-65 and Ed25519 private key for signing.
 #[derive(Clone)]
 pub struct SecretKey {
     ml_key: mldsa::SecretKey,
@@ -111,7 +105,7 @@ pub struct SecretKey {
 }
 
 impl SecretKey {
-    /// Creates a new, random private key.
+    /// Generates a random composite private key.
     pub fn generate() -> SecretKey {
         SecretKey {
             ml_key: mldsa::SecretKey::generate(),
@@ -119,19 +113,18 @@ impl SecretKey {
         }
     }
 
-    /// Creates a secret key from its constituent ML-DSA-65 and Ed25519
-    /// secret keys.
+    /// Combines an ML-DSA-65 secret key and an Ed25519 secret key into a
+    /// composite secret key.
     pub fn compose(ml_key: mldsa::SecretKey, ed_key: eddsa::SecretKey) -> Self {
         Self { ml_key, ed_key }
     }
 
-    /// Decomposes a secret key into its constituent ML-DSA-65 and Ed25519
-    /// secret keys.
+    /// Splits the composite secret key into its ML-DSA-65 and Ed25519 halves.
     pub fn split(self) -> (mldsa::SecretKey, eddsa::SecretKey) {
         (self.ml_key, self.ed_key)
     }
 
-    /// Creates a private key from a 64-byte seed.
+    /// Creates a private key from a 64-byte seed (`ml_seed || ed_seed`).
     pub fn from_bytes(seed: &[u8; SECRET_KEY_SIZE]) -> Self {
         let ml_seed: Zeroizing<[u8; 32]> = Zeroizing::new(seed[..32].try_into().unwrap());
         let ed_seed: Zeroizing<[u8; 32]> = Zeroizing::new(seed[32..].try_into().unwrap());
@@ -142,36 +135,34 @@ impl SecretKey {
         }
     }
 
-    /// Parses a DER buffer into a private key.
+    /// Parses a PKCS#8 DER buffer into a private key.
     pub fn from_der(der: &[u8]) -> Result<Self, Error> {
-        // Parse the DER encoded container
         let info = pkcs8::PrivateKeyInfoRef::from_der(der)
             .map_err(|err| Error::MalformedKey(err.to_string()))?;
 
-        // Reject trailing data by verifying re-encoded length matches input
+        // Verify the re-encoded length matches the input to reject trailing data
         let length = info
             .encoded_len()
             .map_err(|err| Error::MalformedKey(err.to_string()))?;
         if length.try_into() != Ok(der.len()) {
             return Err(Error::TrailingData);
         }
-        // Ensure the algorithm OID matches MLDSA65-Ed25519-SHA512
+        // Check that the algorithm OID matches MLDSA65-Ed25519-SHA512
         if info.algorithm.oid != OID {
             return Err(Error::UnexpectedAlgorithm);
         }
-        // Reject v2 keys. The decoder only ever yields v1 keys without or v2
-        // keys with an embedded public key, all other combinations fail to
-        // parse, so public key presence is an exact v2 marker.
+        // Reject v2 keys. The decoder yields v1 keys without an embedded public
+        // key and v2 keys with one, so a present public key identifies v2.
         if info.public_key.is_some() {
             return Err(Error::MalformedKey("unsupported PKCS#8 version".into()));
         }
-        // Ensure no algorithm parameters are present, none are allowed
+        // Reject algorithm parameters since composite keys permit none
         if info.algorithm.parameters.is_some() {
             return Err(Error::MalformedKey(
                 "unexpected algorithm parameters".into(),
             ));
         }
-        // Private key is ML-DSA seed (32) || Ed25519 seed (32) = 64 bytes
+        // Private key is 32 B ML-DSA-65 seed || 32 B Ed25519 seed
         let seed: Zeroizing<[u8; 64]> =
             Zeroizing::new(info.private_key.as_bytes().try_into().map_err(|_| {
                 Error::MalformedKey("composite private key must be 64 bytes".into())
@@ -180,18 +171,16 @@ impl SecretKey {
         Ok(Self::from_bytes(&seed))
     }
 
-    /// Parses a PEM string into a private key.
+    /// Parses a PKCS#8 PEM string into a private key.
     pub fn from_pem(pem_str: &str) -> Result<Self, Error> {
-        // Crack open the PEM to get to the private key info
         let (kind, data) = pem::decode(pem_str.as_bytes())?;
         if kind != "PRIVATE KEY" {
             return Err(Error::UnexpectedPemTag(kind));
         }
-        // Parse the DER content
         Self::from_der(&data)
     }
 
-    /// Converts a secret key into a 64-byte array.
+    /// Returns the 64-byte private key seed (`ml_seed || ed_seed`).
     pub fn to_bytes(&self) -> Zeroizing<[u8; SECRET_KEY_SIZE]> {
         let mut out = Zeroizing::new([0u8; 64]);
         out[..32].copy_from_slice(self.ml_key.to_bytes().as_slice());
@@ -199,15 +188,13 @@ impl SecretKey {
         out
     }
 
-    /// Serializes a private key into a DER buffer.
+    /// Serializes the private key into PKCS#8 DER.
     pub fn to_der(&self) -> Zeroizing<Vec<u8>> {
-        // Create the MLDSA65-Ed25519-SHA512 algorithm identifier; parameters
-        // MUST be absent
+        // Composite algorithm identifiers omit parameters
         let alg = pkcs8::AlgorithmIdentifierRef {
             oid: OID,
             parameters: None,
         };
-        // The private key is ML-DSA seed (32) || Ed25519 seed (32) = 64 bytes
         let key_bytes = self.to_bytes();
 
         let info = pkcs8::PrivateKeyInfoRef {
@@ -218,12 +205,12 @@ impl SecretKey {
         Zeroizing::new(info.to_der().unwrap())
     }
 
-    /// Serializes a private key into a PEM string.
+    /// Serializes the private key into PKCS#8 PEM.
     pub fn to_pem(&self) -> Zeroizing<String> {
         Zeroizing::new(pem::encode("PRIVATE KEY", &self.to_der()))
     }
 
-    /// Retrieves the public counterpart of the secret key.
+    /// Derives the corresponding public key.
     pub fn public_key(&self) -> PublicKey {
         PublicKey {
             ml_key: self.ml_key.public_key(),
@@ -231,12 +218,13 @@ impl SecretKey {
         }
     }
 
-    /// Returns a 256-bit unique identifier for this key.
+    /// Returns the 256-bit key fingerprint, computed as the SHA-256 hash of
+    /// the raw public key.
     pub fn fingerprint(&self) -> Fingerprint {
         self.public_key().fingerprint()
     }
 
-    /// Creates a digital signature of the message.
+    /// Signs `message` with both ML-DSA-65 and Ed25519.
     pub fn sign(&self, message: &[u8]) -> Signature {
         let m_prime = split_signing_message(message);
 
@@ -248,8 +236,7 @@ impl SecretKey {
     }
 }
 
-/// An ML-DSA-65 public key paired with an Ed25519 public key for
-/// verifying quantum resistant digital signatures.
+/// Composite ML-DSA-65 and Ed25519 public key for signature verification.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PublicKey {
     ml_key: mldsa::PublicKey,
@@ -257,19 +244,18 @@ pub struct PublicKey {
 }
 
 impl PublicKey {
-    /// Creates a public key from its constituent ML-DSA-65 and Ed25519
-    /// public keys.
+    /// Combines an ML-DSA-65 public key and an Ed25519 public key into a
+    /// composite public key.
     pub fn compose(ml_key: mldsa::PublicKey, ed_key: eddsa::PublicKey) -> Self {
         Self { ml_key, ed_key }
     }
 
-    /// Decomposes a public key into its constituent ML-DSA-65 and Ed25519
-    /// public keys.
+    /// Splits the composite public key into its ML-DSA-65 and Ed25519 halves.
     pub fn split(self) -> (mldsa::PublicKey, eddsa::PublicKey) {
         (self.ml_key, self.ed_key)
     }
 
-    /// Converts a 1984-byte array into a public key.
+    /// Creates a public key from a 1984-byte encoding (`ml_key || ed_key`).
     pub fn from_bytes(bytes: &[u8; PUBLIC_KEY_SIZE]) -> Result<Self, Error> {
         let ml_bytes: [u8; 1952] = bytes[..1952].try_into().unwrap();
         let ed_bytes: [u8; 32] = bytes[1952..].try_into().unwrap();
@@ -281,30 +267,29 @@ impl PublicKey {
         })
     }
 
-    /// Parses a DER buffer into a public key.
+    /// Parses an SPKI DER buffer into a public key.
     pub fn from_der(der: &[u8]) -> Result<Self, Error> {
-        // Parse the DER encoded container
         let info: SubjectPublicKeyInfo<AnyRef, BitStringRef> = SubjectPublicKeyInfo::from_der(der)
             .map_err(|err| Error::MalformedKey(err.to_string()))?;
 
-        // Reject trailing data by verifying re-encoded length matches input
+        // Verify the re-encoded length matches the input to reject trailing data
         let length = info
             .encoded_len()
             .map_err(|err| Error::MalformedKey(err.to_string()))?;
         if length.try_into() != Ok(der.len()) {
             return Err(Error::TrailingData);
         }
-        // Ensure the algorithm OID matches MLDSA65-Ed25519-SHA512
+        // Check that the algorithm OID matches MLDSA65-Ed25519-SHA512
         if info.algorithm.oid != OID {
             return Err(Error::UnexpectedAlgorithm);
         }
-        // Ensure no algorithm parameters are present, none are allowed
+        // Reject algorithm parameters since composite keys permit none
         if info.algorithm.parameters.is_some() {
             return Err(Error::MalformedKey(
                 "unexpected algorithm parameters".into(),
             ));
         }
-        // Public key is ML-DSA-65 (1952 bytes) || Ed25519 (32 bytes) = 1984 bytes
+        // Public key is 1952 B ML-DSA-65 || 32 B Ed25519
         let key_bytes: [u8; 1984] = info
             .subject_public_key
             .as_bytes()
@@ -315,18 +300,16 @@ impl PublicKey {
         Self::from_bytes(&key_bytes)
     }
 
-    /// Parses a PEM string into a public key.
+    /// Parses an SPKI PEM string into a public key.
     pub fn from_pem(pem_str: &str) -> Result<Self, Error> {
-        // Crack open the PEM to get to the public key info
         let (kind, data) = pem::decode(pem_str.as_bytes())?;
         if kind != "PUBLIC KEY" {
             return Err(Error::UnexpectedPemTag(kind));
         }
-        // Parse the DER content
         Self::from_der(&data)
     }
 
-    /// Converts a public key into a 1984-byte array.
+    /// Returns the 1984-byte public key encoding (`ml_key || ed_key`).
     pub fn to_bytes(&self) -> [u8; PUBLIC_KEY_SIZE] {
         let mut out = [0u8; 1984];
         out[..1952].copy_from_slice(&self.ml_key.to_bytes());
@@ -334,15 +317,14 @@ impl PublicKey {
         out
     }
 
-    /// Serializes a public key into a DER buffer.
+    /// Serializes the public key into SPKI DER.
     pub fn to_der(&self) -> Vec<u8> {
-        // Create the MLDSA65-Ed25519-SHA512 algorithm identifier; parameters
-        // MUST be absent
+        // Composite algorithm identifiers omit parameters
         let alg = spki::AlgorithmIdentifierRef {
             oid: OID,
             parameters: None,
         };
-        // The public key info is the BITSTRING of the two keys concatenated
+        // Subject public key is the BIT STRING of both keys concatenated
         let key_bytes = self.to_bytes();
 
         let info = SubjectPublicKeyInfo::<AnyRef, BitStringRef> {
@@ -352,12 +334,13 @@ impl PublicKey {
         info.to_der().unwrap()
     }
 
-    /// Serializes a public key into a PEM string.
+    /// Serializes the public key into SPKI PEM.
     pub fn to_pem(&self) -> String {
         pem::encode("PUBLIC KEY", &self.to_der())
     }
 
-    /// Returns a 256-bit unique identifier for this key.
+    /// Returns the 256-bit key fingerprint, computed as the SHA-256 hash of
+    /// the raw public key.
     pub fn fingerprint(&self) -> Fingerprint {
         let mut hasher = sha2::Sha256::new();
         hasher.update(self.ml_key.to_bytes());
@@ -365,7 +348,7 @@ impl PublicKey {
         Fingerprint(hasher.finalize().into())
     }
 
-    /// Verifies a digital signature.
+    /// Verifies `signature` over `message`, requiring both halves to verify.
     pub fn verify(&self, message: &[u8], signature: &Signature) -> Result<(), Error> {
         let m_prime = split_signing_message(message);
 
@@ -417,16 +400,16 @@ impl crate::cbor::Decode for PublicKey {
     }
 }
 
-/// Derives the composite message M' from a raw message
-/// according to the IETF composite signature spec:
+/// Derives the composite signing input `M'` from `message` per the IETF
+/// composite signature specification:
 ///
-///   M' = Prefix || Label || len(ctx) || ctx || PH(M)
-///     where ctx is empty and PH is SHA512.
+/// ```text
+/// M' = Prefix || Label || len(ctx) || ctx || SHA-512(message)
+/// ```
 ///
-/// Use this when signing separately with individual ML-DSA and Ed25519 keys
-/// before composing the signatures with [`Signature::compose`].
-/// The empty `ctx` above belongs to the composite message format. The ML-DSA
-/// signing operation must separately use [`SIGNATURE_DOMAIN`] as its context.
+/// Here `ctx` is empty in the composite message format. When signing separately
+/// with individual ML-DSA-65 and Ed25519 keys before calling
+/// [`Signature::compose`], pass [`SIGNATURE_DOMAIN`] as the ML-DSA-65 context.
 ///
 /// ```
 /// use darkbio_crypto::xdsa;
@@ -587,8 +570,9 @@ impl crate::cbor::Decode for Fingerprint {
 mod tests {
     use super::*;
 
-    /// Test vectors from draft-ietf-lamps-pq-composite-sigs-latest Appendix E
-    // https://datatracker.ietf.org/doc/html/draft-ietf-lamps-pq-composite-sigs
+    /// Test vectors from `draft-ietf-lamps-pq-composite-sigs` Appendix E.
+    ///
+    /// <https://datatracker.ietf.org/doc/html/draft-ietf-lamps-pq-composite-sigs>
     mod ietf_vectors {
         pub const TEST_SECKEY: &str = "\
 d79b8541af185b7bb61ea99c302df11d2b760cb8aa1d0628be8882a82d87\
@@ -800,13 +784,13 @@ f6e178bcc044204110444ea2b7e80548769ae5010c22707493adb0baf55f\
         let pubkey = seckey.public_key();
         assert_eq!(pubkey.to_bytes().to_vec(), expected_pubkey);
 
-        // Signing uses hedged ML-DSA, so verify both signatures rather than comparing bytes.
+        // Signing uses hedged ML-DSA, so verify both signatures rather than comparing bytes
         let signature = seckey.sign(ietf_vectors::TEST_MSG.as_bytes());
         pubkey
             .verify(ietf_vectors::TEST_MSG.as_bytes(), &signature)
             .unwrap();
 
-        // Verify the IETF test signature can be verified
+        // Verify the published IETF signature
         let expected_sig = hex::decode(ietf_vectors::TEST_SIG).unwrap();
         let expected_sig_array: [u8; 3373] = expected_sig.try_into().unwrap();
         let expected_signature = Signature::from_bytes(&expected_sig_array);
@@ -815,9 +799,10 @@ f6e178bcc044204110444ea2b7e80548769ae5010c22707493adb0baf55f\
             .unwrap();
     }
 
+    /// Tests PKCS#8 DER encoding and decoding against the IETF vector.
     #[test]
     fn test_pkcs8_encoding() {
-        // Parse the secret key from seed and from PKCS8
+        // Parse the secret key from raw seed and from PKCS#8 DER
         let seed_bytes = hex::decode(ietf_vectors::TEST_SECKEY).unwrap();
         let seed: [u8; 64] = seed_bytes.try_into().unwrap();
         let seckey_from_seed = SecretKey::from_bytes(&seed);
@@ -825,21 +810,21 @@ f6e178bcc044204110444ea2b7e80548769ae5010c22707493adb0baf55f\
         let pkcs8_bytes = hex::decode(ietf_vectors::TEST_SECKEY_PKCS8).unwrap();
         let seckey_from_pkcs8 = SecretKey::from_der(&pkcs8_bytes).unwrap();
 
-        // Both should produce the same public key
+        // Both derivations must yield the same public key
         assert_eq!(
             seckey_from_seed.public_key().to_bytes(),
             seckey_from_pkcs8.public_key().to_bytes()
         );
 
-        // Re-encoding to DER should match the test vector
+        // Re-encoding to DER must match the vector and round-trip cleanly
         let encoded_der = seckey_from_seed.to_der();
         assert_eq!(*encoded_der, pkcs8_bytes);
 
-        // Round-trip: decode and re-encode
         let roundtrip = SecretKey::from_der(&encoded_der).unwrap();
         assert_eq!(roundtrip.to_der(), encoded_der);
     }
 
+    /// Tests composing and splitting a composite secret key.
     #[test]
     fn test_secretkey_compose_split() {
         let ml_key = mldsa::SecretKey::generate();
@@ -855,6 +840,7 @@ f6e178bcc044204110444ea2b7e80548769ae5010c22707493adb0baf55f\
         assert_eq!(ed_key2.to_bytes(), ed_bytes);
     }
 
+    /// Tests composing and splitting a composite public key.
     #[test]
     fn test_publickey_compose_split() {
         let ml_key = mldsa::SecretKey::generate().public_key();
@@ -870,6 +856,7 @@ f6e178bcc044204110444ea2b7e80548769ae5010c22707493adb0baf55f\
         assert_eq!(ed_key2.to_bytes(), ed_bytes);
     }
 
+    /// Tests composing and splitting a composite signature.
     #[test]
     fn test_signature_compose_split() {
         let ml_sec = mldsa::SecretKey::generate();
@@ -889,6 +876,7 @@ f6e178bcc044204110444ea2b7e80548769ae5010c22707493adb0baf55f\
         assert_eq!(ed_sig2.to_bytes(), ed_bytes);
     }
 
+    /// Tests signing and verifying with a composed secret key.
     #[test]
     fn test_compose_sign_verify() {
         let ml_sec = mldsa::SecretKey::generate();
@@ -903,6 +891,8 @@ f6e178bcc044204110444ea2b7e80548769ae5010c22707493adb0baf55f\
         composite_pub.verify(message, &signature).unwrap();
     }
 
+    /// Tests signing separately with `split_signing_message` and verifying the
+    /// composed signature.
     #[test]
     fn test_separate_sign_compose_verify() {
         let ml_sec = mldsa::SecretKey::generate();

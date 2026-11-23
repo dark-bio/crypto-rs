@@ -4,15 +4,14 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Pull in the README as the package doc
+// Pull in the README as crate documentation
 #![doc = include_str!("../README.md")]
-// Enable the experimental doc_cfg feature
+// Enable docs.rs feature badges
 #![cfg_attr(docsrs, feature(doc_cfg))]
 // The crate only composes other libraries and never needs unsafe itself
 #![forbid(unsafe_code)]
 
-// Allow derive macros to reference this crate as `darkbio_crypto` even when
-// used internally (proc macros can't distinguish internal vs external use).
+// Allow derive macros to refer to this crate as `darkbio_crypto` internally
 extern crate self as darkbio_crypto;
 
 #[cfg(feature = "argon2")]

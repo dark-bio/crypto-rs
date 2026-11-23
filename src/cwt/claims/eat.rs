@@ -62,7 +62,7 @@ impl Oemid {
         }
     }
 
-    /// Returns the 16-byte random OEM ID, or None if this is not a random OEM ID.
+    /// Returns the 16-byte random OEM ID, or `None` if this is not a random OEM ID.
     pub fn random(&self) -> Option<[u8; 16]> {
         match self.value {
             OemidValue::Random(id) => Some(id),
@@ -70,7 +70,7 @@ impl Oemid {
         }
     }
 
-    /// Returns the 3-byte IEEE OUI/MA-L, or None if this is not an IEEE OEM ID.
+    /// Returns the 3-byte IEEE OUI/MA-L, or `None` if this is not an IEEE OEM ID.
     pub fn ieee(&self) -> Option<[u8; 3]> {
         match self.value {
             OemidValue::Ieee(id) => Some(id),
@@ -78,7 +78,8 @@ impl Oemid {
         }
     }
 
-    /// Returns the IANA Private Enterprise Number, or None if this is not a PEN OEM ID.
+    /// Returns the IANA Private Enterprise Number, or `None` if this is not a
+    /// PEN OEM ID.
     pub fn pen(&self) -> Option<u64> {
         match self.value {
             OemidValue::Pen(pen) => Some(pen),
@@ -90,8 +91,11 @@ impl Oemid {
 /// Internal representation of the three OEM ID formats.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum OemidValue {
+    /// 16-byte random manufacturer identifier.
     Random([u8; 16]),
+    /// 3-byte IEEE OUI/MA-L.
     Ieee([u8; 3]),
+    /// IANA Private Enterprise Number.
     Pen(u64),
 }
 
@@ -107,12 +111,12 @@ impl Encode for OemidValue {
 
 impl Decode for OemidValue {
     fn decode_cbor_notrail(dec: &mut cbor::Decoder<'_>) -> Result<Self, cbor::Error> {
-        // Peek at major type to determine format: uint -> PEN, bytes -> Random or IEEE
+        // Distinguish integer PEN from byte-string Random or IEEE forms
         if dec.peek_uint().is_ok() {
             let pen = dec.decode_uint()?;
             return Ok(OemidValue::Pen(pen));
         }
-        // Not an integer, must be bytes
+        // Not an integer, so decode as bytes
         let bytes = dec.decode_bytes()?;
         match bytes.len() {
             3 => {
@@ -183,16 +187,17 @@ pub struct HwModel {
     pub hw_model: Vec<u8>,
 }
 
-/// The hardware revision identifier (key 260).
-/// CBOR-encodes as a 1-element array per RFC 9711 Section 4.2.5:
-/// `[version: tstr]`. The optional scheme is not supported.
+/// Hardware revision identifier (key 260).
+///
+/// Encodes as a 1-element CBOR array `[version]` per RFC 9711 Section 4.2.5;
+/// the optional scheme element is not supported.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HwVersion {
     version: String,
 }
 
 impl HwVersion {
-    /// Creates an HwVersion with the given version string.
+    /// Creates an [`HwVersion`] with `version`.
     pub fn new(version: String) -> Self {
         Self { version }
     }
@@ -266,11 +271,11 @@ pub struct Uptime {
     pub uptime: u64,
 }
 
-/// Whether the boot chain is OEM-authorized,
-/// i.e. secure boot passed (key 262).
+/// Whether the boot chain is OEM-authorized, meaning secure boot passed (key
+/// 262).
 #[derive(Clone, Debug, PartialEq, Eq, Cbor)]
 pub struct OemBoot {
-    /// True when every boot stage was OEM authorized.
+    /// True when every boot stage was OEM-authorized.
     #[cbor(key = 262)]
     pub oem_boot: bool,
 }
@@ -333,16 +338,15 @@ pub struct BootCount {
     pub boot_count: u64,
 }
 
-/// A random value unique to the current boot cycle (key 268).
+/// Random value unique to the current boot cycle (key 268).
 #[derive(Clone, Debug, PartialEq, Eq, Cbor)]
 pub struct BootSeed {
-    /// Random bytes drawn at boot, the same in every token of one boot cycle.
+    /// Random bytes drawn at boot and shared by every token in that boot cycle.
     #[cbor(key = 268)]
     pub boot_seed: Vec<u8>,
 }
 
-/// The name of the firmware or software running on the
-/// device (key 270).
+/// Name of the firmware or software running on the device (key 270).
 #[derive(Clone, Debug, PartialEq, Eq, Cbor)]
 pub struct SwName {
     /// Name of the running firmware or software.
@@ -350,16 +354,17 @@ pub struct SwName {
     pub sw_name: String,
 }
 
-/// The software version identifier (key 271).
-/// CBOR-encodes as a 1-element array per RFC 9711 Section 4.2.7:
-/// `[version: tstr]`. The optional scheme is not supported.
+/// Software version identifier (key 271).
+///
+/// Encodes as a 1-element CBOR array `[version]` per RFC 9711 Section 4.2.7;
+/// the optional scheme element is not supported.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SwVersion {
     version: String,
 }
 
 impl SwVersion {
-    /// Creates a SwVersion with the given version string.
+    /// Creates an [`SwVersion`] with `version`.
     pub fn new(version: String) -> Self {
         Self { version }
     }
@@ -418,7 +423,7 @@ impl MapDecode for SwVersion {
     }
 }
 
-/// The token's intended purpose per RFC 9711 Section 4.3.3.
+/// Intended purpose of the token per RFC 9711 Section 4.3.3.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u64)]
 pub enum Use {
@@ -426,11 +431,11 @@ pub enum Use {
     Generic = 1,
     /// Attestation for service registration.
     Registration = 2,
-    /// Attestation prior to key/config provisioning.
+    /// Attestation prior to key or configuration provisioning.
     Provisioning = 3,
     /// Attestation for certificate signing requests.
     CertIssuance = 4,
-    /// Attestation accompanying a proof-of-possession.
+    /// Attestation accompanying proof of possession.
     ProofOfPossession = 5,
 }
 
@@ -468,7 +473,7 @@ pub struct IntendedUse {
 mod tests {
     use super::*;
 
-    /// Verifies round-trip encoding of a random OEM ID.
+    /// Tests round-trip encoding of a random OEM ID.
     #[test]
     fn test_oemid_random() {
         let id: [u8; 16] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
@@ -487,7 +492,7 @@ mod tests {
         assert_eq!(got.oemid.random(), Some(id));
     }
 
-    /// Verifies round-trip encoding of an IEEE OEM ID.
+    /// Tests round-trip encoding of an IEEE OEM ID.
     #[test]
     fn test_oemid_ieee() {
         let id: [u8; 3] = [0xAC, 0xDE, 0x48];
@@ -506,7 +511,7 @@ mod tests {
         assert_eq!(got.oemid.ieee(), Some(id));
     }
 
-    /// Verifies round-trip encoding of a PEN OEM ID.
+    /// Tests round-trip encoding of a PEN OEM ID.
     #[test]
     fn test_oemid_pen() {
         let pen: u64 = 76543;
@@ -525,7 +530,7 @@ mod tests {
         assert_eq!(got.oemid.pen(), Some(pen));
     }
 
-    /// Verifies that accessors return None for mismatched types.
+    /// Tests that accessors return `None` for mismatched OEM ID forms.
     #[test]
     fn test_oemid_wrong_accessor() {
         let o = Oemid::new_pen(42);
@@ -533,7 +538,7 @@ mod tests {
         assert_eq!(o.ieee(), None);
     }
 
-    /// Verifies round-trip encoding of a hardware version.
+    /// Tests round-trip encoding of a hardware version.
     #[test]
     fn test_hw_version() {
         #[derive(Debug, Cbor)]
@@ -550,7 +555,7 @@ mod tests {
         assert_eq!(got.hw.version(), "1.2.3");
     }
 
-    /// Verifies round-trip encoding of a software version.
+    /// Tests round-trip encoding of a software version.
     #[test]
     fn test_sw_version() {
         #[derive(Debug, Cbor)]
@@ -567,7 +572,7 @@ mod tests {
         assert_eq!(got.sw.version(), "4.5.6");
     }
 
-    /// Verifies round-trip encoding of the simple EAT claims.
+    /// Tests round-trip encoding of the simple EAT claims.
     #[test]
     fn test_simple_claims() {
         #[derive(Debug, Cbor)]
@@ -637,7 +642,7 @@ mod tests {
         let mut enc = cbor::Encoder::new();
         enc.encode_map_header(1);
         enc.encode_int(258);
-        enc.encode_bytes(&[1, 2, 3, 4, 5]); // 5 bytes: neither 3 nor 16
+        enc.encode_bytes(&[1, 2, 3, 4, 5]); // neither 3 nor 16 bytes
 
         #[derive(Debug, Cbor)]
         struct Token {

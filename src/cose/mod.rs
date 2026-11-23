@@ -4,49 +4,34 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//! COSE wrappers for xDSA and xHPKE.
+//! COSE signed and encrypted envelopes over xDSA and xHPKE.
 //!
 //! <https://datatracker.ietf.org/doc/html/rfc9052>
 //! <https://datatracker.ietf.org/doc/html/draft-ietf-cose-hpke>
 //!
-//! Signatures are [`CoseSign1`] envelopes carrying the signer's fingerprint and
-//! a timestamp in the protected header. Encryption is [`CoseEncrypt0`] around a
-//! signed envelope, so every message created by [`seal`] is also signed.
-//! Payloads and authenticated messages can be any types implementing the crate's
-//! CBOR traits. Signing, verification, encryption, and decryption use an
-//! application domain, prefixed with [`DOMAIN_PREFIX`], which both sides must
-//! agree on.
+//! Signatures use [`CoseSign1`] envelopes carrying the signer's fingerprint and
+//! a timestamp in the protected header. Encryption wraps a signed envelope in
+//! [`CoseEncrypt0`], so every message created by [`seal`] is also signed.
+//! Payloads and authenticated messages can be any type implementing this
+//! crate's CBOR traits. Every operation binds an application domain prefixed
+//! with [`DOMAIN_PREFIX`] that both sides must supply.
 //!
 //! ```
 //! use darkbio_crypto::{cose, xdsa, xhpke};
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let signer = xdsa::SecretKey::generate();
+//! let recipient = xhpke::SecretKey::generate();
 //!
-//! // Sign a payload, binding a second message supplied separately
-//! let envelope = cose::sign("hello".to_string(), "context", &signer, b"example")?;
-//! let payload: String =
-//!     cose::verify(&envelope, "context", &signer.public_key(), b"example", Some(60))?;
+//! // Sign and verify a payload with separately supplied authenticated context
+//! let envelope = cose::sign("hello".to_string(), "ctx", &signer, b"example")?;
+//! let payload: String = cose::verify(&envelope, "ctx", &signer.public_key(), b"example", Some(60))?;
 //! assert_eq!(payload, "hello");
 //!
-//! // Sign and encrypt to a recipient in one step, then open and verify it back
-//! let recipient = xhpke::SecretKey::generate();
-//! let sealed = cose::seal(
-//!     "secret".to_string(),
-//!     "context",
-//!     &signer,
-//!     &recipient.public_key(),
-//!     b"example",
-//!     &cose::Padding::Buckets { floor: 8192, step: 20 },
-//! )?;
-//! let opened: String = cose::open(
-//!     &sealed,
-//!     "context",
-//!     &recipient,
-//!     &signer.public_key(),
-//!     b"example",
-//!     Some(60),
-//! )?;
+//! // Sign and encrypt to a recipient, then open and verify
+//! let padding = cose::Padding::Buckets { floor: 8192, step: 20 };
+//! let sealed = cose::seal("secret".to_string(), "ctx", &signer, &recipient.public_key(), b"example", &padding)?;
+//! let opened: String = cose::open(&sealed, "ctx", &recipient, &signer.public_key(), b"example", Some(60))?;
 //! assert_eq!(opened, "secret");
 //! # Ok(())
 //! # }
@@ -55,44 +40,44 @@
 //! # Domain separation and freshness
 //!
 //! Choose distinct domains for distinct application operations. Domains prevent
-//! a message for one purpose from being accepted for another; they do not stop
-//! repeated use within the same domain. Verification accepts a signature whose
-//! timestamp is at most `max_drift` seconds in the past or future. `None` skips
-//! this timestamp check. Applications that require one-time acceptance must
-//! also track a message identifier, nonce, or challenge to reject replays.
+//! a message for one purpose from verifying under another, but do not prevent
+//! replays within the same domain. Verification accepts timestamps within
+//! `max_drift` seconds of now (past or future); `None` skips the timestamp
+//! check. Applications requiring one-time acceptance must track a message
+//! identifier, nonce, or challenge to reject replays.
 //!
 //! # Wire profile
 //!
 //! Interoperating implementations must match these Dark Bio conventions:
 //!
-//! - Envelopes are untagged [`CoseSign1`] and [`CoseEncrypt0`] arrays. CBOR tags
-//!   are not accepted. Headers use this crate's deterministic integer-key maps.
-//! - The private algorithm IDs are [`ALGORITHM_ID_XDSA`] (`-70000`) and
-//!   [`ALGORITHM_ID_XHPKE`] (`-70001`). The protected `kid` is the appropriate
-//!   public key's fingerprint. Signatures require the private timestamp header
-//!   [`HEADER_TIMESTAMP`] (`-70002`) and name it in `crit`.
+//! - Envelopes are untagged [`CoseSign1`] and [`CoseEncrypt0`] arrays; CBOR
+//!   tags are rejected. Headers use this crate's deterministic integer-key
+//!   maps.
+//! - Private algorithm IDs are [`ALGORITHM_ID_XDSA`] (`-70000`) and
+//!   [`ALGORITHM_ID_XHPKE`] (`-70001`). The protected `kid` holds the key
+//!   fingerprint. Signatures require [`HEADER_TIMESTAMP`] (`-70002`) and list
+//!   it in `crit`.
 //! - For signatures, [`SigStructure::external_aad`] is the CBOR encoding of
 //!   `[bstr(DOMAIN_PREFIX || domain), msg_to_auth]`. An embedded payload is the
 //!   CBOR encoding of the caller's value.
-//! - For [`sign_detached`], the caller's message is authenticated in that
-//!   `external_aad`, while [`SigStructure::payload`] is an empty byte string
-//!   and the envelope payload is null. A generic COSE detached-payload API that
-//!   puts the caller's message in `Sig_structure.payload` must be adapted to
-//!   this convention.
+//! - For [`sign_detached`], the caller's message travels in `external_aad`,
+//!   [`SigStructure::payload`] is an empty byte string, and the envelope
+//!   payload is null. Generic COSE detached-payload APIs that place the message
+//!   in `Sig_structure.payload` must adapt to this convention.
 //! - For encryption, [`EncStructure::external_aad`] is the CBOR encoding of
-//!   `msg_to_auth`; the complete encoded `EncStructure` is passed as HPKE AAD.
-//!   HPKE key derivation uses `DOMAIN_PREFIX || domain` as its info. The X-Wing
-//!   encapsulated key is carried in unprotected header `-4`.
+//!   `msg_to_auth`, and the encoded `EncStructure` is passed as HPKE AAD. HPKE
+//!   key derivation uses `DOMAIN_PREFIX || domain` as `info`, and the X-Wing
+//!   encapsulated key sits in unprotected header `-4`.
 //! - The encryption plaintext is the encoded [`CoseSign1`] followed by zero
-//!   bytes, as many as the sender's [`Padding`] policy picks. The signature does
-//!   not cover them, while the encryption authenticates them. A receiver finds
-//!   the end of the [`CoseSign1`] by decoding it and refuses a nonzero byte after
-//!   it. It accepts any number of zeros, none included, so a sender can change
-//!   its policy without its receivers.
+//!   bytes chosen by the sender's [`Padding`] policy. The signature does not
+//!   cover the padding, while the encryption authenticates it. Receivers locate
+//!   the end of [`CoseSign1`] by decoding one CBOR item and reject any nonzero
+//!   trailing byte, accepting any count of trailing zeros (including zero) so
+//!   senders can change padding policies independently.
 //!
 //! Here `bstr` denotes a CBOR byte string and `||` denotes byte concatenation.
-//! The domain and `msg_to_auth` are not included in the returned envelope;
-//! both parties must know them or transmit them separately.
+//! Neither `domain` nor `msg_to_auth` appears in the returned envelope; both
+//! sides must know or transmit them separately.
 
 mod types;
 
@@ -101,8 +86,7 @@ pub use types::{
     EncapKeyHeader, HEADER_TIMESTAMP, SigProtectedHeader, SigStructure,
 };
 
-// Use an indirect time package that mostly defers to std::time on most platforms,
-// except on wasm, where it uses the JS engine's time subsystem.
+// Use web-time so SystemTime works on both native targets and WebAssembly
 use web_time::{SystemTime, UNIX_EPOCH};
 use zeroize::Zeroizing;
 
@@ -110,29 +94,30 @@ use crate::cbor::{self, Decode, Encode, Raw};
 use crate::{xdsa, xhpke};
 
 /// Prefix prepended to the caller's application domain for signature
-/// authentication and HPKE key derivation. Both parties must use the same bytes.
-/// Distinct domains separate application purposes; replay detection within a
-/// domain is the application's responsibility.
+/// authentication and HPKE key derivation.
+///
+/// Both parties must use the same domain. Distinct domains separate application
+/// purposes; replay protection within a domain is the application's
+/// responsibility.
 pub const DOMAIN_PREFIX: &[u8] = crate::xhpke::DOMAIN_PREFIX;
 
-/// How many zero bytes a sender appends to the signed envelope inside the
-/// encryption, so the ciphertext's length shows little about the message.
+/// Policy controlling how many zero bytes a sender appends to a signed envelope
+/// inside encryption to obscure message length.
 ///
-/// Receivers strip any number of zeros, so the policy is the sender's alone and
-/// can change without them.
+/// Receivers strip any number of trailing zero bytes, so senders can change
+/// their policy independently.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Padding {
-    /// No padding: the plaintext is the signed envelope alone.
+    /// No padding; the plaintext is only the signed envelope.
     None,
-    /// Zeros after the signed envelope, up to the smallest size that fits.
-    /// Sizes start at `floor`, and each next one is the previous one plus
-    /// `1/step` of it, rounded up.
+    /// Trailing zeros up to the smallest bucket that fits the signed envelope.
+    /// Buckets start at `floor` and grow by `ceil(size / step)` at each step.
     Buckets {
-        /// Smallest padded size in bytes, which must be nonzero.
+        /// Smallest padded size in bytes (must be nonzero).
         floor: usize,
-        /// Each size grows by itself divided by `step`, rounded up, and `step`
-        /// must be nonzero.
+        /// Growth denominator; each bucket adds `ceil(size / step)` (must be
+        /// nonzero).
         step: usize,
     },
 }
@@ -142,8 +127,8 @@ impl Padding {
     ///
     /// # Panics
     ///
-    /// Panics if a bucket's `floor` or `step` is zero, or the required bucket
-    /// size exceeds [`usize::MAX`].
+    /// Panics if `floor` or `step` is zero, or if the required bucket size
+    /// exceeds [`usize::MAX`].
     fn padded_len(&self, len: usize) -> usize {
         let Self::Buckets { floor, step } = *self else {
             return len;
@@ -162,56 +147,55 @@ impl Padding {
     }
 }
 
-/// Failures of the COSE operations.
+/// Failures returned by COSE operations.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
-    /// The envelope, a header or a payload is not valid CBOR under this
-    /// crate's rules.
+    /// Envelope, header, or payload is not valid CBOR under this crate's rules.
     #[error("cbor: {0}")]
     CborError(#[from] cbor::Error),
-    /// The protected header names the first algorithm where the second was
-    /// required. Also raised when the [`CritHeader`] list is not the expected
-    /// one.
+    /// Protected header specifies the first algorithm (or `crit` label) where
+    /// the second is required.
     #[error("unexpected algorithm: have {0}, want {1}")]
     UnexpectedAlgorithm(i64, i64),
-    /// The envelope was signed by the first fingerprint, the verifier's key
-    /// has the second. [`signer`] looks the right key up without verifying.
+    /// Envelope was signed by the first fingerprint, while the verifier key has
+    /// the second. Use [`signer`] to look up the right key before verifying.
     #[error("unexpected signing key: have {0:x?}, want {1:x?}")]
     UnexpectedSigningKey(xdsa::Fingerprint, xdsa::Fingerprint),
-    /// The xDSA signature does not verify. Carries the underlying error text.
+    /// xDSA signature failed verification. Carries the underlying error text.
     #[error("signature verification failed: {0}")]
     InvalidSignature(String),
-    /// The signature timestamp is the first number of seconds away from now,
-    /// more than the second, which is the allowed drift.
+    /// Signature timestamp differs from now by the first count of seconds,
+    /// exceeding the allowed drift in the second.
     #[error("signature stale: time drift {0}s exceeds max {1}s")]
     StaleSignature(u64, u64),
-    /// [`verify_detached`] found an embedded payload.
+    /// [`verify_detached`] or [`verify_detached_at`] encountered an embedded
+    /// payload.
     #[error("unexpected payload in detached signature")]
     UnexpectedPayload,
-    /// [`verify`] or [`peek`] found no payload.
+    /// [`verify`], [`verify_at`], or [`peek`] encountered a detached envelope
+    /// with no payload.
     #[error("missing payload in embedded signature")]
     MissingPayload,
-    /// The envelope was encrypted to the first fingerprint, the recipient's
-    /// key has the second. [`recipient`] looks the right key up without
+    /// Envelope was encrypted to the first fingerprint, while the recipient key
+    /// has the second. Use [`recipient`] to look up the right key before
     /// decrypting.
     #[error("unexpected encryption key: have {0:x?}, want {1:x?}")]
     UnexpectedEncryptionKey(xhpke::Fingerprint, xhpke::Fingerprint),
-    /// The [`EncapKeyHeader`] carries an encapsulated key of the first size
-    /// where the second, [`xhpke::ENCAP_KEY_SIZE`], is required.
+    /// [`EncapKeyHeader`] carries an encapsulated key of the first size instead
+    /// of [`xhpke::ENCAP_KEY_SIZE`].
     #[error("invalid encapsulated key size: {0}, expected {1}")]
     InvalidEncapKeySize(usize, usize),
-    /// Opening the ciphertext failed, the wrong key, tampered data or a
-    /// mismatched authenticated message. Also raised when [`seal`] or [`encrypt`]
-    /// fails.
-    /// Carries the xHPKE error text.
+    /// xHPKE encryption or decryption failed, such as from a wrong key,
+    /// tampered ciphertext, or mismatched authenticated data.
     #[error("decryption failed: {0}")]
     DecryptionFailed(String),
-    /// The decrypted plaintext holds a nonzero byte after its COSE_Sign1.
+    /// Decrypted plaintext contains a nonzero byte after its `COSE_Sign1`.
     #[error("invalid padding")]
     InvalidPadding,
 }
 
-/// Private COSE algorithm identifier for composite ML-DSA-65 + Ed25519 signatures.
+/// Private COSE algorithm identifier for composite ML-DSA-65 + Ed25519
+/// signatures.
 pub const ALGORITHM_ID_XDSA: i64 = -70000;
 
 /// Private COSE algorithm identifier for X-Wing (ML-KEM-768 + X25519).
@@ -225,20 +209,12 @@ fn now_unix() -> i64 {
         .as_secs() as i64
 }
 
-/// Creates a COSE_Sign1 digital signature without an embedded payload, whose
-/// envelope payload is null.
+/// Creates a detached `COSE_Sign1` signature whose envelope payload is null.
 ///
-/// The caller's message is included in `external_aad`, and the payload in the
-/// signature input is empty. See the module's wire profile for interoperability.
-///
-/// Uses the current system time as the signature timestamp. For testing or custom
-/// timestamps, use [`sign_detached_at`].
-///
-/// - `msg_to_auth`: The message to sign (not embedded in COSE_Sign1)
-/// - `signer`: The xDSA secret key to sign with
-/// - `domain`: Application domain for separating protocol purposes
-///
-/// Returns the serialized COSE_Sign1 structure.
+/// `msg_to_auth` is authenticated through `external_aad` while the signature's
+/// payload input is empty; see the module wire profile. Uses the current system
+/// time as the signature timestamp; use [`sign_detached_at`] for an explicit
+/// timestamp.
 pub fn sign_detached<A: Encode>(
     msg_to_auth: A,
     signer: &xdsa::SecretKey,
@@ -247,17 +223,11 @@ pub fn sign_detached<A: Encode>(
     sign_detached_at(msg_to_auth, signer, domain, now_unix())
 }
 
-/// Creates a COSE_Sign1 digital signature with an embedded payload.
+/// Creates a `COSE_Sign1` signature embedding `msg_to_embed` and authenticating
+/// `msg_to_auth` externally.
 ///
-/// Uses the current system time as the signature timestamp. For testing or custom
-/// timestamps, use [`sign_at`].
-///
-/// - `msg_to_embed`: The message to sign (embedded in COSE_Sign1)
-/// - `msg_to_auth`: Additional authenticated data (not embedded, but signed)
-/// - `signer`: The xDSA secret key to sign with
-/// - `domain`: Application domain for separating protocol purposes
-///
-/// Returns the serialized COSE_Sign1 structure.
+/// Uses the current system time as the signature timestamp; use [`sign_at`] for
+/// an explicit timestamp.
 pub fn sign<E: Encode, A: Encode>(
     msg_to_embed: E,
     msg_to_auth: A,
@@ -267,24 +237,17 @@ pub fn sign<E: Encode, A: Encode>(
     sign_at(msg_to_embed, msg_to_auth, signer, domain, now_unix())
 }
 
-/// Creates a COSE_Sign1 digital signature without an embedded payload, with an
-/// explicit timestamp.
+/// Creates a detached `COSE_Sign1` signature with an explicit Unix `timestamp`
+/// in seconds.
 ///
-/// Uses the same external-AAD convention as [`sign_detached`].
-///
-/// - `msg_to_auth`: The message to sign (not embedded in COSE_Sign1)
-/// - `signer`: The xDSA secret key to sign with
-/// - `domain`: Application domain for separating protocol purposes
-/// - `timestamp`: Unix timestamp in seconds to embed in the protected header
-///
-/// Returns the serialized COSE_Sign1 structure.
+/// Uses the same `external_aad` convention as [`sign_detached`].
 pub fn sign_detached_at<A: Encode>(
     msg_to_auth: A,
     signer: &xdsa::SecretKey,
     domain: &[u8],
     timestamp: i64,
 ) -> Result<Vec<u8>, Error> {
-    // Restrict the user's domain to the context of this library
+    // Scope the caller's domain under this crate's prefix
     let info = [DOMAIN_PREFIX, domain].concat();
     let aad = cbor::encode(&(&info, msg_to_auth))?;
 
@@ -296,14 +259,14 @@ pub fn sign_detached_at<A: Encode>(
         kid: signer.fingerprint(),
         timestamp,
     })?;
-    // Build and sign Sig_structure with empty payload for detached mode
+    // Build and sign Sig_structure with an empty payload for detached mode
     let signature = signer.sign(&cbor::encode(SigStructure {
         context: "Signature1",
         protected: &protected,
         external_aad: &aad,
         payload: &[],
     })?);
-    // Build and encode COSE_Sign1 with null payload
+    // Encode COSE_Sign1 with a null payload
     Ok(cbor::encode(&CoseSign1 {
         protected,
         unprotected: EmptyHeader {},
@@ -312,16 +275,9 @@ pub fn sign_detached_at<A: Encode>(
     })?)
 }
 
-/// Creates a COSE_Sign1 digital signature with an embedded payload and an
-/// explicit timestamp.
-///
-/// - `msg_to_embed`: The message to sign (embedded in COSE_Sign1)
-/// - `msg_to_auth`: Additional authenticated data (not embedded, but signed)
-/// - `signer`: The xDSA secret key to sign with
-/// - `domain`: Application domain for separating protocol purposes
-/// - `timestamp`: Unix timestamp in seconds to embed in the protected header
-///
-/// Returns the serialized COSE_Sign1 structure.
+/// Creates a `COSE_Sign1` signature embedding `msg_to_embed`, authenticating
+/// `msg_to_auth` externally, and recording an explicit Unix `timestamp` in
+/// seconds.
 pub fn sign_at<E: Encode, A: Encode>(
     msg_to_embed: E,
     msg_to_auth: A,
@@ -332,7 +288,7 @@ pub fn sign_at<E: Encode, A: Encode>(
     // The payload can hold secrets, so every buffer holding it is wiped on drop
     let mut msg_to_embed = Zeroizing::new(cbor::encode(msg_to_embed)?);
 
-    // Restrict the user's domain to the context of this library
+    // Scope the caller's domain under this crate's prefix
     let info = [DOMAIN_PREFIX, domain].concat();
     let aad = cbor::encode(&(&info, msg_to_auth))?;
 
@@ -370,17 +326,12 @@ pub fn sign_at<E: Encode, A: Encode>(
     Ok(std::mem::take(&mut *encoded))
 }
 
-/// Validates a COSE_Sign1 digital signature with a detached payload.
+/// Verifies a detached `COSE_Sign1` signature against `msg_to_auth`, `verifier`,
+/// and `domain`.
 ///
-/// Uses the current system time for drift checking. For testing or custom
-/// timestamps, use [`verify_detached_at`].
-///
-/// - `msg_to_check`: The serialized COSE_Sign1 structure (with null payload)
-/// - `msg_to_auth`: The same message used during signing (verified but not embedded)
-/// - `verifier`: The xDSA public key to verify against
-/// - `domain`: Application domain for separating protocol purposes
-/// - `max_drift`: Maximum allowed timestamp difference in seconds, past or future.
-///   `Some(n)` accepts differences up to and including `n`; `None` skips the check.
+/// `max_drift` bounds the allowed timestamp difference in seconds (past or
+/// future) against the current system time; `None` skips the timestamp check.
+/// Use [`verify_detached_at`] for an explicit reference time.
 pub fn verify_detached<A: Encode>(
     msg_to_check: &[u8],
     msg_to_auth: A,
@@ -388,7 +339,7 @@ pub fn verify_detached<A: Encode>(
     domain: &[u8],
     max_drift: Option<u64>,
 ) -> Result<(), Error> {
-    // Read the clock only if max_drift is specified
+    // Read the clock only when drift checking is requested
     let now = match max_drift {
         Some(_) => now_unix(),
         None => 0,
@@ -396,16 +347,8 @@ pub fn verify_detached<A: Encode>(
     verify_detached_at(msg_to_check, msg_to_auth, verifier, domain, max_drift, now)
 }
 
-/// Validates a COSE_Sign1 digital signature with a detached payload, checking
-/// drift against an explicit current time.
-///
-/// - `msg_to_check`: The serialized COSE_Sign1 structure (with null payload)
-/// - `msg_to_auth`: The same message used during signing (verified but not embedded)
-/// - `verifier`: The xDSA public key to verify against
-/// - `domain`: Application domain for separating protocol purposes
-/// - `max_drift`: Maximum allowed timestamp difference in seconds, past or future.
-///   `Some(n)` accepts differences up to and including `n`; `None` skips the check.
-/// - `now`: Unix timestamp in seconds to use for drift checking
+/// Verifies a detached `COSE_Sign1` signature, checking timestamp drift
+/// against the explicit Unix time `now` in seconds.
 pub fn verify_detached_at<A: Encode>(
     msg_to_check: &[u8],
     msg_to_auth: A,
@@ -414,28 +357,26 @@ pub fn verify_detached_at<A: Encode>(
     max_drift: Option<u64>,
     now: i64,
 ) -> Result<(), Error> {
-    // Restrict the user's domain to the context of this library
+    // Scope the caller's domain under this crate's prefix
     let info = [DOMAIN_PREFIX, domain].concat();
     let aad = cbor::encode(&(&info, msg_to_auth))?;
 
-    // Parse COSE_Sign1
+    // Decode COSE_Sign1 and require a null payload
     let sign1: CoseSign1 = cbor::decode(msg_to_check)?;
-
-    // Verify payload is null (detached); CoseSign1::drop wipes any payload
     if sign1.payload.is_some() {
         return Err(Error::UnexpectedPayload);
     }
     // Verify the protected header
     let header = verify_sig_protected_header(&sign1.protected, ALGORITHM_ID_XDSA, verifier)?;
 
-    // Check signature timestamp drift if max_drift is specified
+    // Check timestamp drift when max_drift is set
     if let Some(max) = max_drift {
         let drift = now.abs_diff(header.timestamp);
         if drift > max {
             return Err(Error::StaleSignature(drift, max));
         }
     }
-    // Reconstruct Sig_structure to verify (empty payload for detached mode)
+    // Reconstruct Sig_structure with an empty payload and verify the signature
     let blob = cbor::encode(SigStructure {
         context: "Signature1",
         protected: &sign1.protected,
@@ -443,7 +384,6 @@ pub fn verify_detached_at<A: Encode>(
         payload: &[],
     })?;
 
-    // Verify signature
     verifier
         .verify(&blob, &sign1.signature)
         .map_err(|e| Error::InvalidSignature(e.to_string()))?;
@@ -451,19 +391,11 @@ pub fn verify_detached_at<A: Encode>(
     Ok(())
 }
 
-/// Validates a COSE_Sign1 digital signature and returns the embedded payload.
+/// Verifies a `COSE_Sign1` signature and returns its decoded embedded payload.
 ///
-/// Uses the current system time for drift checking. For testing or custom
-/// timestamps, use [`verify_at`].
-///
-/// - `msg_to_check`: The serialized COSE_Sign1 structure
-/// - `msg_to_auth`: The same additional authenticated data used during signing
-/// - `verifier`: The xDSA public key to verify against
-/// - `domain`: Application domain for separating protocol purposes
-/// - `max_drift`: Maximum allowed timestamp difference in seconds, past or future.
-///   `Some(n)` accepts differences up to and including `n`; `None` skips the check.
-///
-/// Returns the CBOR-decoded embedded payload if verification succeeds.
+/// `max_drift` bounds the allowed timestamp difference in seconds (past or
+/// future) against the current system time; `None` skips the timestamp check.
+/// Use [`verify_at`] for an explicit reference time.
 pub fn verify<E: Decode, A: Encode>(
     msg_to_check: &[u8],
     msg_to_auth: A,
@@ -471,7 +403,7 @@ pub fn verify<E: Decode, A: Encode>(
     domain: &[u8],
     max_drift: Option<u64>,
 ) -> Result<E, Error> {
-    // Read the clock only if max_drift is specified
+    // Read the clock only when drift checking is requested
     let now = match max_drift {
         Some(_) => now_unix(),
         None => 0,
@@ -479,18 +411,8 @@ pub fn verify<E: Decode, A: Encode>(
     verify_at(msg_to_check, msg_to_auth, verifier, domain, max_drift, now)
 }
 
-/// Validates a COSE_Sign1 digital signature and returns the embedded payload,
-/// checking drift against an explicit current time.
-///
-/// - `msg_to_check`: The serialized COSE_Sign1 structure
-/// - `msg_to_auth`: The same additional authenticated data used during signing
-/// - `verifier`: The xDSA public key to verify against
-/// - `domain`: Application domain for separating protocol purposes
-/// - `max_drift`: Maximum allowed timestamp difference in seconds, past or future.
-///   `Some(n)` accepts differences up to and including `n`; `None` skips the check.
-/// - `now`: Unix timestamp in seconds to use for drift checking
-///
-/// Returns the CBOR-decoded embedded payload if verification succeeds.
+/// Verifies a `COSE_Sign1` signature and returns its decoded embedded payload,
+/// checking timestamp drift against the explicit Unix time `now` in seconds.
 pub fn verify_at<E: Decode, A: Encode>(
     msg_to_check: &[u8],
     msg_to_auth: A,
@@ -499,27 +421,25 @@ pub fn verify_at<E: Decode, A: Encode>(
     max_drift: Option<u64>,
     now: i64,
 ) -> Result<E, Error> {
-    // Restrict the user's domain to the context of this library
+    // Scope the caller's domain under this crate's prefix
     let info = [DOMAIN_PREFIX, domain].concat();
     let aad = cbor::encode(&(&info, msg_to_auth))?;
 
-    // Parse COSE_Sign1
+    // Decode COSE_Sign1 and require an embedded payload; Drop wipes it on return
     let sign1: CoseSign1 = cbor::decode(msg_to_check)?;
-
-    // Verify payload is present (embedded); CoseSign1::drop wipes it on return
     let payload = sign1.payload.as_deref().ok_or(Error::MissingPayload)?;
 
     // Verify the protected header
     let header = verify_sig_protected_header(&sign1.protected, ALGORITHM_ID_XDSA, verifier)?;
 
-    // Check signature timestamp drift if max_drift is specified
+    // Check timestamp drift when max_drift is set
     if let Some(max) = max_drift {
         let drift = now.abs_diff(header.timestamp);
         if drift > max {
             return Err(Error::StaleSignature(drift, max));
         }
     }
-    // Reconstruct Sig_structure to verify
+    // Reconstruct Sig_structure and verify the signature
     let blob = encode_wiped(
         SigStructure {
             context: "Signature1",
@@ -530,7 +450,6 @@ pub fn verify_at<E: Decode, A: Encode>(
         sign1.protected.len() + aad.len() + payload.len(),
     )?;
 
-    // Verify signature
     verifier
         .verify(&blob, &sign1.signature)
         .map_err(|e| Error::InvalidSignature(e.to_string()))?;
@@ -538,56 +457,41 @@ pub fn verify_at<E: Decode, A: Encode>(
     Ok(cbor::decode(payload)?)
 }
 
-/// Extracts the signer's fingerprint from a COSE_Sign1 signature without
-/// verifying it.
+/// Extracts the signer's fingerprint from a `COSE_Sign1` envelope without
+/// verifying the signature.
 ///
-/// This allows looking up the appropriate verification key before attempting
-/// full signature verification.
-///
-/// - `signature`: The serialized COSE_Sign1 structure
-///
-/// Returns the signer's fingerprint from the protected header's `kid` field.
+/// Use this to look up the expected verification key before calling [`verify`]
+/// or [`verify_detached`].
 pub fn signer(signature: &[u8]) -> Result<xdsa::Fingerprint, Error> {
     let sign1: CoseSign1 = cbor::decode(signature)?;
     let header: SigProtectedHeader = cbor::decode(&sign1.protected)?;
     Ok(header.kid)
 }
 
-/// Extracts the embedded payload from a COSE_Sign1 signature without
-/// verifying it.
+/// Extracts and decodes the embedded payload from a `COSE_Sign1` envelope
+/// without verifying the signature.
 ///
-/// **Warning**: This function does NOT verify the signature. The returned payload
-/// is unauthenticated and should not be trusted until verified with [`verify`].
-/// Use [`signer`] to extract the signer's fingerprint for key lookup.
-///
-/// - `signature`: The serialized COSE_Sign1 structure
-///
-/// Returns the CBOR-decoded payload.
+/// Do not trust the returned payload until the envelope has been verified with
+/// [`verify`]. Use [`signer`] to look up the verification key by fingerprint.
 pub fn peek<E: Decode>(signature: &[u8]) -> Result<E, Error> {
     let sign1: CoseSign1 = cbor::decode(signature)?;
     let payload = sign1.payload.as_deref().ok_or(Error::MissingPayload)?;
     Ok(cbor::decode(payload)?)
 }
 
-/// Signs a message, then encrypts it to a recipient.
+/// Signs `msg_to_seal` with `signer`, pads it according to `padding`, and
+/// encrypts the resulting `COSE_Sign1` to `recipient` in a `COSE_Encrypt0`
+/// envelope.
 ///
-/// Uses the current system time as the signature timestamp. For testing or custom
-/// timestamps, use [`seal_at`].
-///
-/// - `msg_to_seal`: The message to sign and encrypt
-/// - `msg_to_auth`: Additional authenticated data (signed and bound to encryption, but not embedded)
-/// - `signer`: The xDSA secret key to sign with
-/// - `recipient`: The xHPKE public key to encrypt to
-/// - `domain`: Application domain for HPKE key derivation
-/// - `padding`: Sender's policy for zeros after the signed envelope
-///
-/// Returns the serialized COSE_Encrypt0 structure containing the encrypted COSE_Sign1.
+/// `msg_to_auth` is authenticated by both the signature and the encryption, and
+/// must be supplied separately when opening. Uses the current system time as
+/// the signature timestamp; use [`seal_at`] for an explicit timestamp.
 ///
 /// # Panics
 ///
-/// Panics if [`Padding::Buckets`] has a zero `floor` or `step`, or the required
-/// bucket size exceeds [`usize::MAX`]. Also panics if the system time precedes
-/// the Unix epoch.
+/// Panics if [`Padding::Buckets`] has a zero `floor` or `step`, if the required
+/// bucket size exceeds [`usize::MAX`], or if the system time precedes the Unix
+/// epoch.
 pub fn seal<E: Encode, A: Encode>(
     msg_to_seal: E,
     msg_to_auth: A,
@@ -607,23 +511,14 @@ pub fn seal<E: Encode, A: Encode>(
     )
 }
 
-/// Signs a message with an explicit timestamp, then encrypts it to a
-/// recipient.
-///
-/// - `msg_to_seal`: The message to sign and encrypt
-/// - `msg_to_auth`: Additional authenticated data (signed and bound to encryption, but not embedded)
-/// - `signer`: The xDSA secret key to sign with
-/// - `recipient`: The xHPKE public key to encrypt to
-/// - `domain`: Application domain for HPKE key derivation
-/// - `padding`: Sender's policy for zeros after the signed envelope
-/// - `timestamp`: Unix timestamp in seconds to embed in the signature's protected header
-///
-/// Returns the serialized COSE_Encrypt0 structure containing the encrypted COSE_Sign1.
+/// Signs `msg_to_seal` with an explicit Unix `timestamp` in seconds, pads it
+/// according to `padding`, and encrypts the resulting `COSE_Sign1` to
+/// `recipient` in a `COSE_Encrypt0` envelope.
 ///
 /// # Panics
 ///
-/// Panics if [`Padding::Buckets`] has a zero `floor` or `step`, or the required
-/// bucket size exceeds [`usize::MAX`].
+/// Panics if [`Padding::Buckets`] has a zero `floor` or `step`, or if the
+/// required bucket size exceeds [`usize::MAX`].
 pub fn seal_at<E: Encode, A: Encode>(
     msg_to_seal: E,
     msg_to_auth: A,
@@ -633,34 +528,25 @@ pub fn seal_at<E: Encode, A: Encode>(
     padding: &Padding,
     timestamp: i64,
 ) -> Result<Vec<u8>, Error> {
-    // Pre-encode for EncStructure (which needs raw bytes for external_aad)
+    // Pre-encode msg_to_auth once so both signing and encryption share the bytes
     let aad = Raw(cbor::encode(msg_to_auth)?);
 
-    // Create a COSE_Sign1 with the payload, binding the AAD (use Raw to avoid
-    // re-encoding). It holds the plaintext, so it is wiped once encrypted.
+    // Sign the payload, keeping the encoded Sign1 wiped once encrypted
     let signed = Zeroizing::new(sign_at(msg_to_seal, &aad, signer, domain, timestamp)?);
-    // Encrypt the signed message to the recipient
     encrypt(&signed, &aad, recipient, domain, padding)
 }
 
-/// Encrypts an already signed COSE_Sign1 to a recipient.
+/// Pads and encrypts an already signed `COSE_Sign1` envelope to `recipient` in
+/// a `COSE_Encrypt0` envelope.
 ///
-/// For most use cases, prefer [`seal`] which signs and encrypts in one step.
-/// Use this only when re-encrypting a message (from [`decrypt`]) to a different
-/// recipient without access to the original signer's key.
-///
-/// - `sign1`: The COSE_Sign1 structure (e.g., from [`decrypt`])
-/// - `msg_to_auth`: The same additional authenticated data used during sealing
-/// - `recipient`: The xHPKE public key to encrypt to
-/// - `domain`: Application domain for HPKE key derivation
-/// - `padding`: Sender's policy for zeros after the signed envelope
-///
-/// Returns the serialized COSE_Encrypt0 structure.
+/// Prefer [`seal`] for normal use. Use this only when re-encrypting a signed
+/// envelope (for example from [`decrypt`]) to another recipient without access
+/// to the original signer's key.
 ///
 /// # Panics
 ///
-/// Panics if [`Padding::Buckets`] has a zero `floor` or `step`, or the required
-/// bucket size exceeds [`usize::MAX`].
+/// Panics if [`Padding::Buckets`] has a zero `floor` or `step`, or if the
+/// required bucket size exceeds [`usize::MAX`].
 pub fn encrypt<A: Encode>(
     sign1: &[u8],
     msg_to_auth: A,
@@ -668,13 +554,13 @@ pub fn encrypt<A: Encode>(
     domain: &[u8],
     padding: &Padding,
 ) -> Result<Vec<u8>, Error> {
-    // Allocate the final size before copying plaintext, so it never reallocates
+    // Allocate the final size before copying plaintext so it never reallocates
     let len = padding.padded_len(sign1.len());
     let mut plaintext = Zeroizing::new(Vec::with_capacity(len));
     plaintext.extend_from_slice(sign1);
     plaintext.resize(len, 0);
 
-    // Pre-encode for EncStructure (which needs raw bytes for external_aad)
+    // Pre-encode msg_to_auth for EncStructure::external_aad
     let msg_to_auth = cbor::encode(msg_to_auth)?;
 
     // Build protected header with recipient's fingerprint
@@ -682,7 +568,7 @@ pub fn encrypt<A: Encode>(
         algorithm: ALGORITHM_ID_XHPKE,
         kid: recipient.fingerprint(),
     })?;
-    // Build and seal Enc_structure (domain prefixing is handled by xHPKE)
+    // Seal Enc_structure with xHPKE (which prefixes the domain)
     let (encap_key, ciphertext) = recipient
         .seal(
             &plaintext,
@@ -695,7 +581,7 @@ pub fn encrypt<A: Encode>(
         )
         .map_err(|e| Error::DecryptionFailed(e.to_string()))?;
 
-    // Build and encode COSE_Encrypt0
+    // Encode COSE_Encrypt0
     Ok(cbor::encode(&CoseEncrypt0 {
         protected,
         unprotected: EncapKeyHeader {
@@ -705,20 +591,12 @@ pub fn encrypt<A: Encode>(
     })?)
 }
 
-/// Decrypts and verifies a sealed message.
+/// Decrypts a `COSE_Encrypt0` envelope, verifies its inner `COSE_Sign1`
+/// signature, and returns the decoded payload.
 ///
-/// Uses the current system time for drift checking. For testing or custom
-/// timestamps, use [`open_at`].
-///
-/// - `msg_to_open`: The serialized COSE_Encrypt0 structure
-/// - `msg_to_auth`: The same additional authenticated data used during sealing
-/// - `recipient`: The xHPKE secret key to decrypt with
-/// - `sender`: The xDSA public key to verify the signature against
-/// - `domain`: Application domain for HPKE key derivation
-/// - `max_drift`: Maximum allowed timestamp difference in seconds, past or future.
-///   `Some(n)` accepts differences up to and including `n`; `None` skips the check.
-///
-/// Returns the CBOR-decoded payload if decryption and verification succeed.
+/// `max_drift` bounds the allowed timestamp difference in seconds (past or
+/// future) against the current system time; `None` skips the timestamp check.
+/// Use [`open_at`] for an explicit reference time.
 pub fn open<E: Decode, A: Encode>(
     msg_to_open: &[u8],
     msg_to_auth: A,
@@ -727,7 +605,7 @@ pub fn open<E: Decode, A: Encode>(
     domain: &[u8],
     max_drift: Option<u64>,
 ) -> Result<E, Error> {
-    // Read the clock only if max_drift is specified
+    // Read the clock only when drift checking is requested
     let now = match max_drift {
         Some(_) => now_unix(),
         None => 0,
@@ -743,19 +621,9 @@ pub fn open<E: Decode, A: Encode>(
     )
 }
 
-/// Decrypts and verifies a sealed message, checking drift against an explicit
-/// current time.
-///
-/// - `msg_to_open`: The serialized COSE_Encrypt0 structure
-/// - `msg_to_auth`: The same additional authenticated data used during sealing
-/// - `recipient`: The xHPKE secret key to decrypt with
-/// - `sender`: The xDSA public key to verify the signature against
-/// - `domain`: Application domain for HPKE key derivation
-/// - `max_drift`: Maximum allowed timestamp difference in seconds, past or future.
-///   `Some(n)` accepts differences up to and including `n`; `None` skips the check.
-/// - `now`: Unix timestamp in seconds to use for drift checking
-///
-/// Returns the CBOR-decoded payload if decryption and verification succeed.
+/// Decrypts a `COSE_Encrypt0` envelope, verifies its inner `COSE_Sign1`
+/// signature against the explicit Unix time `now` in seconds, and returns the
+/// decoded payload.
 pub fn open_at<E: Decode, A: Encode>(
     msg_to_open: &[u8],
     msg_to_auth: A,
@@ -767,43 +635,32 @@ pub fn open_at<E: Decode, A: Encode>(
 ) -> Result<E, Error> {
     let aad = Raw(cbor::encode(msg_to_auth)?);
 
-    // The signed envelope holds the plaintext, so it is wiped after verification.
+    // Wipe the decrypted Sign1 buffer after verification completes
     let sign1 = Zeroizing::new(decrypt(msg_to_open, &aad, recipient, domain)?);
     verify_at::<E, _>(&sign1, &aad, sender, domain, max_drift, now)
 }
 
-/// Decrypts a sealed message without verifying its signature.
+/// Decrypts a `COSE_Encrypt0` envelope and strips trailing zero padding,
+/// returning the unverified inner `COSE_Sign1` bytes.
 ///
-/// This allows inspecting the signer before verification. Use [`signer`] to
-/// extract the signer's fingerprint, then [`verify`] or [`verify_at`] to verify.
-///
-/// It strips the zero bytes after the COSE_Sign1, accepting any number of them,
-/// and returns the COSE_Sign1 as encoded. A plaintext that does not start with
-/// one CBOR item fails with [`Error::CborError`], and a nonzero byte after it
-/// with [`Error::InvalidPadding`].
-///
-/// - `msg_to_open`: The serialized COSE_Encrypt0 structure
-/// - `msg_to_auth`: The same additional authenticated data used during sealing
-/// - `recipient`: The xHPKE secret key to decrypt with
-/// - `domain`: Application domain for HPKE key derivation
-///
-/// Returns the decrypted COSE_Sign1 structure (not yet verified).
+/// Use [`signer`] to inspect the sender's fingerprint before verifying with
+/// [`verify`] or [`verify_at`]. A plaintext that does not start with one valid
+/// CBOR item fails with [`Error::CborError`], and any nonzero trailing byte
+/// fails with [`Error::InvalidPadding`].
 pub fn decrypt<A: Encode>(
     msg_to_open: &[u8],
     msg_to_auth: A,
     recipient: &xhpke::SecretKey,
     domain: &[u8],
 ) -> Result<Vec<u8>, Error> {
-    // Pre-encode for EncStructure (which needs raw bytes for external_aad)
+    // Pre-encode msg_to_auth for EncStructure::external_aad
     let msg_to_auth = cbor::encode(msg_to_auth)?;
 
-    // Parse COSE_Encrypt0
+    // Decode COSE_Encrypt0 and verify its protected header
     let encrypt0: CoseEncrypt0 = cbor::decode(msg_to_open)?;
-
-    // Verify protected header
     verify_enc_protected_header(&encrypt0.protected, ALGORITHM_ID_XHPKE, recipient)?;
 
-    // Extract encapsulated key from the unprotected headers
+    // Extract the fixed-size encapsulated key from the unprotected header
     let encap_key: &[u8; xhpke::ENCAP_KEY_SIZE] = encrypt0
         .unprotected
         .encap_key
@@ -813,7 +670,7 @@ pub fn decrypt<A: Encode>(
             Error::InvalidEncapKeySize(encrypt0.unprotected.encap_key.len(), xhpke::ENCAP_KEY_SIZE)
         })?;
 
-    // Rebuild and open Enc_structure (domain prefixing is handled by xHPKE)
+    // Open Enc_structure with xHPKE (which prefixes the domain)
     let decrypted = Zeroizing::new(
         recipient
             .open(
@@ -838,23 +695,19 @@ pub fn decrypt<A: Encode>(
     Ok(std::mem::take(&mut *sign1))
 }
 
-/// Extracts the recipient's fingerprint from a COSE_Encrypt0 message without
+/// Extracts the recipient's fingerprint from a `COSE_Encrypt0` envelope without
 /// decrypting it.
 ///
-/// This allows looking up the appropriate decryption key before attempting
-/// full decryption.
-///
-/// - `ciphertext`: The serialized COSE_Encrypt0 structure
-///
-/// Returns the recipient's fingerprint from the protected header's `kid` field.
+/// Use this to look up the expected decryption key before calling [`open`] or
+/// [`decrypt`].
 pub fn recipient(ciphertext: &[u8]) -> Result<xhpke::Fingerprint, Error> {
     let encrypt0: CoseEncrypt0 = cbor::decode(ciphertext)?;
     let header: EncProtectedHeader = cbor::decode(&encrypt0.protected)?;
     Ok(header.kid)
 }
 
-/// Verifies the signature protected header contains exactly the expected algorithm
-/// and that the key identifier matches the provided verifier.
+/// Verifies that the signature protected header matches `exp_algo`, lists
+/// [`HEADER_TIMESTAMP`] in `crit`, and matches `verifier`'s fingerprint.
 fn verify_sig_protected_header(
     bytes: &[u8],
     exp_algo: i64,
@@ -879,8 +732,8 @@ fn verify_sig_protected_header(
     Ok(header)
 }
 
-/// Verifies the encryption protected header contains exactly the expected algorithm
-/// and that the key identifier matches the provided recipient.
+/// Verifies that the encryption protected header matches `exp_algo` and
+/// `recipient`'s fingerprint.
 fn verify_enc_protected_header(
     bytes: &[u8],
     exp_algo: i64,
@@ -899,9 +752,9 @@ fn verify_enc_protected_header(
     Ok(header)
 }
 
-/// Upper bound in bytes on the CBOR framing around the variable length fields
+/// Upper bound in bytes on the CBOR framing around the variable-length fields
 /// of a COSE structure, covering the array and byte string headers, the context
-/// string and the empty header map.
+/// string, and the empty header map.
 const FRAMING_OVERHEAD: usize = 64;
 
 /// Encodes a structure holding a payload into a buffer wiped on drop. The
@@ -1278,7 +1131,8 @@ mod tests {
         );
     }
 
-    /// Tests various combinations of signing and verifying ops.
+    /// Tests signing and verification across valid, drifted, wrong-domain,
+    /// wrong-AAD, and wrong-key cases.
     #[test]
     fn test_sign_verify() {
         struct TestCase {
@@ -1511,7 +1365,8 @@ mod tests {
         }
     }
 
-    /// Tests various combinations of sealing and opening ops.
+    /// Tests sealing and opening across valid, drifted, wrong-domain,
+    /// wrong-AAD, and wrong-signer cases.
     #[test]
     fn test_seal_open() {
         struct TestCase {
@@ -1700,7 +1555,7 @@ mod tests {
         let signed = sign_at((), (), &signer, b"", 0).unwrap();
         let mut sign1: CoseSign1 = cbor::decode(&signed).unwrap();
 
-        // Check Sign1 payload-mode and protected-header mismatches.
+        // Check Sign1 payload-mode and protected-header mismatches
         assert_eq!(
             verify_detached_at(&signed, (), &verifier, b"", None, 0),
             Err(Error::UnexpectedPayload)
@@ -1731,7 +1586,7 @@ mod tests {
             Err(Error::MissingPayload)
         );
 
-        // Check Encrypt0 protected-header and encapsulated-key-length errors.
+        // Check Encrypt0 protected-header and encapsulated-key-length errors
         let recipient = xhpke::SecretKey::generate();
         let kid = recipient.fingerprint();
         let other = xhpke::Fingerprint::from_bytes(&[0; xhpke::FINGERPRINT_SIZE]);
@@ -1824,7 +1679,7 @@ mod tests {
     /// Fixture corpus generated with v0.16.0 to pin the COSE wire format.
     const FIXTURES: &str = include_str!("testdata/v0.16.json");
 
-    /// Retrieves a hex encoded field from a fixture corpus.
+    /// Retrieves a hex-encoded field from a fixture corpus.
     fn fixture(corpus: &serde_json::Value, key: &str) -> Vec<u8> {
         hex::decode(corpus[key].as_str().unwrap()).unwrap()
     }
@@ -1832,7 +1687,7 @@ mod tests {
     /// Tests that the padded fixture opens to its payload, pinning the padded format.
     #[test]
     fn test_padded_fixture() {
-        // This envelope was sealed once by crypto-rs with invented fixture data
+        // Envelope sealed once with invented fixture data
         let corpus: serde_json::Value =
             serde_json::from_str(include_str!("testdata/padded.json")).unwrap();
         let signer =
@@ -1874,8 +1729,7 @@ mod tests {
         assert_eq!(payload, fixture(&corpus, "payload"));
     }
 
-    /// Tests that the v0.16 fixture corpus still validates, since that was in the
-    /// first public release of the Ark, so we can't change the format anymore.
+    /// Tests that the committed v0.16 COSE fixtures still verify and open.
     #[test]
     fn test_v0_16_fixtures() {
         let corpus: serde_json::Value = serde_json::from_str(FIXTURES).unwrap();

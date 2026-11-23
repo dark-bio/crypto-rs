@@ -20,7 +20,7 @@ members = [".", "src/cbor/derive"]
 
 [features]
 default = []
-argon2 = ["dep:argon2", "dep:getrandom", "dep:zeroize"] # getrandom only listed to enable wasm_js on the getrandom that password-hash pulls in
+argon2 = ["dep:argon2", "dep:getrandom", "dep:zeroize"] # enables wasm_js on transitive getrandom
 cbor = ["dep:thiserror", "dep:darkbio-crypto-cbor-derive"]
 cose = ["cbor", "xdsa", "xhpke", "dep:web-time"]
 cwt = ["cose"]
@@ -53,7 +53,7 @@ rand = ["dep:getrandom"]
 rsa = [
     "pem",
     "dep:der",
-    "dep:getrandom", # getrandom only listed to enable wasm_js on the getrandom that rsa pulls in
+    "dep:getrandom",
     "dep:pkcs8",
     "dep:rsa",
     "dep:serde",
@@ -61,11 +61,11 @@ rsa = [
     "dep:spki",
     "dep:zeroize",
 ]
-stream = ["dep:chacha20poly1305", "dep:getrandom", "dep:pin-project", "dep:secrecy", "dep:zeroize"] # getrandom only listed to enable wasm_js on the getrandom that chacha20poly1305 pulls in
+stream = ["dep:chacha20poly1305", "dep:getrandom", "dep:pin-project", "dep:secrecy", "dep:zeroize"] # enables wasm_js on transitive getrandom
 xdsa = ["pem", "eddsa", "mldsa"]
 xhpke = [
     "pem",
-    "dep:chacha20poly1305", # Only listed to enable zeroize on the AEAD that hpke uses
+    "dep:chacha20poly1305", # enables zeroize on the AEAD used by hpke
     "dep:getrandom",
     "dep:hpke",
     "dep:pkcs8",

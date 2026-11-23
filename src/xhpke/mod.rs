@@ -4,15 +4,15 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//! HPKE cryptography wrappers and parametrization.
+//! Hybrid post-quantum HPKE encryption using X-Wing and ChaCha20-Poly1305.
 //!
 //! <https://datatracker.ietf.org/doc/html/rfc9180>
+//! <https://datatracker.ietf.org/doc/html/draft-connolly-cfrg-xwing-kem>
 //!
-//! Messages are encrypted to a public key with X-Wing, a hybrid of ML-KEM-768
-//! and X25519, and sealed with ChaCha20-Poly1305. Encryption and decryption use
-//! an application domain, prefixed with [`DOMAIN_PREFIX`], which both sides
-//! must agree on. The ciphertext also authenticates a second message that must
-//! be supplied separately.
+//! Encrypts messages to a public key with X-Wing (ML-KEM-768 and X25519) and
+//! ChaCha20-Poly1305 in Base mode (no sender authentication). Operations bind
+//! an application domain prefixed with [`DOMAIN_PREFIX`] and optional
+//! additional authenticated data supplied separately.
 //!
 //! ```
 //! use darkbio_crypto::xhpke;
@@ -52,8 +52,7 @@
 //! # }
 //! ```
 
-// Let us keep our all-caps abbreviations for the crypto suite parameters.
-#![allow(clippy::upper_case_acronyms)]
+#![allow(clippy::upper_case_acronyms)] // keep uppercase HPKE suite type aliases
 
 use crate::pem;
 use base64::Engine;
@@ -69,27 +68,18 @@ use spki::{AlgorithmIdentifier, ObjectIdentifier, SubjectPublicKeyInfo};
 use subtle::ConstantTimeEq;
 use zeroize::Zeroizing;
 
-/// The ASN.1 object identifier for X-Wing.
+/// ASN.1 object identifier for X-Wing.
 pub const OID: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.4.1.62253.25722");
 
-// KEM, AEAD and KDF are the HPKE crypto suite parameters. They are all 256 bit
-// variants, which should be enough for current purposes. Some details:
-//
-// - For the key exchange, X-Wing was chosen as a hybrid post-quantum KEM that
-//   combines X25519 with ML-KEM-768 for quantum resistance.
-// - For symmetric encryption, ChaCha20 was chosen, authenticated with Poly1305,
-//   which should be more portable to systems without AES hardware acceleration.
-// - For key derivation, HKDF was chosen (pretty much the only contender).
+/// Hybrid post-quantum KEM combining ML-KEM-768 and X25519.
 type KEM = hpke::kem::XWing;
+/// Portable authenticated cipher avoiding dependence on AES hardware.
 type AEAD = hpke::aead::ChaCha20Poly1305;
+/// Key derivation function for the HPKE suite.
 type KDF = hpke::kdf::HkdfSha256;
 
-/// The prefix prepended to all domain strings before they are
-/// used in HPKE operations. This binds every encryption to the dark-bio application
-/// context, preventing cross-protocol attacks.
-///
-/// The final domain will be this prefix concatenated with the caller-supplied
-/// domain string.
+/// Prefix prepended to caller-supplied domains in every HPKE operation to bind
+/// encryptions to Dark Bio and prevent cross-protocol reuse.
 pub const DOMAIN_PREFIX: &[u8] = b"dark-bio-v1:";
 
 /// Size of the secret key seed in bytes.
@@ -104,55 +94,54 @@ pub const ENCAP_KEY_SIZE: usize = 1120;
 /// Size of the fingerprint in bytes.
 pub const FINGERPRINT_SIZE: usize = 32;
 
-/// Failures of the xHPKE operations.
+/// Failures returned by xHPKE operations.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
-    /// The PEM wrapper is malformed. The inner error names the rule it broke.
-    /// Raised by [`SecretKey::from_pem`] and [`PublicKey::from_pem`].
+    /// PEM wrapper is malformed; the inner error identifies the broken rule.
+    /// Returned by [`SecretKey::from_pem`] and [`PublicKey::from_pem`].
     #[error("pem: {0}")]
     Pem(#[from] pem::Error),
-    /// The PEM block type is not the expected one, `PRIVATE KEY` for
-    /// [`SecretKey::from_pem`] and `PUBLIC KEY` for [`PublicKey::from_pem`].
-    /// Carries the type found.
+    /// PEM block label does not match the expected one (`PRIVATE KEY` for
+    /// [`SecretKey::from_pem`] or `PUBLIC KEY` for [`PublicKey::from_pem`]).
+    /// Carries the label found.
     #[error("invalid PEM tag {0}")]
     UnexpectedPemTag(String),
-    /// The DER key names an algorithm other than X-Wing, see [`OID`].
-    /// Raised by [`SecretKey::from_der`]
-    /// and [`PublicKey::from_der`], and through them by the PEM parsers.
+    /// DER key identifies an algorithm other than X-Wing (see [`OID`]).
+    /// Returned by [`SecretKey::from_der`] and [`PublicKey::from_der`], and
+    /// through them by the PEM parsers.
     #[error("not an X-Wing key")]
     UnexpectedAlgorithm,
-    /// The key encoding cannot be parsed or its contents are unusable, such
-    /// as a wrong size, an ML-KEM coefficient out of range, unexpected algorithm
-    /// parameters, trailing DER bytes, or an unsupported PKCS#8 version. The
-    /// message names the problem. Raised by the fallible key constructors.
+    /// Key encoding cannot be parsed or its contents are unusable, such as a
+    /// wrong size, an ML-KEM coefficient out of range, unexpected algorithm
+    /// parameters, trailing DER bytes, or an unsupported PKCS#8 version.
+    /// Returned by the fallible key constructors.
     #[error("malformed key: {0}")]
     MalformedKey(String),
-    /// A parsed DER key re-encodes to a different length than the input.
-    /// This is a fallback consistency check in the DER constructors. The DER
-    /// parser rejects appended bytes first and reports [`Error::MalformedKey`]
-    /// instead, including when called through the PEM constructors.
+    /// Parsed DER key re-encodes to a different length than the input. This is
+    /// a fallback consistency check in the DER constructors; the DER parser
+    /// rejects appended bytes first with [`Error::MalformedKey`].
     #[error("trailing data in key encoding")]
     TrailingData,
-    /// Encrypting to the public key failed. Carries the HPKE error text. Raised
-    /// by [`PublicKey::seal`], [`PublicKey::new_sender`] and [`Sender::seal`].
+    /// Encrypting to the public key failed. Returned by [`PublicKey::seal`],
+    /// [`PublicKey::new_sender`], and [`Sender::seal`].
     #[error("sealing failed: {0}")]
     SealFailed(String),
-    /// Decrypting failed, a malformed encapsulated key, the wrong secret key,
-    /// a tampered ciphertext or a mismatched authenticated message. Carries
-    /// the HPKE error text, which does not tell these apart. Raised by
-    /// [`SecretKey::open`], [`SecretKey::new_receiver`] and [`Receiver::open`].
+    /// Decrypting failed due to a malformed encapsulated key, wrong secret
+    /// key, tampered ciphertext, or mismatched authenticated data. The
+    /// underlying HPKE error does not distinguish these causes. Returned by
+    /// [`SecretKey::open`], [`SecretKey::new_receiver`], and [`Receiver::open`].
     #[error("opening failed: {0}")]
     OpenFailed(String),
 }
 
-/// An X-Wing private key for decrypting HPKE messages.
+/// X-Wing private key for decrypting HPKE messages.
 #[derive(Clone)]
 pub struct SecretKey {
     inner: <KEM as Kem>::PrivateKey,
 }
 
 impl PartialEq for SecretKey {
-    /// Tests for `self` and `other` values to be equal, and is used by `==`.
+    /// Compares secret keys in constant time.
     fn eq(&self, other: &Self) -> bool {
         self.inner.ct_eq(&other.inner).into()
     }
@@ -161,7 +150,7 @@ impl PartialEq for SecretKey {
 impl Eq for SecretKey {}
 
 impl SecretKey {
-    /// Creates a new, random private key.
+    /// Generates a random private key.
     pub fn generate() -> SecretKey {
         let mut seed = Zeroizing::new([0u8; SECRET_KEY_SIZE]);
         getrandom::fill(seed.as_mut()).unwrap();
@@ -169,36 +158,34 @@ impl SecretKey {
         Self::from_bytes(&seed)
     }
 
-    /// Converts a 32-byte seed into a private key.
+    /// Creates a private key from a 32-byte seed.
     pub fn from_bytes(bin: &[u8; SECRET_KEY_SIZE]) -> Self {
         let inner = <KEM as Kem>::PrivateKey::from_bytes(bin).unwrap();
         Self { inner }
     }
 
-    /// Parses a DER buffer into a private key.
+    /// Parses a PKCS#8 DER buffer into a private key.
     pub fn from_der(der: &[u8]) -> Result<Self, Error> {
-        // Parse the DER encoded container
         let info =
             PrivateKeyInfoRef::from_der(der).map_err(|err| Error::MalformedKey(err.to_string()))?;
 
-        // Reject trailing data by verifying re-encoded length matches input
+        // Verify the re-encoded length matches the input to reject trailing data
         let length = info
             .encoded_len()
             .map_err(|err| Error::MalformedKey(err.to_string()))?;
         if length.try_into() != Ok(der.len()) {
             return Err(Error::TrailingData);
         }
-        // Ensure the algorithm OID matches X-Wing and extract the actual private key
+        // Check that the algorithm OID matches X-Wing
         if info.algorithm.oid != OID {
             return Err(Error::UnexpectedAlgorithm);
         }
-        // Reject v2 keys. The decoder only ever yields v1 keys without or v2
-        // keys with an embedded public key, all other combinations fail to
-        // parse, so public key presence is an exact v2 marker.
+        // Reject v2 keys. The decoder yields v1 keys without an embedded public
+        // key and v2 keys with one, so a present public key identifies v2.
         if info.public_key.is_some() {
             return Err(Error::MalformedKey("unsupported PKCS#8 version".into()));
         }
-        // Ensure no algorithm parameters are present, none are allowed
+        // Reject algorithm parameters since X-Wing permits none
         if info.algorithm.parameters.is_some() {
             return Err(Error::MalformedKey(
                 "unexpected algorithm parameters".into(),
@@ -213,32 +200,30 @@ impl SecretKey {
         Ok(SecretKey::from_bytes(&bytes))
     }
 
-    /// Parses a PEM string into a private key.
+    /// Parses a PKCS#8 PEM string into a private key.
     pub fn from_pem(pem_str: &str) -> Result<Self, Error> {
-        // Crack open the PEM to get to the private key info
         let (kind, data) = pem::decode(pem_str.as_bytes())?;
         if kind != "PRIVATE KEY" {
             return Err(Error::UnexpectedPemTag(kind));
         }
-        // Parse the DER content
         Self::from_der(&data)
     }
 
-    /// Converts a private key into a 32-byte seed.
+    /// Returns the 32-byte private key seed.
     pub fn to_bytes(&self) -> Zeroizing<[u8; SECRET_KEY_SIZE]> {
         Zeroizing::new(self.inner.to_bytes().into())
     }
 
-    /// Serializes a private key into a DER buffer.
+    /// Serializes the private key into PKCS#8 DER.
     pub fn to_der(&self) -> Zeroizing<Vec<u8>> {
         let bytes = Zeroizing::new(<[u8; SECRET_KEY_SIZE]>::from(self.inner.to_bytes()));
 
-        // Create the X-Wing algorithm identifier; parameters MUST be absent
+        // X-Wing algorithm identifiers omit parameters
         let alg = pkcs8::AlgorithmIdentifierRef {
             oid: OID,
             parameters: None::<AnyRef>,
         };
-        // Per RFC, privateKey contains the raw 32-byte seed directly
+        // Store the raw 32-byte seed directly in the PKCS#8 privateKey OCTET STRING
         let info = PrivateKeyInfoRef {
             algorithm: alg,
             private_key: OctetStringRef::new(bytes.as_slice()).unwrap(),
@@ -247,31 +232,29 @@ impl SecretKey {
         Zeroizing::new(info.to_der().unwrap())
     }
 
-    /// Serializes a private key into a PEM string.
+    /// Serializes the private key into PKCS#8 PEM.
     pub fn to_pem(&self) -> Zeroizing<String> {
         Zeroizing::new(pem::encode("PRIVATE KEY", &self.to_der()))
     }
 
-    /// Retrieves the public counterpart of the secret key.
+    /// Derives the corresponding public key.
     pub fn public_key(&self) -> PublicKey {
         PublicKey {
             inner: KEM::sk_to_pk(&self.inner),
         }
     }
 
-    /// Returns a 256-bit unique identifier for this key. For HPKE,
-    /// that is the SHA256 hash of the raw public key.
+    /// Returns the 256-bit key fingerprint, computed as the SHA-256 hash of
+    /// the raw public key.
     pub fn fingerprint(&self) -> Fingerprint {
         self.public_key().fingerprint()
     }
 
-    /// Consumes a standalone cryptographic construct encrypted to this secret
-    /// key. The method will deconstruct the given encapsulated key and ciphertext
-    /// and will also verify the authenticity of the (unencrypted) message-to-auth
-    /// (not included in the ciphertext).
+    /// Decrypts a single-shot message encrypted to this key and verifies the
+    /// separately supplied `msg_to_auth`.
     ///
-    /// Note: X-Wing uses Base mode (no sender authentication). The sender's identity
-    /// cannot be verified from the ciphertext alone.
+    /// X-Wing operates in Base mode without sender authentication, so the
+    /// sender's identity cannot be verified from the ciphertext alone.
     pub fn open(
         &self,
         session_key: &[u8; ENCAP_KEY_SIZE],
@@ -279,14 +262,14 @@ impl SecretKey {
         msg_to_auth: &[u8],
         domain: &[u8],
     ) -> Result<Vec<u8>, Error> {
-        // Restrict the user's domain to the context of this library
+        // Scope the caller's domain under this crate's prefix
         let info = [DOMAIN_PREFIX, domain].concat();
 
         // Parse the encapsulated session key
         let session = <KEM as Kem>::EncappedKey::from_bytes(session_key)
             .map_err(|err| Error::OpenFailed(err.to_string()))?;
 
-        // Create a receiver session using Base mode (X-Wing doesn't support Auth mode)
+        // Set up a Base-mode receiver session (X-Wing does not support Auth mode)
         let mut ctx = hpke::setup_receiver::<AEAD, KDF, KEM>(
             &hpke::OpModeR::Base,
             &self.inner,
@@ -294,23 +277,24 @@ impl SecretKey {
             &info,
         )
         .map_err(|err| Error::OpenFailed(err.to_string()))?;
-        // Verify the construct and decrypt the message if everything checks out
+
+        // Authenticate AAD and decrypt the ciphertext
         ctx.open(msg_to_open, msg_to_auth)
             .map_err(|err| Error::OpenFailed(err.to_string()))
     }
 
-    /// Creates an HPKE receiver context for multi-message decryption
-    /// using the given encapsulated key. Messages must be decrypted in the same
-    /// order they were encrypted by the corresponding [`Sender`].
+    /// Creates a multi-message HPKE receiver context using `encap_key`.
     ///
-    /// Note: X-Wing uses Base mode (no sender authentication). The sender's
-    /// identity cannot be verified from the context alone.
+    /// Messages must be opened in the exact order they were sealed by the
+    /// corresponding [`Sender`]. X-Wing operates in Base mode without sender
+    /// authentication, so the sender's identity cannot be verified from the
+    /// context alone.
     pub fn new_receiver(
         &self,
         encap_key: &[u8; ENCAP_KEY_SIZE],
         domain: &[u8],
     ) -> Result<Receiver, Error> {
-        // Restrict the user's domain to the context of this library
+        // Scope the caller's domain under this crate's prefix
         let info = [DOMAIN_PREFIX, domain].concat();
 
         let encapped_key = <KEM as Kem>::EncappedKey::from_bytes(encap_key)
@@ -326,21 +310,18 @@ impl SecretKey {
     }
 }
 
-/// An X-Wing public key for encrypting HPKE messages.
+/// X-Wing public key for encrypting HPKE messages.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PublicKey {
     inner: <KEM as Kem>::PublicKey,
 }
 
 impl PublicKey {
-    /// Converts a 1216-byte array into a public key.
+    /// Creates a public key from a 1216-byte encoding.
     ///
-    /// This validates the ML-KEM-768 component by checking that all polynomial
-    /// coefficients are in the valid range [0, 3329). This matches Go's validation.
+    /// Validates that every ML-KEM-768 polynomial coefficient is in `[0, 3329)`.
     pub fn from_bytes(bin: &[u8; PUBLIC_KEY_SIZE]) -> Result<Self, Error> {
-        // Validate ML-KEM-768 encapsulation key (first 1184 bytes).
-        // The key contains 3 polynomials of 256 coefficients each, encoded as 12-bit values.
-        // Each coefficient must be < 3329 (the modulus q).
+        // Validate the ML-KEM-768 encapsulation key in the first 1184 bytes
         validate_mlkem768_encapsulation_key(&bin[..1184])?;
 
         let inner = <KEM as Kem>::PublicKey::from_bytes(bin)
@@ -348,24 +329,23 @@ impl PublicKey {
         Ok(Self { inner })
     }
 
-    /// Parses a DER buffer into a public key.
+    /// Parses an SPKI DER buffer into a public key.
     pub fn from_der(der: &[u8]) -> Result<Self, Error> {
-        // Parse the DER encoded container
         let info: SubjectPublicKeyInfo<AnyRef, BitStringRef> = SubjectPublicKeyInfo::from_der(der)
             .map_err(|err| Error::MalformedKey(err.to_string()))?;
 
-        // Reject trailing data by verifying re-encoded length matches input
+        // Verify the re-encoded length matches the input to reject trailing data
         let length = info
             .encoded_len()
             .map_err(|err| Error::MalformedKey(err.to_string()))?;
         if length.try_into() != Ok(der.len()) {
             return Err(Error::TrailingData);
         }
-        // Ensure the algorithm OID matches X-Wing and extract the actual public key
+        // Check that the algorithm OID matches X-Wing
         if info.algorithm.oid != OID {
             return Err(Error::UnexpectedAlgorithm);
         }
-        // Ensure no algorithm parameters are present, none are allowed
+        // Reject algorithm parameters since X-Wing permits none
         if info.algorithm.parameters.is_some() {
             return Err(Error::MalformedKey(
                 "unexpected algorithm parameters".into(),
@@ -376,41 +356,38 @@ impl PublicKey {
             .as_bytes()
             .ok_or_else(|| Error::MalformedKey("invalid public key bit string".into()))?;
 
-        // Public key extracted, return the wrapper
         let bytes: [u8; 1216] = key
             .try_into()
             .map_err(|_| Error::MalformedKey("public key not 1216 bytes".into()))?;
         PublicKey::from_bytes(&bytes)
     }
 
-    /// Parses a PEM string into a public key.
+    /// Parses an SPKI PEM string into a public key.
     pub fn from_pem(pem_str: &str) -> Result<Self, Error> {
-        // Crack open the PEM to get to the public key info
         let (kind, data) = pem::decode(pem_str.as_bytes())?;
         if kind != "PUBLIC KEY" {
             return Err(Error::UnexpectedPemTag(kind));
         }
-        // Parse the DER content
         Self::from_der(&data)
     }
 
-    /// Converts a public key into a 1216-byte array.
+    /// Returns the 1216-byte public key encoding.
     pub fn to_bytes(&self) -> [u8; PUBLIC_KEY_SIZE] {
         let mut result = [0u8; 1216];
         result.copy_from_slice(&self.inner.to_bytes());
         result
     }
 
-    /// Serializes a public key into a DER buffer.
+    /// Serializes the public key into SPKI DER.
     pub fn to_der(&self) -> Vec<u8> {
         let bytes = self.inner.to_bytes();
 
-        // Create the X-Wing algorithm identifier; parameters MUST be absent
+        // X-Wing algorithm identifiers omit parameters
         let alg = AlgorithmIdentifier::<AnyRef> {
             oid: OID,
             parameters: None::<AnyRef>,
         };
-        // The subject public key is simply the BITSTRING of the pubkey
+        // Subject public key is the raw BIT STRING of the public key bytes
         let info = SubjectPublicKeyInfo::<AnyRef, BitStringRef> {
             algorithm: alg,
             subject_public_key: BitStringRef::from_bytes(&bytes).unwrap(),
@@ -418,45 +395,41 @@ impl PublicKey {
         info.to_der().unwrap()
     }
 
-    /// Serializes a public key into a PEM string.
+    /// Serializes the public key into SPKI PEM.
     pub fn to_pem(&self) -> String {
         pem::encode("PUBLIC KEY", &self.to_der())
     }
 
-    /// Returns a 256-bit unique identifier for this key. For HPKE,
-    /// that is the SHA256 hash of the raw public key.
+    /// Returns the 256-bit key fingerprint, computed as the SHA-256 hash of
+    /// the raw public key.
     pub fn fingerprint(&self) -> Fingerprint {
         let mut hasher = sha2::Sha256::new();
         hasher.update(self.to_bytes());
         Fingerprint(hasher.finalize().into())
     }
 
-    /// Creates a standalone cryptographic construct encrypted to this public
-    /// key. The construct will contain the given message-to-seal (encrypted) and
-    /// also an authenticity proof for the (unencrypted) message-to-auth (message
-    /// not included).
+    /// Encrypts `msg_to_seal` to this public key and authenticates the
+    /// separately supplied `msg_to_auth`, returning `(encap_key, ciphertext)`.
     ///
-    /// The method returns the encapsulated session key and the ciphertext separately.
-    /// Opening it on the other side with [`SecretKey::open`] needs both components
-    /// along with `msg_to_auth`.
-    ///
-    /// Note: X-Wing uses Base mode (no sender authentication). The recipient cannot
-    /// verify the sender's identity from the ciphertext alone.
+    /// Decryption with [`SecretKey::open`] requires both returned values and
+    /// the same `msg_to_auth` and `domain`. X-Wing operates in Base mode
+    /// without sender authentication, so the recipient cannot verify the
+    /// sender's identity from the ciphertext alone.
     pub fn seal(
         &self,
         msg_to_seal: &[u8],
         msg_to_auth: &[u8],
         domain: &[u8],
     ) -> Result<([u8; ENCAP_KEY_SIZE], Vec<u8>), Error> {
-        // Restrict the user's domain to the context of this library
+        // Scope the caller's domain under this crate's prefix
         let info = [DOMAIN_PREFIX, domain].concat();
 
-        // Create a sender session using Base mode (X-Wing doesn't support Auth mode)
+        // Set up a Base-mode sender session (X-Wing does not support Auth mode)
         let (key, mut ctx) =
             hpke::setup_sender::<AEAD, KDF, KEM>(&hpke::OpModeS::Base, &self.inner, &info)
                 .map_err(|err| Error::SealFailed(err.to_string()))?;
 
-        // Encrypt the messages and seal all the crypto details into a nice box
+        // Encrypt the payload while authenticating AAD
         let enc = ctx
             .seal(msg_to_seal, msg_to_auth)
             .map_err(|err| Error::SealFailed(err.to_string()))?;
@@ -466,17 +439,15 @@ impl PublicKey {
         Ok((encap_key, enc))
     }
 
-    /// Creates an HPKE sender context for multi-message encryption
-    /// to this public key. Returns the sender context and the encapsulated key
-    /// that must be transmitted to the recipient.
+    /// Creates a multi-message HPKE sender context for this public key,
+    /// returning the sender context and the encapsulated key for the recipient.
     ///
-    /// Messages encrypted with the returned context must be decrypted in order
-    /// by the corresponding [`Receiver`] context.
-    ///
-    /// Note: X-Wing uses Base mode (no sender authentication). The recipient
-    /// cannot verify the sender's identity from the context alone.
+    /// Messages sealed with this context must be opened in order by the
+    /// corresponding [`Receiver`]. X-Wing operates in Base mode without sender
+    /// authentication, so the recipient cannot verify the sender's identity
+    /// from the context alone.
     pub fn new_sender(&self, domain: &[u8]) -> Result<(Sender, [u8; ENCAP_KEY_SIZE]), Error> {
-        // Restrict the user's domain to the context of this library
+        // Scope the caller's domain under this crate's prefix
         let info = [DOMAIN_PREFIX, domain].concat();
 
         let (key, ctx) =
@@ -489,13 +460,11 @@ impl PublicKey {
     }
 }
 
-/// An HPKE sender encryption context for multi-message
-/// communication. Each call to [`seal`](Sender::seal) encrypts a message
-/// using an auto-incrementing nonce, ensuring unique ciphertexts even for
-/// identical plaintexts.
+/// Multi-message HPKE sender context.
 ///
-/// The corresponding [`Receiver`] must process messages in the same order
-/// they were sealed.
+/// Each call to [`seal`](Sender::seal) advances an internal nonce counter so
+/// identical plaintexts produce distinct ciphertexts. The corresponding
+/// [`Receiver`] must open messages in the same order.
 pub struct Sender {
     inner: hpke::aead::AeadCtxS<AEAD, KDF, KEM>,
 }
@@ -509,11 +478,10 @@ impl Sender {
     }
 }
 
-/// An HPKE receiver decryption context for multi-message
-/// communication. Each call to [`open`](Receiver::open) decrypts a
-/// message using an auto-incrementing nonce.
+/// Multi-message HPKE receiver context.
 ///
-/// Messages must be provided in the same order they were sealed by the
+/// Each call to [`open`](Receiver::open) expects the next nonce in the
+/// sequence, so messages must arrive in the order they were sealed by the
 /// corresponding [`Sender`].
 pub struct Receiver {
     inner: hpke::aead::AeadCtxR<AEAD, KDF, KEM>,
@@ -612,11 +580,11 @@ impl crate::cbor::Decode for Fingerprint {
     }
 }
 
-/// Validates an ML-KEM-768 encapsulation key by checking that all polynomial
-/// coefficients are in the valid range [0, 3329).
+/// Validates that every polynomial coefficient in an ML-KEM-768 encapsulation
+/// key lies in `[0, 3329)`.
 ///
-/// The encapsulation key is 1184 bytes: 3 polynomials × 256 coefficients × 12 bits
-/// = 1152 bytes for the coefficient vectors, plus 32 bytes for the seed ρ.
+/// The 1184-byte key holds 1152 bytes of packed 12-bit coefficients (3
+/// polynomials of 256 coefficients each) followed by a 32-byte seed.
 fn validate_mlkem768_encapsulation_key(key: &[u8]) -> Result<(), Error> {
     const Q: u16 = 3329;
 
@@ -648,8 +616,9 @@ fn validate_mlkem768_encapsulation_key(key: &[u8]) -> Result<(), Error> {
 mod tests {
     use super::*;
 
-    /// Test vectors from draft-connolly-cfrg-xwing-kem-10 Appendix D
-    // https://datatracker.ietf.org/doc/html/draft-connolly-cfrg-xwing-kem
+    /// Test vectors from `draft-connolly-cfrg-xwing-kem-10` Appendix D.
+    ///
+    /// <https://datatracker.ietf.org/doc/html/draft-connolly-cfrg-xwing-kem>
     mod ietf_vectors {
         pub const SECKEY_SEED: &str =
             "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
@@ -691,31 +660,29 @@ OhMjnzQvynZVtuquhFoiHOs+Z/VjnGGT9v3u9X45m4CLfzqitXQKre2QFj3F13XJ
 -----END PUBLIC KEY-----";
     }
 
-    /// Tests operations with IETF test vectors: the private key must parse into
-    /// the published raw seed, re-encode into the published PEM and DER, and
-    /// expand to the draft's matching public key.
+    /// Tests that the X-Wing draft vectors parse to the published seed,
+    /// re-encode identically to PEM and DER, and derive the matching public key.
     #[test]
     fn test_ietf_vectors() {
-        // Round trip the secret key pem and verify the expected seed
+        // Round-trip the secret key PEM and verify the expected seed
         let key = SecretKey::from_pem(ietf_vectors::SECKEY_PEM).unwrap();
         assert_eq!(hex::encode(*key.to_bytes()), ietf_vectors::SECKEY_SEED);
         assert_eq!(key.to_pem().trim(), ietf_vectors::SECKEY_PEM.trim());
 
-        // Round trip the secret key der
+        // Round-trip the secret key DER
         let (_, der) = pem::decode(ietf_vectors::SECKEY_PEM.as_bytes()).unwrap();
         assert_eq!(*key.to_der(), *der);
 
-        // Verify the expected public key
+        // Verify the derived public key matches the published PEM
         assert_eq!(
             key.public_key().to_pem().trim(),
             ietf_vectors::PUBKEY_PEM.trim()
         );
 
-        // Round trip the public key pem
+        // Round-trip the public key PEM and DER
         let key = PublicKey::from_pem(ietf_vectors::PUBKEY_PEM).unwrap();
         assert_eq!(key.to_pem().trim(), ietf_vectors::PUBKEY_PEM.trim());
 
-        // Round trip the public key der
         let (_, der) = pem::decode(ietf_vectors::PUBKEY_PEM.as_bytes()).unwrap();
         assert_eq!(key.to_der(), *der);
     }
@@ -802,9 +769,8 @@ OhMjnzQvynZVtuquhFoiHOs+Z/VjnGGT9v3u9X45m4CLfzqitXQKre2QFj3F13XJ
         assert_eq!(key.to_bytes(), parsed.to_bytes());
     }
 
-    /// Tests sealing and opening various combinations of messages (authenticate,
-    /// encrypt, both). Note, this test is not meant to test cryptography, it is
-    /// mostly an API sanity check to verify that everything seems to work.
+    /// Tests single-shot sealing and opening with AAD only, plaintext only,
+    /// and both.
     #[test]
     fn test_seal_open() {
         // Create the keys
@@ -903,7 +869,7 @@ OhMjnzQvynZVtuquhFoiHOs+Z/VjnGGT9v3u9X45m4CLfzqitXQKre2QFj3F13XJ
         let ct0 = sender.seal(b"message 0", b"aad-0").unwrap();
         let ct1 = sender.seal(b"message 1", b"aad-1").unwrap();
 
-        // Try to open the second message first (should fail: wrong nonce)
+        // Opening the second message first fails with the wrong nonce
         assert!(
             receiver.open(&ct1, b"aad-1").is_err(),
             "should reject out-of-order message"
@@ -951,7 +917,7 @@ OhMjnzQvynZVtuquhFoiHOs+Z/VjnGGT9v3u9X45m4CLfzqitXQKre2QFj3F13XJ
         let secret = SecretKey::generate();
         let public = secret.public_key();
 
-        // Single-shot: wrong AAD must fail
+        // Wrong AAD must fail in single-shot mode
         let (sess_key, ciphertext) = public
             .seal(b"secret", b"correct-aad", b"domain")
             .expect("failed to seal");
@@ -962,7 +928,7 @@ OhMjnzQvynZVtuquhFoiHOs+Z/VjnGGT9v3u9X45m4CLfzqitXQKre2QFj3F13XJ
             "single-shot should reject wrong AAD"
         );
 
-        // Context-based: wrong AAD must fail
+        // Wrong AAD must fail in context mode
         let (mut sender, encap_key) = public
             .new_sender(b"domain")
             .expect("failed to setup sender");
@@ -976,7 +942,7 @@ OhMjnzQvynZVtuquhFoiHOs+Z/VjnGGT9v3u9X45m4CLfzqitXQKre2QFj3F13XJ
             "context should reject wrong AAD"
         );
 
-        // Verify recovery: correct AAD still works after failed attempt
+        // The correct AAD still succeeds after a failed attempt
         let pt = receiver
             .open(&ct, b"correct-aad")
             .expect("should open with correct AAD");
@@ -1000,8 +966,8 @@ OhMjnzQvynZVtuquhFoiHOs+Z/VjnGGT9v3u9X45m4CLfzqitXQKre2QFj3F13XJ
         assert!(matches!(err, Err(Error::MalformedKey(_))));
     }
 
-    /// Tests that a public key whose BIT STRING claims unused bits (non
-    /// byte-aligned) is rejected rather than panicking the extractor.
+    /// Tests that a public key whose BIT STRING claims unused bits (not
+    /// byte-aligned) is rejected rather than panicking.
     #[test]
     fn test_publickey_der_rejects_unused_bits() {
         let key = SecretKey::generate().public_key();

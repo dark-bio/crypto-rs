@@ -6,11 +6,12 @@
 
 //! Strict PEM encoding and decoding.
 //!
-//! One block per input, no leading whitespace, and strict base64. All lines
-//! end in the header's line ending, LF or CRLF throughout; [`decode`] documents
-//! the rules at the block boundaries. Only an optional final newline may follow
-//! the footer. The decoded payload is wiped when dropped, since it usually is a
-//! private key.
+//! <https://datatracker.ietf.org/doc/html/rfc7468>
+//!
+//! Accepts one block per input, no leading whitespace, consistent LF or CRLF
+//! line endings, and strict base64. Only an optional matching newline may
+//! follow the footer; see [`decode`] for the full rule set. Decoded payloads
+//! are wiped on drop because PEM blocks typically carry private keys.
 //!
 //! ```
 //! use darkbio_crypto::pem;
@@ -30,40 +31,41 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use zeroize::Zeroizing;
 
+/// Opening prefix of a PEM header line.
 const PEM_HEADER: &[u8] = b"-----BEGIN ";
+/// Opening prefix of a PEM footer line.
 const PEM_FOOTER: &[u8] = b"-----END ";
+/// Closing suffix of a PEM header or footer line.
 const PEM_ENDING: &[u8] = b"-----";
 
-/// Failures of parsing PEM with [`decode`].
-/// [`encode`] returns no errors.
+/// Failures returned by [`decode`].
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
-    /// The input does not start with `-----BEGIN `. Leading whitespace counts
-    /// as missing.
+    /// Input does not start with `-----BEGIN `; leading whitespace counts as
+    /// missing.
     #[error("missing PEM header")]
     MissingHeader,
-    /// The first line is not a complete `-----BEGIN TYPE-----` header. The
-    /// message says what is missing.
+    /// First line is not a complete `-----BEGIN TYPE-----` header.
     #[error("malformed PEM header: {0}")]
     MalformedHeader(String),
-    /// The header names no block type.
+    /// Header specifies an empty block type.
     #[error("empty PEM block type")]
     EmptyBlockType,
-    /// The block type contains invalid characters or spacing.
+    /// Block type contains invalid characters or spacing.
     #[error("malformed PEM block type")]
     MalformedBlockType,
     /// No `-----END TYPE-----` footer matches the header's block type.
     #[error("missing PEM footer")]
     MissingFooter,
-    /// Bytes follow the footer other than a single line ending matching the header.
+    /// Unexpected bytes follow the footer beyond an optional matching newline.
     #[error("trailing data after PEM block")]
     TrailingData,
-    /// The body between header and footer is empty, contains a blank line,
-    /// or does not end in a line ending. The message says which.
+    /// Body between header and footer is empty, contains a blank line, or lacks
+    /// a line ending before the footer.
     #[error("malformed PEM body: {0}")]
     MalformedBody(String),
-    /// The body is not strict base64, or a line ends differently from the
-    /// header. The message names the reason.
+    /// Body is not valid strict base64, or a line uses a different line ending
+    /// from the header.
     #[error("malformed base64 payload: {0}")]
     MalformedPayload(String),
 }
@@ -77,47 +79,46 @@ fn valid_label(kind: &str) -> bool {
         .all(|word| !word.is_empty() && word.bytes().all(|b| b.is_ascii_graphic() && b != b'-'))
 }
 
-/// Decodes a single PEM block with strict validation.
+/// Decodes a single PEM block with strict validation, returning `(kind, data)`
+/// with `data` wiped on drop.
 ///
-/// Rules:
+/// Validation rules:
 ///
-/// - Header must start at byte 0, with no leading whitespace.
-/// - The label contains printable ASCII other than hyphens, with single
-///   spaces allowed between words.
-/// - Footer must end the data, apart from an optional line ending matching
-///   the header's LF or CRLF.
-/// - Every line ends in the header's line ending, LF or CRLF throughout.
-/// - Base64 lines are non-empty and contain only base64 characters, with
-///   strict padding validation.
-/// - The payload must not be empty.
-///
-/// Returns (kind, data) tuple on success, with the data wiped on drop.
+/// - Header starts at byte 0 with no leading whitespace.
+/// - Label contains printable ASCII other than hyphens, with single spaces
+///   allowed between words.
+/// - Footer ends the input, apart from an optional newline matching the
+///   header's LF or CRLF.
+/// - Every line ends with the header's line ending, LF or CRLF throughout.
+/// - Base64 lines are non-empty, use strict padding, and contain only base64
+///   characters.
+/// - Payload is non-empty.
 pub fn decode(data: &[u8]) -> Result<(String, Zeroizing<Vec<u8>>), Error> {
-    // Must start with header immediately (no leading whitespace)
+    // Reject inputs without an immediate header (no leading whitespace)
     if !data.starts_with(PEM_HEADER) {
         return Err(Error::MissingHeader);
     }
-    // Find the end of header line (first \n)
+    // Locate the end of the header line
     let header_end = data
         .iter()
         .position(|&b| b == b'\n')
         .ok_or_else(|| Error::MalformedHeader("incomplete header line".into()))?;
 
-    // Detect line ending style from first line
+    // Detect line ending style from the first line
     let line_ending: &[u8] = if header_end > 0 && data[header_end - 1] == b'\r' {
         b"\r\n"
     } else {
         b"\n"
     };
 
-    // Extract header (without line ending)
+    // Strip the line ending from the header
     let header = if line_ending.len() == 2 {
         &data[..header_end - 1]
     } else {
         &data[..header_end]
     };
 
-    // Parse the block type from the header
+    // Parse and validate the block label from the header
     if !header.starts_with(PEM_HEADER) || !header.ends_with(PEM_ENDING) {
         return Err(Error::MalformedHeader("unterminated block type".into()));
     }
@@ -130,13 +131,12 @@ pub fn decode(data: &[u8]) -> Result<(String, Zeroizing<Vec<u8>>), Error> {
         return Err(Error::MalformedBlockType);
     }
 
-    // Build expected footer
+    // Build and locate the matching footer
     let mut footer = Vec::with_capacity(PEM_FOOTER.len() + block_type.len() + PEM_ENDING.len());
     footer.extend_from_slice(PEM_FOOTER);
     footer.extend_from_slice(block_type);
     footer.extend_from_slice(PEM_ENDING);
 
-    // Find the footer
     let search_area = &data[header_end + 1..];
     let footer_idx = search_area
         .windows(footer.len())
@@ -145,16 +145,14 @@ pub fn decode(data: &[u8]) -> Result<(String, Zeroizing<Vec<u8>>), Error> {
     let footer_start = header_end + 1 + footer_idx;
     let footer_end = footer_start + footer.len();
 
-    // Validate what comes after footer: nothing or same line ending
+    // Allow only EOF or a single matching line ending after the footer
     let rest = &data[footer_end..];
     if !rest.is_empty() && rest != line_ending {
         return Err(Error::TrailingData);
     }
 
-    // Extract body (between header and footer)
+    // Extract the body and require a line ending before the footer
     let body = &data[header_end + 1..footer_start];
-
-    // Body must end with the line ending (the line before footer)
     if body.is_empty() {
         return Err(Error::MalformedBody("empty body".into()));
     }
@@ -163,12 +161,11 @@ pub fn decode(data: &[u8]) -> Result<(String, Zeroizing<Vec<u8>>), Error> {
     }
     let body = &body[..body.len() - line_ending.len()];
 
-    // Reserve the full body length so stripping line endings cannot reallocate
-    // and leave unwiped copies of the encoded secret behind.
+    // Reserve the full body length so stripping line endings never reallocates
+    // and leaves unwiped copies of the encoded secret behind
     let mut b64 = Zeroizing::new(Vec::with_capacity(body.len()));
 
-    // Every line ends in the header's line ending, so in a CRLF block each line
-    // before the last carries a carriage return. No other one may appear.
+    // Verify every line uses the header's line ending and reject blank lines
     let mut lines = body.split(|&b| b == b'\n').peekable();
     while let Some(mut line) = lines.next() {
         if line_ending.len() == 2 && lines.peek().is_some() {
@@ -185,7 +182,7 @@ pub fn decode(data: &[u8]) -> Result<(String, Zeroizing<Vec<u8>>), Error> {
         b64.extend_from_slice(line);
     }
 
-    // Guard the destination before decoding so partial output is wiped on error.
+    // Guard the output buffer before decoding so partial bytes are wiped on error
     let mut decoded = Zeroizing::new(Vec::new());
     STANDARD
         .decode_vec(&b64, &mut decoded)
@@ -194,12 +191,12 @@ pub fn decode(data: &[u8]) -> Result<(String, Zeroizing<Vec<u8>>), Error> {
     Ok((kind, decoded))
 }
 
-/// Encodes data as a PEM block with the given type.
-/// Lines are 64 characters, using \n line endings.
+/// Encodes `data` as a PEM block with label `kind`, wrapping base64 lines at
+/// 64 characters with `\n` line endings.
 ///
 /// # Panics
 ///
-/// Panics if `data` is empty or `kind` is an invalid block label.
+/// Panics if `data` is empty or `kind` is not a valid PEM block label.
 pub fn encode(kind: &str, data: &[u8]) -> String {
     assert!(!data.is_empty(), "empty PEM payload");
     assert!(valid_label(kind), "invalid PEM block label");
@@ -269,7 +266,7 @@ mod tests {
             let pem = format!("-----BEGIN {kind}-----\nYQ==\n-----END {kind}-----\n");
             assert_eq!(decode(pem.as_bytes()), Err(want), "{kind:?}");
 
-            // Check that encoding rejects the same labels on native targets.
+            // Check that encoding rejects the same labels on native targets
             #[cfg(not(target_arch = "wasm32"))]
             {
                 let err = std::panic::catch_unwind(|| encode(kind, b"a")).expect_err(kind);

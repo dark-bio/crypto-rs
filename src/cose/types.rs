@@ -4,69 +4,71 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//! COSE structure types with CBOR serialization.
+//! COSE wire structures with CBOR serialization.
 
 use zeroize::Zeroize;
 
 use crate::cbor::Cbor;
 use crate::{xdsa, xhpke};
 
-/// Private COSE header label for Unix timestamp.
+/// Private COSE header label for the Unix timestamp.
 pub const HEADER_TIMESTAMP: i64 = -70002;
 
 /// Protected header for [`CoseSign1`].
 #[derive(Debug, Clone, PartialEq, Eq, Cbor)]
 pub struct SigProtectedHeader {
-    /// Algorithm identifier (COSE header label 1)
+    /// Algorithm identifier (COSE header label 1).
     #[cbor(key = 1)]
     pub algorithm: i64,
-    /// Critical headers that must be understood (COSE header label 2)
+    /// Critical header labels that every verifier must understand (COSE header
+    /// label 2).
     #[cbor(key = 2)]
     pub crit: CritHeader,
-    /// Key identifier - signer's fingerprint (COSE header label 4)
+    /// Signer's key fingerprint (COSE header label 4).
     #[cbor(key = 4)]
     pub kid: xdsa::Fingerprint,
-    /// Unix timestamp in seconds (private header label)
+    /// Signing time in seconds since the Unix epoch ([`HEADER_TIMESTAMP`]).
     #[cbor(key = -70002)]
     pub timestamp: i64,
 }
 
-/// Critical headers list per RFC 9052.
-/// Implementations must reject messages with unknown crit labels.
+/// Critical header labels list per RFC 9052.
+///
+/// Verifiers reject messages carrying unknown `crit` labels.
 #[derive(Debug, Clone, PartialEq, Eq, Cbor)]
 #[cbor(array)]
 pub struct CritHeader {
-    /// HeaderTimestamp label - must be understood
+    /// Timestamp header label ([`HEADER_TIMESTAMP`]).
     pub timestamp: i64,
 }
 
 /// Protected header for [`CoseEncrypt0`].
 #[derive(Debug, Clone, PartialEq, Eq, Cbor)]
 pub struct EncProtectedHeader {
-    /// Algorithm identifier (COSE header label 1)
+    /// Algorithm identifier (COSE header label 1).
     #[cbor(key = 1)]
     pub algorithm: i64,
-    /// Key identifier - recipient's fingerprint (COSE header label 4)
+    /// Recipient's key fingerprint (COSE header label 4).
     #[cbor(key = 4)]
     pub kid: xhpke::Fingerprint,
 }
 
-/// Empty unprotected header map (for [`CoseSign1`]).
+/// Empty unprotected header map for [`CoseSign1`].
 #[derive(Debug, Clone, PartialEq, Eq, Cbor)]
 pub struct EmptyHeader {}
 
-/// Unprotected header containing the encapsulated key (for [`CoseEncrypt0`]).
+/// Unprotected header carrying the encapsulated key for [`CoseEncrypt0`].
 #[derive(Debug, Clone, PartialEq, Eq, Cbor)]
 pub struct EncapKeyHeader {
-    /// Encapsulated key (COSE header label -4)
+    /// X-Wing encapsulated key (COSE header label -4).
     #[cbor(key = -4)]
     pub encap_key: Vec<u8>,
 }
 
-/// COSE_Sign1 structure per RFC 9052 Section 4.2.
+/// `COSE_Sign1` structure per RFC 9052 Section 4.2.
 ///
-/// The payload is wiped when the value is dropped because signed envelopes can
-/// carry plaintext secrets.
+/// The payload is wiped on drop because signed envelopes can carry plaintext
+/// secrets.
 ///
 /// ```text
 /// COSE_Sign1 = [
@@ -79,13 +81,13 @@ pub struct EncapKeyHeader {
 #[derive(Debug, Clone, PartialEq, Eq, Cbor)]
 #[cbor(array)]
 pub struct CoseSign1 {
-    /// Protected header (CBOR-encoded map, wrapped as bstr)
+    /// CBOR-encoded protected header map wrapped as a byte string.
     pub protected: Vec<u8>,
-    /// Unprotected header map (empty for signatures)
+    /// Unprotected header map, always empty for signatures.
     pub unprotected: EmptyHeader,
-    /// Payload bytes (null for detached payload)
+    /// Embedded payload bytes, or `None` for detached signatures.
     pub payload: Option<Vec<u8>>,
-    /// Signature (fixed size for xDSA)
+    /// Composite xDSA signature.
     pub signature: xdsa::Signature,
 }
 
@@ -95,7 +97,7 @@ impl Drop for CoseSign1 {
     }
 }
 
-/// COSE_Encrypt0 structure per RFC 9052 Section 5.2.
+/// `COSE_Encrypt0` structure per RFC 9052 Section 5.2.
 ///
 /// ```text
 /// COSE_Encrypt0 = [
@@ -107,15 +109,15 @@ impl Drop for CoseSign1 {
 #[derive(Debug, Clone, PartialEq, Eq, Cbor)]
 #[cbor(array)]
 pub struct CoseEncrypt0 {
-    /// Protected header (CBOR-encoded map, wrapped as bstr)
+    /// CBOR-encoded protected header map wrapped as a byte string.
     pub protected: Vec<u8>,
-    /// Unprotected header map (contains encapsulated key)
+    /// Unprotected header map carrying the encapsulated key.
     pub unprotected: EncapKeyHeader,
-    /// Ciphertext bytes
+    /// Encrypted payload bytes.
     pub ciphertext: Vec<u8>,
 }
 
-/// Sig_structure for computing signatures per RFC 9052 Section 4.4.
+/// `Sig_structure` input for signing per RFC 9052 Section 4.4.
 ///
 /// ```text
 /// Sig_structure = [
@@ -127,15 +129,14 @@ pub struct CoseEncrypt0 {
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SigStructure<'a> {
-    /// Fixed context string, `Signature1` for [`CoseSign1`].
+    /// Fixed context string, `"Signature1"` for [`CoseSign1`].
     pub context: &'static str,
-    /// The protected header, already CBOR encoded.
+    /// CBOR-encoded protected header bytes.
     pub protected: &'a [u8],
-    /// Data authenticated but not transmitted, the domain and the caller's
-    /// message.
+    /// Authenticated external data carrying the prefixed domain and caller AAD.
     pub external_aad: &'a [u8],
-    /// The signed payload bytes. This crate's detached convention uses an empty
-    /// payload and authenticates the caller's message through `external_aad`.
+    /// Signed payload bytes, or empty for detached signatures where the message
+    /// travels in `external_aad`.
     pub payload: &'a [u8],
 }
 
@@ -150,7 +151,7 @@ impl crate::cbor::Encode for SigStructure<'_> {
     }
 }
 
-/// Enc_structure for computing AAD per RFC 9052 Section 5.3.
+/// `Enc_structure` input for AEAD authentication per RFC 9052 Section 5.3.
 ///
 /// ```text
 /// Enc_structure = [
@@ -161,11 +162,11 @@ impl crate::cbor::Encode for SigStructure<'_> {
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EncStructure<'a> {
-    /// Fixed context string, `Encrypt0` for [`CoseEncrypt0`].
+    /// Fixed context string, `"Encrypt0"` for [`CoseEncrypt0`].
     pub context: &'static str,
-    /// The protected header, already CBOR encoded.
+    /// CBOR-encoded protected header bytes.
     pub protected: &'a [u8],
-    /// Data authenticated but not transmitted, the caller's message.
+    /// Authenticated external data carrying the CBOR-encoded caller AAD.
     pub external_aad: &'a [u8],
 }
 

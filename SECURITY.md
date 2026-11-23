@@ -9,7 +9,7 @@ handled quickly.
 Please do not open a public issue for anything that looks like a security
 problem. Send a private email to peter@dark.bio instead, with a description of
 the issue, the affected version and, if you have one, a way to reproduce it.
-You will get an acknowledgement within a few days, and updates as the fix
+You will get an acknowledgment within a few days, and updates as the fix
 progresses.
 
 Findings in the underlying libraries belong with their own maintainers, but a
