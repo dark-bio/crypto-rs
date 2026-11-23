@@ -27,20 +27,17 @@
 use crate::pem;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use rsa::pkcs8::der::asn1::BitStringRef;
-use rsa::pkcs8::der::{AnyRef, Decode};
-use rsa::pkcs8::spki::SubjectPublicKeyInfo;
-use rsa::pkcs8::{
-    DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey, ObjectIdentifier,
-    PrivateKeyInfo,
-};
-use rsa::rand_core::OsRng;
-use rsa::sha2::{Digest, Sha256};
+use der::asn1::BitStringRef;
+use der::{AnyRef, Decode};
+use pkcs8::{DecodePrivateKey, EncodePrivateKey, PrivateKeyInfoRef};
+use rsa::rand_core::UnwrapErr;
 use rsa::signature::hazmat::PrehashVerifier;
 use rsa::signature::{Keypair, RandomizedSigner, SignatureEncoding, Verifier};
 use rsa::traits::{PrivateKeyParts, PublicKeyParts};
-use rsa::{BigUint, RsaPrivateKey, RsaPublicKey};
+use rsa::{BoxedUint, PrivateKey as RsaPrivateKey, PublicKey as RsaPublicKey};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
+use sha2::{Digest, Sha256};
+use spki::{DecodePublicKey, EncodePublicKey, ObjectIdentifier, SubjectPublicKeyInfo};
 use zeroize::Zeroizing;
 
 /// The ASN.1 object identifier for RSA encryption.
@@ -102,7 +99,7 @@ pub struct SecretKey {
 impl SecretKey {
     /// Creates a new, random private key.
     pub fn generate() -> SecretKey {
-        let mut rng = OsRng;
+        let mut rng = UnwrapErr(getrandom::SysRng);
 
         let key = RsaPrivateKey::new(&mut rng, 2048).unwrap();
         let sig = rsa::pkcs1v15::SigningKey::<Sha256>::new(key);
@@ -114,36 +111,35 @@ impl SecretKey {
     /// Format: p (128 bytes) || q (128 bytes) || d (256 bytes) || e (8 bytes),
     /// all in big-endian.
     pub fn from_bytes(bytes: &[u8; SECRET_KEY_SIZE]) -> Result<Self, Error> {
-        let p = BigUint::from_bytes_be(&bytes[0..128]);
-        let q = BigUint::from_bytes_be(&bytes[128..256]);
-        let d = BigUint::from_bytes_be(&bytes[256..512]);
-        let e = BigUint::from_bytes_be(&bytes[512..520]);
+        let p = BoxedUint::from_be_slice(&bytes[0..128], 1024).unwrap();
+        let q = BoxedUint::from_be_slice(&bytes[128..256], 1024).unwrap();
+        let d = BoxedUint::from_be_slice(&bytes[256..512], 2048).unwrap();
+        let e = BoxedUint::from_be_slice(&bytes[512..520], 64).unwrap();
 
-        let n = &p * &q;
+        let p_wide = Zeroizing::new(BoxedUint::from_be_slice(&bytes[0..128], 2048).unwrap());
+        let q_wide = Zeroizing::new(BoxedUint::from_be_slice(&bytes[128..256], 2048).unwrap());
+        let n = &*p_wide * &*q_wide;
 
-        // Assemble the key before validating it. The rsa crate wipes a dropped
-        // key, so the components get zeroized on every exit path.
         let mut key = RsaPrivateKey::from_components(n, e, d, vec![p, q])
             .map_err(|err| Error::MalformedKey(err.to_string()))?;
 
         // The modulus must be exactly 2048 bits
-        if key.n().bits() != 2048 {
+        if key.n().bit_width() != 2048 {
             return Err(Error::MalformedKey("modulus not 2048 bits".into()));
         }
         // Whilst the RSA algorithm permits different exponents, every modern
         // system only ever uses 65537 and most also enforce this. Might as
         // well do the same.
-        if *key.e() != BigUint::from(65537u32) {
+        if *key.e() != BoxedUint::from(65537u32) {
             return Err(Error::MalformedKey("exponent not 65537".into()));
         }
         // The private exponent must be below the modulus, as RFC 8017 requires
-        if key.d() >= key.n() {
+        if *key.d() >= **key.n() {
             return Err(Error::MalformedKey(
                 "private exponent not below modulus".into(),
             ));
         }
-        // The rsa crate skips the CRT values if it cannot compute them, as for
-        // a repeated prime, leaving a key that later fails to encode as DER
+        // Ensure CRT parameters are computed before returning
         key.precompute()
             .map_err(|_| Error::MalformedKey("invalid CRT coefficient".into()))?;
 
@@ -155,7 +151,7 @@ impl SecretKey {
     pub fn from_der(der: &[u8]) -> Result<Self, Error> {
         // Ensure the algorithm OID matches RSA
         let info =
-            PrivateKeyInfo::try_from(der).map_err(|err| Error::MalformedKey(err.to_string()))?;
+            PrivateKeyInfoRef::try_from(der).map_err(|err| Error::MalformedKey(err.to_string()))?;
         if info.algorithm.oid != OID {
             return Err(Error::UnexpectedAlgorithm);
         }
@@ -170,22 +166,22 @@ impl SecretKey {
 
         // The modulus must be exactly 2048 bits
         let key: &RsaPrivateKey = inner.as_ref();
-        if key.n().bits() != 2048 {
+        if key.n().bit_width() != 2048 {
             return Err(Error::MalformedKey("modulus not 2048 bits".into()));
         }
         // Whilst the RSA algorithm permits different exponents, every modern
         // system only ever uses 65537 and most also enforce this. Might as
         // well do the same.
-        if *key.e() != BigUint::from(65537u32) {
+        if *key.e() != BoxedUint::from(65537u32) {
             return Err(Error::MalformedKey("exponent not 65537".into()));
         }
         // Both primes must be exactly 1024 bits, as the raw encoding has no room
         // for any other split of the modulus
-        if key.primes().iter().any(|prime| prime.bits() != 1024) {
+        if key.primes().iter().any(|prime| prime.bit_width() != 1024) {
             return Err(Error::MalformedKey("primes not 1024 bits".into()));
         }
         // The private exponent must be below the modulus, as RFC 8017 requires
-        if key.d() >= key.n() {
+        if *key.d() >= **key.n() {
             return Err(Error::MalformedKey(
                 "private exponent not below modulus".into(),
             ));
@@ -222,17 +218,17 @@ impl SecretKey {
 
         let mut out = Zeroizing::new([0u8; 520]);
 
-        let p_bytes = Zeroizing::new(primes[0].to_bytes_be());
-        out[128 - p_bytes.len()..128].copy_from_slice(&p_bytes);
+        let p_bytes = Zeroizing::new(primes[0].to_be_bytes());
+        copy_be_padded(&p_bytes, &mut out[0..128]);
 
-        let q_bytes = Zeroizing::new(primes[1].to_bytes_be());
-        out[256 - q_bytes.len()..256].copy_from_slice(&q_bytes);
+        let q_bytes = Zeroizing::new(primes[1].to_be_bytes());
+        copy_be_padded(&q_bytes, &mut out[128..256]);
 
-        let d_bytes = Zeroizing::new(key.d().to_bytes_be());
-        out[512 - d_bytes.len()..512].copy_from_slice(&d_bytes);
+        let d_bytes = Zeroizing::new(key.d().to_be_bytes());
+        copy_be_padded(&d_bytes, &mut out[256..512]);
 
-        let e_bytes = key.e().to_bytes_be();
-        out[520 - e_bytes.len()..520].copy_from_slice(&e_bytes);
+        let e_bytes = key.e().to_be_bytes();
+        copy_be_padded(&e_bytes, &mut out[512..520]);
 
         out
     }
@@ -269,7 +265,8 @@ impl SecretKey {
         // Blind the private key operation with fresh randomness, so its timing
         // does not correlate with the message. The signature is identical to an
         // unblinded one.
-        let sig = self.inner.sign_with_rng(&mut OsRng, message);
+        let mut rng = UnwrapErr(getrandom::SysRng);
+        let sig = self.inner.sign_with_rng(&mut rng, message);
         Signature(sig.to_bytes().as_ref().try_into().unwrap())
     }
 }
@@ -288,17 +285,17 @@ impl PublicKey {
     ///
     /// Format: n (256 bytes) || e (8 bytes), all in big-endian.
     pub fn from_bytes(bytes: &[u8; PUBLIC_KEY_SIZE]) -> Result<Self, Error> {
-        let n = BigUint::from_bytes_be(&bytes[0..256]);
-        let e = BigUint::from_bytes_be(&bytes[256..264]);
+        let n = BoxedUint::from_be_slice(&bytes[0..256], 2048).unwrap();
+        let e = BoxedUint::from_be_slice(&bytes[256..264], 64).unwrap();
 
         // The modulus must be exactly 2048 bits
-        if n.bits() != 2048 {
+        if n.bit_width() != 2048 {
             return Err(Error::MalformedKey("modulus not 2048 bits".into()));
         }
         // Whilst the RSA algorithm permits different exponents, every modern
         // system only ever uses 65537 and most also enforce this. Might as
         // well do the same.
-        if e != BigUint::from(65537u32) {
+        if e != BoxedUint::from(65537u32) {
             return Err(Error::MalformedKey("exponent not 65537".into()));
         }
         let key = RsaPublicKey::new(n, e).map_err(|err| Error::MalformedKey(err.to_string()))?;
@@ -319,13 +316,13 @@ impl PublicKey {
 
         // The modulus must be exactly 2048 bits
         let key: &RsaPublicKey = inner.as_ref();
-        if key.n().bits() != 2048 {
+        if key.n().bit_width() != 2048 {
             return Err(Error::MalformedKey("modulus not 2048 bits".into()));
         }
         // Whilst the RSA algorithm permits different exponents, every modern
         // system only ever uses 65537 and most also enforce this. Might as
         // well do the same.
-        if *key.e() != BigUint::from(65537u32) {
+        if *key.e() != BoxedUint::from(65537u32) {
             return Err(Error::MalformedKey("exponent not 65537".into()));
         }
         Ok(Self { inner })
@@ -350,11 +347,11 @@ impl PublicKey {
 
         let mut out = [0u8; 264];
 
-        let n_bytes = key.n().to_bytes_be();
-        out[256 - n_bytes.len()..256].copy_from_slice(&n_bytes);
+        let n_bytes = key.n().to_be_bytes();
+        copy_be_padded(&n_bytes, &mut out[0..256]);
 
-        let e_bytes = key.e().to_bytes_be();
-        out[264 - e_bytes.len()..264].copy_from_slice(&e_bytes);
+        let e_bytes = key.e().to_be_bytes();
+        copy_be_padded(&e_bytes, &mut out[256..264]);
 
         out
     }
@@ -375,16 +372,16 @@ impl PublicKey {
     /// Returns a 256-bit unique identifier for this key. For RSA, that
     /// is the SHA256 hash of the raw (le modulus || le exponent) public key.
     pub fn fingerprint(&self) -> Fingerprint {
-        let pubkey: RsaPublicKey = self.inner.as_ref().clone();
+        let pubkey: &RsaPublicKey = self.inner.as_ref();
 
-        let mut mod_le = pubkey.n().to_bytes_le();
-        mod_le.resize(256, 0);
-        let mut exp_le = pubkey.e().to_bytes_le();
-        exp_le.resize(8, 0);
+        let mut mod_le = [0u8; 256];
+        copy_le_padded(&pubkey.n().to_le_bytes(), &mut mod_le);
+        let mut exp_le = [0u8; 8];
+        copy_le_padded(&pubkey.e().to_le_bytes(), &mut exp_le);
 
         let mut hasher = Sha256::new();
-        hasher.update(&mod_le);
-        hasher.update(&exp_le);
+        hasher.update(mod_le);
+        hasher.update(exp_le);
         Fingerprint(hasher.finalize().into())
     }
 
@@ -553,6 +550,32 @@ impl crate::cbor::Decode for Fingerprint {
     ) -> Result<Self, crate::cbor::Error> {
         let bytes = decoder.decode_bytes_fixed::<FINGERPRINT_SIZE>()?;
         Ok(Self::from_bytes(&bytes))
+    }
+}
+
+/// Copies a big-endian integer encoding into a fixed-width destination,
+/// stripping leading zero bytes that exceed the destination length and
+/// right-aligning shorter encodings with leading zeros.
+fn copy_be_padded(src: &[u8], dst: &mut [u8]) {
+    if src.len() > dst.len() {
+        let excess = src.len() - dst.len();
+        assert!(src[..excess].iter().all(|&b| b == 0));
+        dst.copy_from_slice(&src[excess..]);
+    } else {
+        let offset = dst.len() - src.len();
+        dst[offset..].copy_from_slice(src);
+    }
+}
+
+/// Copies a little-endian integer encoding into a fixed-width destination,
+/// stripping trailing zero bytes that exceed the destination length and
+/// left-aligning shorter encodings with trailing zeros.
+fn copy_le_padded(src: &[u8], dst: &mut [u8]) {
+    if src.len() > dst.len() {
+        assert!(src[dst.len()..].iter().all(|&b| b == 0));
+        dst.copy_from_slice(&src[..dst.len()]);
+    } else {
+        dst[..src.len()].copy_from_slice(src);
     }
 }
 
@@ -838,38 +861,86 @@ be7bd5e2d05d4e350d";
 b6d2388296d1f73a51e04d445b545b05cbb6d3eebdcfb47a865211d37e45\
 abdef989e4dee4057fbce75e611142bb5fcf2e82b7dbb46f84a570c280bf\
 e6dab8b74032f857";
-        let large = BigUint::from_bytes_be(&hex::decode(large_prime).unwrap());
-        let small = BigUint::from_bytes_be(&hex::decode(small_prime).unwrap());
-        let exponent = BigUint::from(65537u32);
+        let large_bytes = hex::decode(large_prime).unwrap();
+        let small_bytes = hex::decode(small_prime).unwrap();
+        let large = BoxedUint::from_be_slice(&large_bytes, 2048).unwrap();
+        let small = BoxedUint::from_be_slice(&small_bytes, 2048).unwrap();
+        let exponent = BoxedUint::from(65537u32);
+        let one = BoxedUint::one();
+
+        let unbalanced_n = &large * &small;
+        let unbalanced_totient = large.wrapping_sub(&one) * small.wrapping_sub(&one);
+        let unbalanced_d = BoxedUint::from_be_slice(&exponent.to_be_bytes(), 2048)
+            .unwrap()
+            .invert_mod(&unbalanced_totient.to_nz().unwrap())
+            .unwrap();
 
         // A valid key with (p - 1)(q - 1) shifted past 2048 bits added to its
-        // private exponent
+        // private exponent, encoded directly into PKCS#8 DER since rsa 0.10
+        // refuses to construct a key with d >= n in memory
         let secret = SecretKey::generate();
         let balanced: &RsaPrivateKey = secret.inner.as_ref();
-        let one = BigUint::from(1u32);
-        let totient = (&balanced.primes()[0] - &one) * (&balanced.primes()[1] - &one);
-        let oversized = RsaPrivateKey::from_components(
-            balanced.n().clone(),
-            balanced.e().clone(),
-            balanced.d() + (totient << 64),
-            balanced.primes().to_vec(),
+        let p_minus_1 =
+            BoxedUint::from_be_slice(&balanced.primes()[0].wrapping_sub(&one).to_be_bytes(), 2048)
+                .unwrap();
+        let q_minus_1 =
+            BoxedUint::from_be_slice(&balanced.primes()[1].wrapping_sub(&one).to_be_bytes(), 2048)
+                .unwrap();
+        let totient = p_minus_1 * q_minus_1;
+        let shifted: BoxedUint =
+            BoxedUint::from_be_slice(&totient.to_be_bytes(), totient.bits_precision() + 64)
+                .unwrap()
+                << 64u32;
+        let oversized_d =
+            BoxedUint::from_be_slice(&balanced.d().to_be_bytes(), shifted.bits_precision())
+                .unwrap()
+                .wrapping_add(&shifted);
+        let oversized_d_bytes = oversized_d.to_be_bytes();
+
+        let balanced_der = secret.to_der();
+        let mut info = PrivateKeyInfoRef::try_from(balanced_der.as_slice()).unwrap();
+        let mut pkcs1 = rsa::pkcs1::RsaPrivateKey::<der::asn1::UintRef<'_>>::from_der(
+            info.private_key.as_bytes(),
         )
         .unwrap();
+        pkcs1.private_exponent = der::asn1::UintRef::new(&oversized_d_bytes).unwrap();
+        let pkcs1_der = der::Encode::to_der(&pkcs1).unwrap();
+        info.private_key = der::asn1::OctetStringRef::new(&pkcs1_der).unwrap();
+        let oversized_der = der::Encode::to_der(&info).unwrap();
 
         let cases = [
             (
                 "1025-bit first prime",
-                RsaPrivateKey::from_p_q(large.clone(), small.clone(), exponent.clone()).unwrap(),
+                RsaPrivateKey::from_components_with_wide_primes(
+                    unbalanced_n.clone(),
+                    exponent.clone(),
+                    unbalanced_d.clone(),
+                    vec![large.clone(), small.clone()],
+                )
+                .unwrap()
+                .to_pkcs8_der()
+                .unwrap()
+                .as_bytes()
+                .to_vec(),
             ),
             (
                 "1025-bit second prime",
-                RsaPrivateKey::from_p_q(small, large, exponent).unwrap(),
+                RsaPrivateKey::from_components_with_wide_primes(
+                    unbalanced_n,
+                    exponent,
+                    unbalanced_d,
+                    vec![small, large],
+                )
+                .unwrap()
+                .to_pkcs8_der()
+                .unwrap()
+                .as_bytes()
+                .to_vec(),
             ),
-            ("oversized private exponent", oversized),
+            ("oversized private exponent", oversized_der),
         ];
-        for (name, key) in cases {
-            let der = key.to_pkcs8_der().unwrap();
-            let result = SecretKey::from_der(der.as_bytes());
+        for (name, der) in cases {
+            let result = SecretKey::from_der(&der);
             assert!(matches!(result, Err(Error::MalformedKey(_))), "{name}");
         }
     }
