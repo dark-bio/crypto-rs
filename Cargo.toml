@@ -1,6 +1,6 @@
 [package]
 name = "darkbio-crypto"
-version = "0.20.1"
+version = "0.21.0"
 authors = ["Péter Szilágyi <peter@dark.bio>"]
 description = "Cryptography primitives and wrappers"
 repository = "https://github.com/dark-bio/crypto-rs"
@@ -50,7 +50,17 @@ mldsa = [
 ]
 pem = ["dep:base64", "dep:thiserror", "dep:zeroize"]
 rand = ["dep:getrandom"]
-rsa = ["pem", "dep:getrandom02", "dep:rsa", "dep:serde", "dep:zeroize"]
+rsa = [
+    "pem",
+    "dep:der",
+    "dep:getrandom", # getrandom only listed to enable wasm_js on the getrandom that rsa pulls in
+    "dep:pkcs8",
+    "dep:rsa",
+    "dep:serde",
+    "dep:sha2",
+    "dep:spki",
+    "dep:zeroize",
+]
 stream = ["dep:chacha20poly1305", "dep:getrandom", "dep:pin-project", "dep:secrecy", "dep:zeroize"] # getrandom only listed to enable wasm_js on the getrandom that chacha20poly1305 pulls in
 xdsa = ["pem", "eddsa", "mldsa"]
 xhpke = [
@@ -70,25 +80,24 @@ xhpke = [
 argon2 = { version = "0.6.0", features = ["zeroize"], optional = true }
 base64 = { version = "0.23.1", optional = true }
 chacha20poly1305 = { version = "0.11.0", features = ["zeroize"], optional = true }
-darkbio-crypto-cbor-derive = { version = "=0.20.1", path = "src/cbor/derive", optional = true }
-der = { version = "0.8.2", features = ["derive"], optional = true }
+darkbio-crypto-cbor-derive = { version = "=0.21.0", path = "src/cbor/derive", optional = true }
+der = { version = "0.8.3", features = ["derive"], optional = true }
 ed25519-dalek = { version = "3.0.0", features = ["pem", "rand_core", "zeroize"], optional = true }
 getrandom = { version = "0.4.3", features = ["wasm_js"], optional = true } # wasm_js also needs the getrandom_backend cfg set in .cargo/config.toml
-getrandom02 = { package = "getrandom", version = "0.2", features = ["js"], optional = true } # Only listed to enable the js feature on the getrandom 0.2 that rsa pulls in
 hkdf = { version = "0.13.0", optional = true }
-hpke = { version = "0.14.1", default-features = false, features = ["alloc", "mlkem", "x25519", "chacha", "hkdfsha2", "getrandom"], optional = true }
-ml-dsa = { version = "0.1.1", features = ["rand_core", "zeroize"], optional = true }
-pin-project = { version = "1.1.13", optional = true }
+hpke = { version = "0.15.1", default-features = false, features = ["alloc", "mlkem", "x25519", "chacha", "hkdfsha2", "getrandom"], optional = true }
+ml-dsa = { version = "0.1.2", features = ["rand_core", "zeroize"], optional = true }
+pin-project = { version = "1.2.0", optional = true }
 pkcs8 = { version = "0.11.0", features = ["std"], optional = true }
-rsa = { version = "0.9.10", features = ["sha2"], optional = true }
+rsa = { version = "0.10.0", features = ["pkcs1v15"], optional = true }
 secrecy = { version = "0.10.3", optional = true }
 serde = { version = "1.0", optional = true }
-sha2 = { version = "0.11.0", features = ["zeroize"], optional = true }
-spki = { version = "0.8.0", features = ["alloc"], optional = true }
+sha2 = { version = "0.11.1", features = ["zeroize"], optional = true }
+spki = { version = "0.8.1", features = ["alloc"], optional = true }
 subtle = { version = "2.6.1", optional = true }
 thiserror = { version = "2.0.21", optional = true }
 web-time = { version = "1.1.0", optional = true }
-zeroize = { version = "1.9.0", optional = true }
+zeroize = { version = "1.9.2", optional = true }
 
 [dev-dependencies]
 hex = "0.4"

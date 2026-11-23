@@ -20,14 +20,12 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 //
-// Source: https://github.com/str4d/rage/blob/v0.12.0/age/src/primitives/stream.rs
+// Source: https://github.com/str4d/rage/blob/22798ae4/age/src/primitives/stream.rs
 //
 // Local changes:
 //   - the i18n error strings are plain string literals
 //   - secrecy types are imported from the secrecy crate directly instead of
 //     through the age-core re-export; the HKDF doc links point at RFC 5869
-//   - chacha20poly1305 is tracked at 0.11 ahead of upstream's 0.10, where the
-//     aead crate renamed GenericArray to Array
 
 #![allow(clippy::all)]
 #![allow(unexpected_cfgs)]
@@ -594,8 +592,7 @@ impl<R: Read + Seek> StreamReader<R> {
                 let ct_len = ct_end - ct_start;
 
                 // Use ceiling division to determine the number of chunks.
-                let num_chunks =
-                    (ct_len + (ENCRYPTED_CHUNK_SIZE as u64 - 1)) / ENCRYPTED_CHUNK_SIZE as u64;
+                let num_chunks = ct_len.div_ceil(ENCRYPTED_CHUNK_SIZE as u64);
 
                 // If we have no ciphertext data then there is no last chunk, which is
                 // invalid.
@@ -844,13 +841,13 @@ mod tests {
                 match w.as_mut().poll_write(&mut cx, tmp) {
                     Poll::Ready(Ok(0)) => break,
                     Poll::Ready(Ok(written)) => tmp = &tmp[written..],
-                    Poll::Ready(Err(e)) => panic!("Unexpected error: {}", e),
+                    Poll::Ready(Err(e)) => panic!("Unexpected error: {e}"),
                     Poll::Pending => panic!("Unexpected Pending"),
                 }
             }
             match w.as_mut().poll_close(&mut cx) {
                 Poll::Ready(Ok(())) => (),
-                Poll::Ready(Err(e)) => panic!("Unexpected error: {}", e),
+                Poll::Ready(Err(e)) => panic!("Unexpected error: {e}"),
                 Poll::Pending => panic!("Unexpected Pending"),
             }
         };
@@ -867,7 +864,7 @@ mod tests {
                 match r.as_mut().poll_read(&mut cx, &mut tmp) {
                     Poll::Ready(Ok(0)) => break buf,
                     Poll::Ready(Ok(read)) => buf.extend_from_slice(&tmp[..read]),
-                    Poll::Ready(Err(e)) => panic!("Unexpected error: {}", e),
+                    Poll::Ready(Err(e)) => panic!("Unexpected error: {e}"),
                     Poll::Pending => panic!("Unexpected Pending"),
                 }
             }
@@ -915,7 +912,7 @@ mod tests {
 
         match result {
             Ok(written) => assert_eq!(written, data.len() as u64),
-            Err(e) => panic!("Unexpected error: {}", e),
+            Err(e) => panic!("Unexpected error: {e}"),
         }
 
         let decrypted = {
@@ -927,7 +924,7 @@ mod tests {
 
             match result {
                 Ok(written) => assert_eq!(written, data.len() as u64),
-                Err(e) => panic!("Unexpected error: {}", e),
+                Err(e) => panic!("Unexpected error: {e}"),
             }
 
             buf
