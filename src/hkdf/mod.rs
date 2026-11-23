@@ -55,6 +55,7 @@ pub fn key<const N: usize>(secret: &[u8], salt: &[u8], info: &[u8]) -> Zeroizing
 /// used on FFI interfaces where generics break composability. Do not use it in
 /// Rust code.
 pub fn key_with_len(secret: &[u8], salt: &[u8], info: &[u8], out: usize) -> Zeroizing<Vec<u8>> {
+    assert!(out <= 255 * 32, "HKDF output exceeds 8160 bytes");
     let salt = if salt.is_empty() { None } else { Some(salt) };
     let (mut prk, hkdf) = Hkdf::<Sha256>::extract(salt, secret);
     prk.as_mut_slice().zeroize();
@@ -116,6 +117,7 @@ pub fn expand<const N: usize>(prk: &[u8; 32], info: &[u8]) -> Zeroizing<[u8; N]>
 /// Panics if `out` exceeds the maximum output length for SHA-256 HKDF,
 /// 255 * 32 = 8160 bytes.
 pub fn expand_with_len(prk: &[u8; 32], info: &[u8], out: usize) -> Zeroizing<Vec<u8>> {
+    assert!(out <= 255 * 32, "HKDF output exceeds 8160 bytes");
     let hkdf = Hkdf::<Sha256>::from_prk(prk).unwrap();
 
     let mut output = Zeroizing::new(vec![0u8; out]);
@@ -126,6 +128,38 @@ pub fn expand_with_len(prk: &[u8; 32], info: &[u8], out: usize) -> Zeroizing<Vec
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Tests that the 8160-byte SHA-256 HKDF limit succeeds at the boundary and
+    /// panics before allocation when exceeded.
+    #[test]
+    fn test_output_length_limit() {
+        assert_eq!(key_with_len(b"secret", b"", b"", 255 * 32).len(), 255 * 32);
+        assert_eq!(expand_with_len(&[0; 32], b"", 255 * 32).len(), 255 * 32);
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let cases: [(&str, fn()); 2] = [
+                ("key_with_len", || {
+                    key_with_len(b"secret", b"", b"", usize::MAX);
+                }),
+                ("expand_with_len", || {
+                    expand_with_len(&[0; 32], b"", usize::MAX);
+                }),
+            ];
+            for (name, run) in cases {
+                let err = std::panic::catch_unwind(run).expect_err(name);
+                let msg = err
+                    .downcast_ref::<&str>()
+                    .copied()
+                    .or_else(|| err.downcast_ref::<String>().map(String::as_str))
+                    .unwrap_or("");
+                assert!(
+                    msg.contains("HKDF output exceeds 8160 bytes"),
+                    "{name}: {msg}"
+                );
+            }
+        }
+    }
 
     /// Tests key derivation against the RFC 5869 Appendix A (SHA-256) vectors.
     #[test]

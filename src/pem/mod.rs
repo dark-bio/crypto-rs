@@ -49,7 +49,7 @@ pub enum Error {
     /// The header names no block type.
     #[error("empty PEM block type")]
     EmptyBlockType,
-    /// The block type is not valid UTF-8.
+    /// The block type contains invalid characters or spacing.
     #[error("malformed PEM block type")]
     MalformedBlockType,
     /// No `-----END TYPE-----` footer matches the header's block type.
@@ -58,7 +58,7 @@ pub enum Error {
     /// Bytes follow the footer other than a single line ending matching the header.
     #[error("trailing data after PEM block")]
     TrailingData,
-    /// The body between header and footer is empty, holds only line endings,
+    /// The body between header and footer is empty, contains a blank line,
     /// or does not end in a line ending. The message says which.
     #[error("malformed PEM body: {0}")]
     MalformedBody(String),
@@ -68,15 +68,27 @@ pub enum Error {
     MalformedPayload(String),
 }
 
+/// Reports whether `kind` is a valid PEM block label.
+///
+/// A label is non-empty and consists of printable ASCII bytes other than
+/// hyphens, with single spaces allowed between words.
+fn valid_label(kind: &str) -> bool {
+    kind.split(' ')
+        .all(|word| !word.is_empty() && word.bytes().all(|b| b.is_ascii_graphic() && b != b'-'))
+}
+
 /// Decodes a single PEM block with strict validation.
 ///
 /// Rules:
 ///
 /// - Header must start at byte 0, with no leading whitespace.
+/// - The label contains printable ASCII other than hyphens, with single
+///   spaces allowed between words.
 /// - Footer must end the data, apart from an optional line ending matching
 ///   the header's LF or CRLF.
 /// - Every line ends in the header's line ending, LF or CRLF throughout.
-/// - Base64 lines contain only base64 characters, with strict padding validation.
+/// - Base64 lines are non-empty and contain only base64 characters, with
+///   strict padding validation.
 /// - The payload must not be empty.
 ///
 /// Returns (kind, data) tuple on success, with the data wiped on drop.
@@ -114,6 +126,9 @@ pub fn decode(data: &[u8]) -> Result<(String, Zeroizing<Vec<u8>>), Error> {
         return Err(Error::EmptyBlockType);
     }
     let kind = String::from_utf8(block_type.to_vec()).map_err(|_| Error::MalformedBlockType)?;
+    if !valid_label(&kind) {
+        return Err(Error::MalformedBlockType);
+    }
 
     // Build expected footer
     let mut footer = Vec::with_capacity(PEM_FOOTER.len() + block_type.len() + PEM_ENDING.len());
@@ -164,11 +179,10 @@ pub fn decode(data: &[u8]) -> Result<(String, Zeroizing<Vec<u8>>), Error> {
         if line.contains(&b'\r') {
             return Err(Error::MalformedPayload("stray line endings".into()));
         }
+        if line.is_empty() {
+            return Err(Error::MalformedBody("blank line".into()));
+        }
         b64.extend_from_slice(line);
-    }
-    // A body of blank lines holds no payload, rejected like a missing body.
-    if b64.is_empty() {
-        return Err(Error::MalformedBody("empty body".into()));
     }
 
     // Guard the destination before decoding so partial output is wiped on error.
@@ -185,9 +199,10 @@ pub fn decode(data: &[u8]) -> Result<(String, Zeroizing<Vec<u8>>), Error> {
 ///
 /// # Panics
 ///
-/// Panics if `data` is empty, since [`decode`] rejects an empty payload.
+/// Panics if `data` is empty or `kind` is an invalid block label.
 pub fn encode(kind: &str, data: &[u8]) -> String {
     assert!(!data.is_empty(), "empty PEM payload");
+    assert!(valid_label(kind), "invalid PEM block label");
     let b64 = Zeroizing::new(STANDARD.encode(data));
 
     // Size the output up front so appending never leaves stale copies behind
@@ -218,6 +233,57 @@ pub fn encode(kind: &str, data: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Tests that blank lines anywhere inside the base64 body are rejected.
+    #[test]
+    fn test_blank_body_lines() {
+        for newline in ["\n", "\r\n"] {
+            for lines in [["", "YW", "Jj"], ["YW", "", "Jj"], ["YW", "Jj", ""]] {
+                let body = lines.join(newline);
+                let pem = format!("-----BEGIN TEST-----{newline}{body}{newline}-----END TEST-----");
+                assert_eq!(
+                    decode(pem.as_bytes()),
+                    Err(Error::MalformedBody("blank line".into()))
+                );
+            }
+        }
+    }
+
+    /// Tests that invalid PEM block labels are rejected by both `decode` and
+    /// `encode`, while valid printable ASCII labels round-trip cleanly.
+    #[test]
+    fn test_block_labels() {
+        let invalid = [
+            ("", Error::EmptyBlockType),
+            (" A", Error::MalformedBlockType),
+            ("A ", Error::MalformedBlockType),
+            ("A  B", Error::MalformedBlockType),
+            ("A-B", Error::MalformedBlockType),
+            ("A\rB", Error::MalformedBlockType),
+            ("A\tB", Error::MalformedBlockType),
+            ("A\0B", Error::MalformedBlockType),
+            ("\x7f", Error::MalformedBlockType),
+            ("é", Error::MalformedBlockType),
+        ];
+        for (kind, want) in invalid {
+            let pem = format!("-----BEGIN {kind}-----\nYQ==\n-----END {kind}-----\n");
+            assert_eq!(decode(pem.as_bytes()), Err(want), "{kind:?}");
+
+            // Check that encoding rejects the same labels on native targets.
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let err = std::panic::catch_unwind(|| encode(kind, b"a")).expect_err(kind);
+                let msg = err
+                    .downcast_ref::<&str>()
+                    .copied()
+                    .or_else(|| err.downcast_ref::<String>().map(String::as_str))
+                    .unwrap_or("");
+                assert!(msg.contains("invalid PEM block label"), "{kind:?}: {msg}");
+            }
+        }
+        let kind = "!A #~";
+        assert_eq!(decode(encode(kind, b"a").as_bytes()).unwrap().0, kind);
+    }
 
     /// Tests that a body without any base64 text is rejected, whether it has no
     /// lines or only blank ones.

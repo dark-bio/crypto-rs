@@ -177,8 +177,9 @@ const SIMPLE_FALSE: u8 = 20;
 const SIMPLE_TRUE: u8 = 21;
 const SIMPLE_NULL: u8 = 22;
 
-/// Maximum nesting depth for CBOR arrays and maps. Inputs nested deeper than
-/// this are rejected to prevent stack overflow from recursive parsing.
+/// Maximum container nesting depth for CBOR arrays and maps, preventing stack
+/// overflow during recursive parsing. An item may sit inside at most 31 nested
+/// containers; reaching depth 32 is rejected.
 const MAX_DEPTH: usize = 32;
 
 /// Failures of encoding and decoding CBOR data.
@@ -208,9 +209,8 @@ pub enum Error {
     /// needs the second.
     #[error("unexpected item count: {0}, want {1}")]
     UnexpectedItemCount(u64, usize),
-    /// The major type is outside the supported subset, tags, floats or simple
-    /// values other than booleans and null. Raised by [`verify`] and when a
-    /// [`Raw`] item is skipped over.
+    /// The major type or simple value is not supported here, such as tags,
+    /// floats, or a simple value other than the expected boolean or null.
     #[error("unsupported type: {0}")]
     UnsupportedType(u8),
     /// An integer does not fit the target type. The flag marks a negative
@@ -541,6 +541,7 @@ impl<'a> Decoder<'a> {
                 self.pos += 1;
                 Ok(true)
             }
+            b if b >> 5 == MAJOR_SIMPLE => Err(Error::UnsupportedType(MAJOR_SIMPLE)),
             _ => Err(Error::InvalidMajorType(byte >> 5, MAJOR_SIMPLE)),
         }
     }
@@ -551,8 +552,11 @@ impl<'a> Decoder<'a> {
             return Err(Error::UnexpectedEof);
         }
         let byte = self.data[self.pos];
-        if byte != (MAJOR_SIMPLE << 5 | SIMPLE_NULL) {
+        if byte >> 5 != MAJOR_SIMPLE {
             return Err(Error::InvalidMajorType(byte >> 5, MAJOR_SIMPLE));
+        }
+        if byte != (MAJOR_SIMPLE << 5 | SIMPLE_NULL) {
+            return Err(Error::UnsupportedType(MAJOR_SIMPLE));
         }
         self.pos += 1;
         Ok(())
@@ -613,6 +617,10 @@ impl<'a> Decoder<'a> {
             _ => Err(Error::InvalidAdditionalInfo(info)),
         }?;
 
+        // IEEE 754 floats (additional info 25..=27) have no integer width to validate.
+        if major == MAJOR_SIMPLE && info >= INFO_UINT16 {
+            return Err(Error::UnsupportedType(major));
+        }
         // Ensure it was canonical in the first place
         if !match info {
             0..=23 => value < 24,
@@ -1595,8 +1603,14 @@ mod tests {
         assert!(decode::<bool>(&[0xf5]).unwrap());
 
         // Invalid values should fail
-        assert!(decode::<bool>(&[0xf6]).is_err()); // null
-        assert!(decode::<bool>(&[0x00]).is_err()); // integer
+        assert_eq!(
+            decode::<bool>(&[0xf6]),
+            Err(Error::UnsupportedType(MAJOR_SIMPLE))
+        );
+        assert_eq!(
+            decode::<bool>(&[0x00]),
+            Err(Error::InvalidMajorType(MAJOR_UINT, MAJOR_SIMPLE))
+        );
     }
 
     /// Tests that null encodes correctly.
@@ -1622,8 +1636,14 @@ mod tests {
 
         // Null type
         assert_eq!(decode::<Null>(&[0xf6]).unwrap(), Null);
-        assert!(decode::<Null>(&[0xf4]).is_err()); // false is not null
-        assert!(decode::<Null>(&[0x00]).is_err()); // integer is not null
+        assert_eq!(
+            decode::<Null>(&[0xf4]),
+            Err(Error::UnsupportedType(MAJOR_SIMPLE))
+        );
+        assert_eq!(
+            decode::<Null>(&[0x00]),
+            Err(Error::InvalidMajorType(MAJOR_UINT, MAJOR_SIMPLE))
+        );
     }
 
     /// Tests that positive integers encode correctly across the various ranges
@@ -2232,6 +2252,22 @@ mod tests {
         key_neg1: u64,
     }
 
+    /// Tests that `i64::MIN` works as a derived CBOR map key.
+    #[test]
+    fn test_map_minimum_key() {
+        #[derive(Debug, PartialEq, Cbor)]
+        struct Minimum {
+            #[cbor(key = -9223372036854775808)]
+            value: bool,
+        }
+        let value = Minimum { value: true };
+        let bytes = [
+            0xa1, 0x3b, 0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xf5,
+        ];
+        assert_eq!(encode(&value).unwrap(), bytes);
+        assert_eq!(decode::<Minimum>(&bytes), Ok(value));
+    }
+
     /// Tests that maps encode correctly with deterministic key ordering.
     #[test]
     fn test_map_encoding() {
@@ -2282,7 +2318,7 @@ mod tests {
             0x01, 0x18, 0x2a, // 1: 42
             0x20, 0x18, 0x64, // -1: 100
         ]);
-        assert!(result.is_err());
+        assert_eq!(result, Err(Error::InvalidMapKeyOrder(1, 2)));
 
         // Wrong key value
         let result = decode::<TestMap>(&[
@@ -2449,14 +2485,22 @@ mod tests {
             0xa1, // map with 1 entry
             0x02, 0x60, // 2: "" (key 1 is required but missing)
         ]);
-        assert!(result.is_err());
+        assert_eq!(result, Err(Error::InvalidMapKeyOrder(1, 2)));
 
         // Nullable field missing (key 3 must always be present)
         let result = decode::<TestMapOptional>(&[
             0xa1, // map with 1 entry
             0x01, 0x18, 0x2a, // 1: 42 (key 3 missing)
         ]);
-        assert!(result.is_err());
+        assert_eq!(
+            result,
+            Err(Error::DecodeFailed("missing required key 3".into()))
+        );
+
+        assert_eq!(
+            decode::<TestMapOptional>(&[0xa0]),
+            Err(Error::DecodeFailed("missing required key 1".into()))
+        );
     }
 
     /// Tests that Raw encodes correctly (passthrough of inner bytes).
@@ -3142,6 +3186,36 @@ mod tests {
         }
     }
 
+    /// Tests that embedding a struct with no CBOR map keys fails on both
+    /// encoding and decoding, including through nested embeds.
+    #[test]
+    fn test_map_embed_empty_schema() {
+        #[derive(Debug, PartialEq, Cbor)]
+        struct Empty {}
+
+        #[derive(Debug, PartialEq, Cbor)]
+        struct Inner {
+            #[cbor(key = 1)]
+            value: u64,
+            #[cbor(embed)]
+            empty: Option<Empty>,
+        }
+
+        #[derive(Debug, PartialEq, Cbor)]
+        struct Outer {
+            #[cbor(embed)]
+            inner: Inner,
+        }
+
+        let err = Error::DecodeFailed("embedded field `empty` has no CBOR map keys".into());
+        for empty in [None, Some(Empty {})] {
+            let inner = Inner { value: 0, empty };
+            assert_eq!(encode(&inner), Err(err.clone()));
+            assert_eq!(encode(Outer { inner }), Err(err.clone()));
+        }
+        assert_eq!(decode::<Outer>(&[0xa1, 1, 0]), Err(err));
+    }
+
     /// Tests that embed encoding validates actual merged keys too, not only
     /// keys reported by the embed's schema declaration.
     #[test]
@@ -3787,6 +3861,39 @@ mod tests {
         }
     }
 
+    /// Tests that extended simple values below 24 fail as non-canonical, while
+    /// canonical extended simple values and IEEE 754 floats (including zero and
+    /// subnormals) fail with `UnsupportedType`.
+    #[test]
+    fn test_extended_simple_values_and_small_floats() {
+        for bits in [0, 1, SIMPLE_FALSE, SIMPLE_TRUE, SIMPLE_NULL, 23] {
+            let bytes = [0xf8, bits];
+            assert_eq!(verify(&bytes), Err(Error::NonCanonical));
+            assert_eq!(decode::<Raw>(&bytes), Err(Error::NonCanonical));
+        }
+        for bits in [24, 32, 255] {
+            let bytes = [0xf8, bits];
+            assert_eq!(verify(&bytes), Err(Error::UnsupportedType(MAJOR_SIMPLE)));
+            assert_eq!(
+                decode::<Raw>(&bytes),
+                Err(Error::UnsupportedType(MAJOR_SIMPLE))
+            );
+        }
+        for (header, width) in [(0xf9, 2), (0xfa, 4), (0xfb, 8)] {
+            let mut bytes = vec![0; 1 + width];
+            bytes[0] = header;
+            // Include payloads whose low bits match false, true, or null.
+            for bits in [0, 1, SIMPLE_FALSE, SIMPLE_TRUE, SIMPLE_NULL] {
+                bytes[width] = bits;
+                assert_eq!(verify(&bytes), Err(Error::UnsupportedType(MAJOR_SIMPLE)));
+                assert_eq!(
+                    decode::<Raw>(&bytes),
+                    Err(Error::UnsupportedType(MAJOR_SIMPLE))
+                );
+            }
+        }
+    }
+
     /// Tests that deeply nested CBOR structures are rejected with an error
     /// instead of causing a stack overflow, but nesting up to the maximum
     /// depth is still accepted.
@@ -3796,7 +3903,7 @@ mod tests {
         at_limit.push(0x00);
         assert!(verify(&at_limit).is_ok());
 
-        let mut over_limit = vec![0x81u8; MAX_DEPTH + 1];
+        let mut over_limit = vec![0x81u8; MAX_DEPTH];
         over_limit.push(0x00);
         assert_eq!(verify(&over_limit), Err(Error::MaxDepthExceeded(MAX_DEPTH)));
     }
