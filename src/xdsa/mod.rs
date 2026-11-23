@@ -800,7 +800,7 @@ f6e178bcc044204110444ea2b7e80548769ae5010c22707493adb0baf55f\
         let pubkey = seckey.public_key();
         assert_eq!(pubkey.to_bytes().to_vec(), expected_pubkey);
 
-        // Signing uses deterministic ML-DSA, while the IETF vector signature used hedged signing.
+        // Signing uses hedged ML-DSA, so verify both signatures rather than comparing bytes.
         let signature = seckey.sign(ietf_vectors::TEST_MSG.as_bytes());
         pubkey
             .verify(ietf_vectors::TEST_MSG.as_bytes(), &signature)

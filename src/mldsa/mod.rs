@@ -243,7 +243,8 @@ impl SecretKey {
         self.public_key().fingerprint()
     }
 
-    /// Creates a digital signature of the message with an optional context string.
+    /// Creates a hedged (randomized) digital signature of the message with an
+    /// optional context string per FIPS 204 Algorithm 2 (`ML-DSA.Sign`).
     ///
     /// Pass an empty slice for no context. Verification must use the same bytes.
     ///
@@ -254,7 +255,7 @@ impl SecretKey {
         let sig = self
             .inner
             .expanded_key()
-            .sign_deterministic(message, ctx)
+            .sign_randomized(message, ctx, &mut getrandom::SysRng)
             .unwrap();
         let encoded = sig.encode();
         let slice: &[u8] = encoded.as_ref();
@@ -938,9 +939,13 @@ dbdfd1dd95f38d72218ceeae2461974019c705ef7d2d16a56e7b50a0cd51
         let message = b"message to authenticate".as_slice();
         for ctx in [b"".as_slice(), b"application context"] {
             let signature = secret.sign(message, ctx);
+            let second = secret.sign(message, ctx);
+            assert_ne!(signature, second);
+            public.verify(message, ctx, &signature).unwrap();
+            public.verify(message, ctx, &second).unwrap();
+
             let mut tampered = signature.clone();
             tampered.0[0] ^= 1;
-            public.verify(message, ctx, &signature).unwrap();
             for (key, message, ctx, sig) in [
                 (&public, b"changed".as_slice(), ctx, &signature),
                 (&public, message, b"wrong context".as_slice(), &signature),
