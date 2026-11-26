@@ -9,7 +9,11 @@ This repository is parameter selection and lightweight wrapper around a number o
 
 The library is opinionated. Parameters and primitives were selected to provide matching levels of security in a post-quantum world. APIs were designed to make the library easy to use and hard to misuse. Flexibility will always be rejected in favor of safety.
 
-![](./docs/overview.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./docs/overview-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="./docs/overview-light.png">
+  <img alt="Module overview" src="./docs/overview-light.png">
+</picture>
 
 - Digital signatures
   - **xDSA ([RFC-DRAFT](https://datatracker.ietf.org/doc/html/draft-ietf-lamps-pq-composite-sigs))**: `MLDSA`, `EdDSA`, `SHA512`
